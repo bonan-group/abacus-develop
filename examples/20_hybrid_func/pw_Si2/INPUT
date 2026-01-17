@@ -26,7 +26,13 @@ pseudo_rcut            10
 # out_wfc_pw 1
 # out_chg 1
 
-exx_hybrid_alpha        0.25
+device gpu
+precision single
+# Not using ACE
+exxace 0
+exx_separate_loop 0
 
-cal_stress 1
+#exx_hybrid_alpha        0.25
+
+# cal_stress 1
 # cal_force 1

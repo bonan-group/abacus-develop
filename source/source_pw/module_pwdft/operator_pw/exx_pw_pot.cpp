@@ -112,15 +112,8 @@ void get_exx_potential(const K_Vectors* kv,
         double erfc_omega = std::stod(param["omega"]);
         double erfc_omega2 = erfc_omega * erfc_omega;
         double alpha = std::stod(param["alpha"]);
-        // double exx_div = OperatorEXXPW<std::complex<Real>, Device>::erfc_div[i];
-        double exx_div = exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
-                                          erfc_omega,
-                                          kv,
-                                          wfcpw,
-                                          rhopw_dev,
-                                          tpiba,
-                                          gamma_extrapolation,
-                                          ucell_omega);
+        // Use pre-computed divergence from constructor cache (eliminates redundant computation)
+        double exx_div = OperatorEXXPW<std::complex<Real>, Device>::erfc_div[i];
         const ModuleBase::Vector3<double> k_c = wfcpw->kvec_c[ik];
         const ModuleBase::Vector3<double> k_d = wfcpw->kvec_d[ik];
         const ModuleBase::Vector3<double> q_c = qvec_c[iq];

@@ -229,9 +229,12 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
         // for \psi_nk, get the pw of iq and band m
 
         Real nqs = q_points.size();
+        printf("  EXX: Processing band %d / %d, total q-points %d\n", n_iband+1, nbands, (int)nqs);
         for (int iq: q_points)
         {
+            ModuleBase::timer::tick("act_op", "get_exx_potential");
             get_exx_potential<Real, Device>(kv, wfcpw, rhopw_dev, pot, tpiba, gamma_extrapolation, ucell->omega, this->ik, iq % nk);
+            ModuleBase::timer::tick("act_op", "get_exx_potential");
             for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
             {
                 // double wg_mqb_real = GlobalC::exx_helper.wg(iq, m_iband);
@@ -243,16 +246,24 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
                 }
 
                 const T* psi_mq = get_pw(m_iband, iq);
+                ModuleBase::timer::tick("act_op", "recip_to_real");
                 wfcpw->recip_to_real(ctx, psi_mq, psi_mq_real, iq);
+                ModuleBase::timer::tick("act_op", "recip_to_real");
 
                 // direct multiplication in real space, \psi_nk(r) * \psi_mq(r)
+                ModuleBase::timer::tick("act_op", "cal_density_recip");
                 cal_density_recip(psi_nk_real, psi_mq_real, ucell->omega);
+                ModuleBase::timer::tick("act_op", "cal_density_recip");
 
                 // multiply the density with the potential in recip space
+                ModuleBase::timer::tick("act_op", "multiply_potential");
                 multiply_potential(density_recip, this->ik, iq);
+                ModuleBase::timer::tick("act_op", "multiply_potential");
 
                 // bring the potential back to real space
+                ModuleBase::timer::tick("act_op", "multiply_potential");
                 rho_recip2real(density_recip, density_real);
+                ModuleBase::timer::tick("act_op", "multiply_potential");
 
                 if (false)
                 {
@@ -260,18 +271,22 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
                 }
                 else
                 {
+                    ModuleBase::timer::tick("act_op", "vec_mul_vec_complex_op");
                     vec_mul_vec_complex_op<T, Device>()(density_real, psi_mq_real, density_real, wfcpw->nrxx);
+                    ModuleBase::timer::tick("act_op", "vec_mul_vec_complex_op");
                 }
 
                 T wk_iq = kv->wk[iq];
 
                 T tmp_scalar = wg_mqb / wk_iq / nqs;
+                ModuleBase::timer::tick("act_op", "axpy_complex_op");
                 axpy_complex_op()(wfcpw->nrxx,
                                   &tmp_scalar,
                                   density_real,
                                   1,
                                   h_psi_real,
                                   1);
+                ModuleBase::timer::tick("act_op", "axpy_complex_op");
 
             } // end of m_iband
             setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
