@@ -72,6 +72,8 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     int nks = wfcpw->nks;
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
     resmem_real_op()(pot, rhopw->npw);
+    pot_original = pot;  // Save original allocation for proper cleanup
+    cached_ik = -1;  // Initialize to invalid k-point
 
     tpiba = ucell->tpiba;
     Real tpiba2 = tpiba * tpiba;
@@ -133,7 +135,18 @@ OperatorEXXPW<T, Device>::~OperatorEXXPW()
     delmem_complex_op()(density_recip);
     delmem_complex_op()(h_psi_recip);
 
-    delmem_real_op()(pot);
+    // Clean up EXX potential cache
+    clear_exx_potential_cache();
+
+    // Free the original pot allocation
+    if (enable_pot_cache && pot_original != nullptr)
+    {
+        delmem_real_op()(pot_original);
+    }
+    else if (!enable_pot_cache)
+    {
+        delmem_real_op()(pot);
+    }
 
     delmem_complex_op()(h_psi_ace);
     delmem_complex_op()(psi_h_psi_ace);
@@ -229,11 +242,11 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
         // for \psi_nk, get the pw of iq and band m
 
         Real nqs = q_points.size();
-        printf("  EXX: Processing band %d / %d, total q-points %d\n", n_iband+1, nbands, (int)nqs);
         for (int iq: q_points)
         {
             ModuleBase::timer::tick("act_op", "get_exx_potential");
-            get_exx_potential<Real, Device>(kv, wfcpw, rhopw_dev, pot, tpiba, gamma_extrapolation, ucell->omega, this->ik, iq % nk);
+            Real* pot_ik_iq = get_exx_potential_cached(this->ik, iq % nk);
+            pot = pot_ik_iq;  // Update member variable for multiply_potential
             ModuleBase::timer::tick("act_op", "get_exx_potential");
             for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
             {
@@ -332,7 +345,8 @@ void OperatorEXXPW<T, Device>::act_op_kpar(const int nbands,
     for (int iq = 0; iq < nqs; iq++)
     {
         // for \psi_nk, get the pw of iq and band m
-        get_exx_potential<Real,  Device>(kv, wfcpw, rhopw_dev, pot, tpiba, gamma_extrapolation, ucell->omega, this->ik, iq);
+        Real* pot_ik_iq = get_exx_potential_cached(this->ik, iq);
+        pot = pot_ik_iq;  // Update member variable for multiply_potential
 
         // decide which pool does the iq belong to
         int iq_pool = kv->para_k.whichpool[iq];
@@ -493,6 +507,64 @@ void OperatorEXXPW<T, Device>::multiply_potential(T *density_recip, int ik, int 
 }
 
 template <typename T, typename Device>
+typename GetTypeReal<T>::type* OperatorEXXPW<T, Device>::get_exx_potential_cached(int ik, int iq) const
+{
+    using Real = typename GetTypeReal<T>::type;
+
+    // Cache disabled - fallback to original behavior
+    if (!enable_pot_cache)
+    {
+        get_exx_potential<Real, Device>(kv, wfcpw, rhopw_dev, pot, tpiba,
+                                       gamma_extrapolation, ucell->omega, ik, iq);
+        return pot;
+    }
+
+    // Check if k-point changed - invalidate cache if needed
+    if (cached_ik != ik)
+    {
+        // K-point changed - clear old cache
+        for (auto& entry : pot_cache)
+        {
+            delmem_real_op()(entry.second);
+        }
+        pot_cache.clear();
+        cached_ik = ik;  // Update cached k-point
+    }
+
+    // Check cache for current k-point
+    auto it = pot_cache.find(iq);
+
+    if (it != pot_cache.end())
+    {
+        // Cache hit - return existing potential for this iq
+        return it->second;
+    }
+
+    // Cache miss - allocate and compute
+    Real* pot_new = nullptr;
+    resmem_real_op()(pot_new, rhopw_dev->npw);
+
+    get_exx_potential<Real, Device>(kv, wfcpw, rhopw_dev, pot_new, tpiba,
+                                   gamma_extrapolation, ucell->omega, ik, iq);
+
+    // Store in cache (for current k-point)
+    pot_cache[iq] = pot_new;
+
+    return pot_new;
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::clear_exx_potential_cache()
+{
+    using Real = typename GetTypeReal<T>::type;
+    for (auto& kv : pot_cache)
+    {
+        delmem_real_op()(kv.second);
+    }
+    pot_cache.clear();
+}
+
+template <typename T, typename Device>
 const T *OperatorEXXPW<T, Device>::get_pw(const int m, const int iq) const
 {
     // return pws[iq].get() + m * wfcpw->npwk[iq];
@@ -611,7 +683,8 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op(psi::Psi<T, Device> *ppsi_) c
             for (int iq: q_points)
             {
                 int nk = wfcpw->nks / nk_fac;
-                get_exx_potential<Real, Device>(kv, wfcpw, rhopw_dev, pot, tpiba, gamma_extrapolation, ucell->omega, ik, iq % nk);
+                Real* pot_ik_iq = get_exx_potential_cached(ik, iq % nk);
+                pot = pot_ik_iq;  // Update member variable for multiply_potential
                 for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
                 {
                     // double wg_f = GlobalC::exx_helper.wg(iq, m_iband);

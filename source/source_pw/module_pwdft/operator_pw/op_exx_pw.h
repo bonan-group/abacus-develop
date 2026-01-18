@@ -12,6 +12,7 @@
 #include "source_psi/psi.h"
 #include "source_base/module_container/ATen/kernels/lapack.h"
 
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -70,6 +71,10 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     void multiply_potential(T *density_recip, int ik, int iq) const;
 
+    // Cache management for EXX potential
+    Real* get_exx_potential_cached(int ik, int iq) const;
+    void clear_exx_potential_cache();
+
     void act_op(const int nbands,
                 const int nbasis,
                 const int npol,
@@ -125,7 +130,14 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     T *density_recip = nullptr;
     // h_psi recip space memory
     T *h_psi_recip = nullptr;
-    Real *pot = nullptr;
+    mutable Real *pot = nullptr;  // mutable to allow caching in const methods
+    mutable Real *pot_original = nullptr;  // Track original allocation for cleanup
+
+
+    // EXX potential cache for current k-point only (memory-efficient)
+    mutable std::map<int, Real*> pot_cache;  // Key: iq only (not (ik,iq))
+    mutable int cached_ik = -1;  // Track which k-point is cached (-1 = none)
+    mutable bool enable_pot_cache = true;  // Remove later if caching should always be enabled
 
     // Lin Lin's ACE memory, 10.1021/acs.jctc.6b00092
     mutable T* h_psi_ace = nullptr; // H \Psi, W in the paper
