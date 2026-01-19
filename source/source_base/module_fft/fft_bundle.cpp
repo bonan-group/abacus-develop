@@ -296,4 +296,245 @@ std::complex<double>* FFT_Bundle::get_auxr_3d_data() const
 {
     return fft_double->get_auxr_3d_data();
 }
+
+// ============================================================================
+// Batch FFT Implementation
+// ============================================================================
+
+void FFT_Bundle::setupBatchFFT()
+{
+    // Only setup batch FFT for GPU devices
+    if (this->device != "gpu")
+    {
+        return;
+    }
+
+#if defined(__CUDA)
+    if (double_flag && fft_double != nullptr)
+    {
+        // Cast to FFT_CUDA to access batch FFT methods
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr)
+        {
+            fft_cuda_double->setupBatchFFT();
+        }
+    }
+    if (float_flag && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr)
+        {
+            fft_cuda_float->setupBatchFFT();
+        }
+    }
+#endif
+    // ROCm not supported yet - automatic fallback to sequential
+}
+
+template <>
+void FFT_Bundle::fft3D_forward_batch(std::complex<float>* in_batch,
+                                     std::complex<float>* out_batch,
+                                     int batch_count) const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr && fft_cuda_float->is_batch_fft_ready())
+        {
+            fft_cuda_float->fft3D_forward_batch(in_batch, out_batch, batch_count);
+            return;
+        }
+    }
+#endif
+    // Fallback: sequential FFTs
+    // This should not be reached in normal batch FFT usage
+    // (caller should check is_batch_fft_available first)
+}
+
+template <>
+void FFT_Bundle::fft3D_forward_batch(std::complex<double>* in_batch,
+                                     std::complex<double>* out_batch,
+                                     int batch_count) const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_double != nullptr)
+    {
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr && fft_cuda_double->is_batch_fft_ready())
+        {
+            fft_cuda_double->fft3D_forward_batch(in_batch, out_batch, batch_count);
+            return;
+        }
+    }
+#endif
+    // Fallback: sequential FFTs
+}
+
+template <>
+void FFT_Bundle::fft3D_backward_batch(std::complex<float>* in_batch,
+                                      std::complex<float>* out_batch,
+                                      int batch_count) const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr && fft_cuda_float->is_batch_fft_ready())
+        {
+            fft_cuda_float->fft3D_backward_batch(in_batch, out_batch, batch_count);
+            return;
+        }
+    }
+#endif
+    // Fallback: sequential FFTs
+}
+
+template <>
+void FFT_Bundle::fft3D_backward_batch(std::complex<double>* in_batch,
+                                      std::complex<double>* out_batch,
+                                      int batch_count) const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_double != nullptr)
+    {
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr && fft_cuda_double->is_batch_fft_ready())
+        {
+            fft_cuda_double->fft3D_backward_batch(in_batch, out_batch, batch_count);
+            return;
+        }
+    }
+#endif
+    // Fallback: sequential FFTs
+}
+
+template <>
+bool FFT_Bundle::is_batch_fft_available<float>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr)
+        {
+            return fft_cuda_float->is_batch_fft_ready();
+        }
+    }
+#endif
+    return false;
+}
+
+template <>
+bool FFT_Bundle::is_batch_fft_available<double>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_double != nullptr)
+    {
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr)
+        {
+            return fft_cuda_double->is_batch_fft_ready();
+        }
+    }
+#endif
+    return false;
+}
+
+template <>
+int FFT_Bundle::get_batch_size<float>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr)
+        {
+            return fft_cuda_float->get_batch_size();
+        }
+    }
+#endif
+    return 0;
+}
+
+template <>
+int FFT_Bundle::get_batch_size<double>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_double != nullptr)
+    {
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr)
+        {
+            return fft_cuda_double->get_batch_size();
+        }
+    }
+#endif
+    return 0;
+}
+
+template <>
+std::complex<float>* FFT_Bundle::get_batch_input_buffer<float>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr)
+        {
+            return fft_cuda_float->get_batch_input_buffer();
+        }
+    }
+#endif
+    return nullptr;
+}
+
+template <>
+std::complex<double>* FFT_Bundle::get_batch_input_buffer<double>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_double != nullptr)
+    {
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr)
+        {
+            return fft_cuda_double->get_batch_input_buffer();
+        }
+    }
+#endif
+    return nullptr;
+}
+
+template <>
+std::complex<float>* FFT_Bundle::get_batch_output_buffer<float>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_float != nullptr)
+    {
+        auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
+        if (fft_cuda_float != nullptr)
+        {
+            return fft_cuda_float->get_batch_output_buffer();
+        }
+    }
+#endif
+    return nullptr;
+}
+
+template <>
+std::complex<double>* FFT_Bundle::get_batch_output_buffer<double>() const
+{
+#if defined(__CUDA)
+    if (this->device == "gpu" && fft_double != nullptr)
+    {
+        auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
+        if (fft_cuda_double != nullptr)
+        {
+            return fft_cuda_double->get_batch_output_buffer();
+        }
+    }
+#endif
+    return nullptr;
+}
+
 } // namespace ModuleBase

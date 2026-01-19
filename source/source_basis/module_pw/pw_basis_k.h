@@ -176,6 +176,51 @@ public:
                        const bool add = false,
                        const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
 
+    // Batch transform methods
+    /**
+     * @brief Batch transform from real space to reciprocal space
+     * @param ctx Device context
+     * @param in_batch Input data batch (size: batch_count * nrxx)
+     * @param out_batch Output data batch (size: batch_count * npwk_max)
+     * @param ik_batch Array of k-point indices (size: batch_count)
+     * @param batch_count Actual number of transforms to process
+     * @param add If true, add to output; if false, overwrite output
+     * @param factor Scaling factor
+     *
+     * Performs batch_count real-to-reciprocal transforms in a single operation.
+     * Falls back to sequential transforms if batch FFT not available.
+     */
+    template <typename FPTYPE, typename Device>
+    void real_to_recip_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             const int* ik_batch,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
+    /**
+     * @brief Batch transform from reciprocal space to real space
+     * @param ctx Device context
+     * @param in_batch Input data batch (size: batch_count * npwk_max)
+     * @param out_batch Output data batch (size: batch_count * nrxx)
+     * @param ik_batch Array of k-point indices (size: batch_count)
+     * @param batch_count Actual number of transforms to process
+     * @param add If true, add to output; if false, overwrite output
+     * @param factor Scaling factor
+     *
+     * Performs batch_count reciprocal-to-real transforms in a single operation.
+     * Falls back to sequential transforms if batch FFT not available.
+     */
+    template <typename FPTYPE, typename Device>
+    void recip_to_real_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             const int* ik_batch,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
 
     template <typename TK,
               typename Device,

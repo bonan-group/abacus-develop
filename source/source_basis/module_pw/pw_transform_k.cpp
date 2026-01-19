@@ -601,4 +601,268 @@ template void PW_Basis_K::recip2real<double>(const std::complex<double>* in,
                                              const int ik,
                                              const bool add,
                                              const double factor) const; // in:(nz, ns)  ; out(nplane,nx*ny)
+
+// ============================================================================
+// Batch Transform Implementations
+// ============================================================================
+
+#if defined(__CUDA) || defined(__ROCM)
+
+template <typename FPTYPE, typename Device>
+void PW_Basis_K::real_to_recip_batch(const Device* ctx,
+                                     const std::complex<FPTYPE>* in_batch,
+                                     std::complex<FPTYPE>* out_batch,
+                                     const int* ik_batch,
+                                     int batch_count,
+                                     const bool add,
+                                     const FPTYPE factor) const
+{
+    ModuleBase::timer::tick(this->classname, "real_to_recip_batch gpu");
+
+    // Check if batch FFT is available
+    if (!this->fft_bundle.is_batch_fft_available<FPTYPE>())
+    {
+        // Fallback to sequential transforms using GPU-specific template overload
+        for (int ib = 0; ib < batch_count; ++ib)
+        {
+            this->real_to_recip<std::complex<FPTYPE>, Device>(
+                               in_batch + ib * this->nrxx,
+                               out_batch + ib * this->npwk_max,
+                               ik_batch[ib],
+                               add,
+                               factor);
+        }
+        ModuleBase::timer::tick(this->classname, "real_to_recip_batch gpu");
+        return;
+    }
+
+    // Batch FFT path
+    assert(this->gamma_only == false);
+    assert(this->poolnproc == 1);
+
+    // Get batch buffers from FFT bundle
+    std::complex<FPTYPE>* batch_in = this->fft_bundle.get_batch_input_buffer<FPTYPE>();
+    std::complex<FPTYPE>* batch_out = this->fft_bundle.get_batch_output_buffer<FPTYPE>();
+    const int nxyz = this->nxyz;
+
+    // Copy input data to batch FFT input buffer
+    base_device::memory::synchronize_memory_op<std::complex<FPTYPE>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_GPU>()(batch_in,
+                                                                          in_batch,
+                                                                          batch_count * this->nrxx);
+
+    // Perform batch forward FFT
+    this->fft_bundle.fft3D_forward_batch(batch_in, batch_out, batch_count);
+
+    // Extract results for each transform in the batch
+    for (int ib = 0; ib < batch_count; ++ib)
+    {
+        const int ik = ik_batch[ib];
+        const int startig = ik * this->npwk_max;
+        const int npw_k = this->npwk[ik];
+
+        set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_GPU>()(npw_k,
+                                                                       nxyz,
+                                                                       add,
+                                                                       factor,
+                                                                       this->ig2ixyz_k + startig,
+                                                                       batch_out + ib * nxyz,
+                                                                       out_batch + ib * this->npwk_max);
+    }
+
+    ModuleBase::timer::tick(this->classname, "real_to_recip_batch gpu");
+}
+
+template <typename FPTYPE, typename Device>
+void PW_Basis_K::recip_to_real_batch(const Device* ctx,
+                                     const std::complex<FPTYPE>* in_batch,
+                                     std::complex<FPTYPE>* out_batch,
+                                     const int* ik_batch,
+                                     int batch_count,
+                                     const bool add,
+                                     const FPTYPE factor) const
+{
+    ModuleBase::timer::tick(this->classname, "recip_to_real_batch gpu");
+
+    // Check if batch FFT is available
+    if (!this->fft_bundle.is_batch_fft_available<FPTYPE>())
+    {
+        // Fallback to sequential transforms using GPU-specific template overload
+        for (int ib = 0; ib < batch_count; ++ib)
+        {
+            this->recip_to_real<std::complex<FPTYPE>, Device>(
+                               in_batch + ib * this->npwk_max,
+                               out_batch + ib * this->nrxx,
+                               ik_batch[ib],
+                               add,
+                               factor);
+        }
+        ModuleBase::timer::tick(this->classname, "recip_to_real_batch gpu");
+        return;
+    }
+
+    // Batch FFT path
+    assert(this->gamma_only == false);
+    assert(this->poolnproc == 1);
+
+    // Get batch buffers from FFT bundle
+    std::complex<FPTYPE>* batch_in = this->fft_bundle.get_batch_input_buffer<FPTYPE>();
+    std::complex<FPTYPE>* batch_out = this->fft_bundle.get_batch_output_buffer<FPTYPE>();
+    const int nxyz = this->nxyz;
+
+    // Zero batch input buffer
+    base_device::memory::set_memory_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>()(
+        batch_in,
+        0,
+        batch_count * nxyz);
+
+    // Populate FFT input for each transform in the batch
+    for (int ib = 0; ib < batch_count; ++ib)
+    {
+        const int ik = ik_batch[ib];
+        const int startig = ik * this->npwk_max;
+        const int npw_k = this->npwk[ik];
+
+        set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>()(npw_k,
+                                                             this->ig2ixyz_k + startig,
+                                                             in_batch + ib * this->npwk_max,
+                                                             batch_in + ib * nxyz);
+    }
+
+    // Perform batch backward FFT
+    this->fft_bundle.fft3D_backward_batch(batch_in, batch_out, batch_count);
+
+    // Extract results for each transform in the batch
+    for (int ib = 0; ib < batch_count; ++ib)
+    {
+        set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_GPU>()(this->nrxx,
+                                                                       add,
+                                                                       factor,
+                                                                       batch_out + ib * nxyz,
+                                                                       out_batch + ib * this->nrxx);
+    }
+
+    ModuleBase::timer::tick(this->classname, "recip_to_real_batch gpu");
+}
+
+// Template instantiations for batch transforms
+template void PW_Basis_K::real_to_recip_batch<float, base_device::DEVICE_GPU>(
+    const base_device::DEVICE_GPU*,
+    const std::complex<float>*,
+    std::complex<float>*,
+    const int*,
+    int,
+    const bool,
+    const float) const;
+
+template void PW_Basis_K::real_to_recip_batch<double, base_device::DEVICE_GPU>(
+    const base_device::DEVICE_GPU*,
+    const std::complex<double>*,
+    std::complex<double>*,
+    const int*,
+    int,
+    const bool,
+    const double) const;
+
+template void PW_Basis_K::recip_to_real_batch<float, base_device::DEVICE_GPU>(
+    const base_device::DEVICE_GPU*,
+    const std::complex<float>*,
+    std::complex<float>*,
+    const int*,
+    int,
+    const bool,
+    const float) const;
+
+template void PW_Basis_K::recip_to_real_batch<double, base_device::DEVICE_GPU>(
+    const base_device::DEVICE_GPU*,
+    const std::complex<double>*,
+    std::complex<double>*,
+    const int*,
+    int,
+    const bool,
+    const double) const;
+
+#else
+// CPU fallback (not implemented - just use sequential)
+template <typename FPTYPE, typename Device>
+void PW_Basis_K::real_to_recip_batch(const Device* ctx,
+                                     const std::complex<FPTYPE>* in_batch,
+                                     std::complex<FPTYPE>* out_batch,
+                                     const int* ik_batch,
+                                     int batch_count,
+                                     const bool add,
+                                     const FPTYPE factor) const
+{
+    // Fallback to sequential transforms on CPU
+    for (int ib = 0; ib < batch_count; ++ib)
+    {
+        this->real_to_recip(ctx,
+                           in_batch + ib * this->nrxx,
+                           out_batch + ib * this->npwk_max,
+                           ik_batch[ib],
+                           add,
+                           factor);
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void PW_Basis_K::recip_to_real_batch(const Device* ctx,
+                                     const std::complex<FPTYPE>* in_batch,
+                                     std::complex<FPTYPE>* out_batch,
+                                     const int* ik_batch,
+                                     int batch_count,
+                                     const bool add,
+                                     const FPTYPE factor) const
+{
+    // Fallback to sequential transforms on CPU
+    for (int ib = 0; ib < batch_count; ++ib)
+    {
+        this->recip_to_real(ctx,
+                           in_batch + ib * this->npwk_max,
+                           out_batch + ib * this->nrxx,
+                           ik_batch[ib],
+                           add,
+                           factor);
+    }
+}
+#endif
+
+// Explicit template instantiations for CPU batch transforms
+template void PW_Basis_K::real_to_recip_batch<float, base_device::DEVICE_CPU>(
+    const base_device::DEVICE_CPU* ctx,
+    const std::complex<float>* in_batch,
+    std::complex<float>* out_batch,
+    const int* ik_batch,
+    int batch_count,
+    const bool add,
+    const float factor) const;
+
+template void PW_Basis_K::real_to_recip_batch<double, base_device::DEVICE_CPU>(
+    const base_device::DEVICE_CPU* ctx,
+    const std::complex<double>* in_batch,
+    std::complex<double>* out_batch,
+    const int* ik_batch,
+    int batch_count,
+    const bool add,
+    const double factor) const;
+
+template void PW_Basis_K::recip_to_real_batch<float, base_device::DEVICE_CPU>(
+    const base_device::DEVICE_CPU* ctx,
+    const std::complex<float>* in_batch,
+    std::complex<float>* out_batch,
+    const int* ik_batch,
+    int batch_count,
+    const bool add,
+    const float factor) const;
+
+template void PW_Basis_K::recip_to_real_batch<double, base_device::DEVICE_CPU>(
+    const base_device::DEVICE_CPU* ctx,
+    const std::complex<double>* in_batch,
+    std::complex<double>* out_batch,
+    const int* ik_batch,
+    int batch_count,
+    const bool add,
+    const double factor) const;
+
 } // namespace ModulePW

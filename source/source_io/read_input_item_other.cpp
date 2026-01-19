@@ -546,6 +546,12 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
+        Input_Item item("exx_batch_fft");
+        item.annotation = "whether to use batch FFT for EXX operator (GPU only, automatic fallback on CPU)";
+        read_sync_bool(input.exx_batch_fft);
+        this->add_item(item);
+    }
+    {
         Input_Item item("exx_thr_type");
         item.annotation = "threshold type for exx outer loop, energy or density";
         read_sync_string(input.exx_thr_type);

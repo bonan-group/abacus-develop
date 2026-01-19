@@ -235,6 +235,10 @@ void PW_Basis_K::setuptransform()
                                  this->xprime);
     }
     this->fft_bundle.setupFFT();
+
+    // Setup batch FFT for GPU acceleration (automatically skipped if not GPU or not available)
+    this->fft_bundle.setupBatchFFT();
+
     ModuleBase::timer::tick(this->classname, "setuptransform");
 }
 

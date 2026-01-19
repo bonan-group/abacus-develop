@@ -99,6 +99,14 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                     const int ngk_ik = 0,
                     const bool is_first_node = false) const;
 
+    void act_op_batch(const int nbands,
+                      const int nbasis,
+                      const int npol,
+                      const T *tmpsi_in,
+                      T *tmhpsi,
+                      const int ngk_ik = 0,
+                      const bool is_first_node = false) const;
+
     double cal_exx_energy_op(psi::Psi<T, Device> *psi_) const;
 
     double cal_exx_energy_ace(psi::Psi<T, Device> *psi_) const;
@@ -133,6 +141,11 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     mutable Real *pot = nullptr;  // mutable to allow caching in const methods
     mutable Real *pot_original = nullptr;  // Track original allocation for cleanup
 
+    // Batch FFT buffers (allocated once, reused across iterations)
+    T *psi_mq_batch_real = nullptr;  // batch_size × wfcpw->npwk_max (input) / nrxx (output after transform)
+
+    // Batch control
+    static constexpr int BATCH_FFT_SIZE = 8;  // Match FFT_CUDA batch size
 
     // EXX potential cache for current k-point only (memory-efficient)
     mutable std::map<int, Real*> pot_cache;  // Key: iq only (not (ik,iq))

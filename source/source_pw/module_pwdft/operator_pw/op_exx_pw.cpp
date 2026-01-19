@@ -69,6 +69,9 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     resmem_complex_op()(h_psi_recip, wfcpw->npwk_max);
     // resmem_complex_op()(this->ctx, psi_all_real, wfcpw->nrxx * GlobalV::NBANDS);
 
+    // Allocate batch FFT buffers (for batch recip_to_real transform)
+    resmem_complex_op()(psi_mq_batch_real, BATCH_FFT_SIZE * wfcpw->nrxx);
+
     int nks = wfcpw->nks;
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
     resmem_real_op()(pot, rhopw->npw);
@@ -134,6 +137,9 @@ OperatorEXXPW<T, Device>::~OperatorEXXPW()
     delmem_complex_op()(h_psi_real);
     delmem_complex_op()(density_recip);
     delmem_complex_op()(h_psi_recip);
+
+    // Free batch FFT buffers
+    delmem_complex_op()(psi_mq_batch_real);
 
     // Clean up EXX potential cache
     clear_exx_potential_cache();
@@ -202,7 +208,15 @@ void OperatorEXXPW<T, Device>::act(const int nbands,
     }
     else
     {
-        act_op(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
+        // Try batch FFT first, fallback to sequential if unavailable or disabled
+        if (PARAM.inp.exx_batch_fft && wfcpw->fft_bundle.is_batch_fft_available<Real>())
+        {
+            act_op_batch(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
+        }
+        else
+        {
+            act_op(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
+        }
     }
 }
 
@@ -316,6 +330,144 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
 
     ModuleBase::timer::tick("OperatorEXXPW", "act_op");
 
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
+                                            const int nbasis,
+                                            const int npol,
+                                            const T *tmpsi_in,
+                                            T *tmhpsi,
+                                            const int ngk_ik,
+                                            const bool is_first_node) const
+{
+    ModuleBase::timer::tick("OperatorEXXPW", "act_op_batch");
+
+    // Initialize buffers (same as act_op)
+    setmem_complex_op()(h_psi_recip, 0, wfcpw->npwk_max);
+    setmem_complex_op()(h_psi_real, 0, rhopw_dev->nrxx);
+    setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
+    setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
+    setmem_complex_op()(psi_nk_real, 0, wfcpw->nrxx);
+    setmem_complex_op()(psi_mq_real, 0, wfcpw->nrxx);
+    setmem_complex_op()(psi_mq_batch_real, 0, BATCH_FFT_SIZE * wfcpw->nrxx);
+
+    auto q_points = get_q_points(this->ik);
+    int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
+    int nk = wfcpw->nks / nk_fac;
+
+    // Outer loop over bands (same structure as act_op)
+    for (int n_iband = 0; n_iband < nbands; n_iband++)
+    {
+        const T *psi_nk = tmpsi_in + n_iband * nbasis;
+        wfcpw->recip_to_real(ctx, psi_nk, psi_nk_real, this->ik);
+
+        Real nqs = q_points.size();
+        for (int iq: q_points)
+        {
+            ModuleBase::timer::tick("act_op_batch", "get_exx_potential");
+            Real* pot_ik_iq = get_exx_potential_cached(this->ik, iq % nk);
+            pot = pot_ik_iq;
+            ModuleBase::timer::tick("act_op_batch", "get_exx_potential");
+
+            // === BATCH FFT SECTION ===
+            // Accumulate m_iband iterations into batches
+            int batch_idx = 0;
+            const T* psi_mq_ptrs[BATCH_FFT_SIZE];  // Pointers to input wavefunctions
+            int ik_batch[BATCH_FFT_SIZE];          // k-point indices for batch
+            T wg_batch[BATCH_FFT_SIZE];            // Weights for each element (converted to T type)
+
+            for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
+            {
+                double wg_mqb_real = (*wg)(this->ik, m_iband);
+                if (wg_mqb_real < 1e-12)
+                {
+                    continue;  // Skip negligible weights
+                }
+
+                // Add to batch
+                psi_mq_ptrs[batch_idx] = get_pw(m_iband, iq);
+                ik_batch[batch_idx] = iq;
+                wg_batch[batch_idx] = wg_mqb_real;  // Implicit conversion to T
+                batch_idx++;
+
+                // Flush batch when full OR at last m_iband
+                if (batch_idx == BATCH_FFT_SIZE || m_iband == psi.get_nbands() - 1)
+                {
+                    // Copy batch inputs to contiguous buffer
+                    ModuleBase::timer::tick("act_op_batch", "prepare_batch");
+                    for (int ib = 0; ib < batch_idx; ib++)
+                    {
+                        syncmem_complex_op()(
+                            psi_mq_batch_real + ib * wfcpw->npwk_max,
+                            psi_mq_ptrs[ib],
+                            wfcpw->npwk_max);
+                    }
+                    ModuleBase::timer::tick("act_op_batch", "prepare_batch");
+
+                    // Batch recip_to_real transform
+                    ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
+                    wfcpw->recip_to_real_batch<Real, Device>(
+                        ctx,
+                        psi_mq_batch_real,           // Input: batch_idx × npwk_max
+                        psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
+                        ik_batch,
+                        batch_idx,
+                        false,
+                        Real(1.0));
+                    ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
+
+                    // Process each batch element through density/potential pipeline
+                    ModuleBase::timer::tick("act_op_batch", "process_batch");
+                    for (int ib = 0; ib < batch_idx; ib++)
+                    {
+                        T* psi_mq_real_ib = psi_mq_batch_real + ib * wfcpw->nrxx;
+
+                        // Density calculation: psi_nk * psi_mq
+                        cal_density_recip(psi_nk_real, psi_mq_real_ib, ucell->omega);
+
+                        // Multiply with potential
+                        multiply_potential(density_recip, this->ik, iq);
+
+                        // Transform potential back to real space
+                        rho_recip2real(density_recip, density_real);
+
+                        // Multiply density with psi_mq
+                        vec_mul_vec_complex_op<T, Device>()(
+                            density_real, psi_mq_real_ib, density_real, wfcpw->nrxx);
+
+                        // Accumulate into h_psi_real
+                        T wk_iq = kv->wk[iq];
+                        T tmp_scalar = wg_batch[ib] / wk_iq / nqs;
+                        axpy_complex_op()(wfcpw->nrxx,
+                                         &tmp_scalar,
+                                         density_real,
+                                         1,
+                                         h_psi_real,
+                                         1);
+                    }
+                    ModuleBase::timer::tick("act_op_batch", "process_batch");
+
+                    // Reset batch
+                    batch_idx = 0;
+                }
+            } // end m_iband loop
+
+            // Clear buffers for next iq
+            setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
+            setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
+
+        } // end iq loop
+
+        // Transform h_psi back to reciprocal space
+        T* h_psi_nk = tmhpsi + n_iband * nbasis;
+        Real hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+        wfcpw->real_to_recip(ctx, h_psi_real, h_psi_nk, this->ik, true, hybrid_alpha);
+        setmem_complex_op()(h_psi_real, 0, rhopw_dev->nrxx);
+
+    } // end n_iband loop
+
+    ModuleBase::timer::tick("OperatorEXXPW", "act_op_batch");
 }
 
 template <typename T, typename Device>

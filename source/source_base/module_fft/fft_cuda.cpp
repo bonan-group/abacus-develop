@@ -42,10 +42,55 @@ void FFT_CUDA<double>::cleanFFT()
         z_handle = {};
     }
 }
+
+// ============================================================================
+// Batch FFT cleanup (must be defined before clear() which calls it)
+// ============================================================================
+template <>
+void FFT_CUDA<float>::cleanBatchFFT()
+{
+    if (c_batch_handle != 0)
+    {
+        cufftDestroy(c_batch_handle);
+        c_batch_handle = 0;
+    }
+    if (c_auxr_batch_in != nullptr)
+    {
+        delmem_cd_op()(c_auxr_batch_in);
+        c_auxr_batch_in = nullptr;
+    }
+    if (c_auxr_batch_out != nullptr)
+    {
+        delmem_cd_op()(c_auxr_batch_out);
+        c_auxr_batch_out = nullptr;
+    }
+}
+
+template <>
+void FFT_CUDA<double>::cleanBatchFFT()
+{
+    if (z_batch_handle != 0)
+    {
+        cufftDestroy(z_batch_handle);
+        z_batch_handle = 0;
+    }
+    if (z_auxr_batch_in != nullptr)
+    {
+        delmem_zd_op()(z_auxr_batch_in);
+        z_auxr_batch_in = nullptr;
+    }
+    if (z_auxr_batch_out != nullptr)
+    {
+        delmem_zd_op()(z_auxr_batch_out);
+        z_auxr_batch_out = nullptr;
+    }
+}
+
 template <>
 void FFT_CUDA<float>::clear()
 {
     this->cleanFFT();
+    this->cleanBatchFFT();
     if (c_auxr_3d != nullptr)
     {
         delmem_cd_op()(c_auxr_3d);
@@ -56,6 +101,7 @@ template <>
 void FFT_CUDA<double>::clear()
 {
     this->cleanFFT();
+    this->cleanBatchFFT();
     if (z_auxr_3d != nullptr)
     {
         delmem_zd_op()(z_auxr_3d);
@@ -107,6 +153,187 @@ std::complex<double>* FFT_CUDA<double>::get_auxr_3d_data() const
     return this->z_auxr_3d;
 }
 
+// ============================================================================
+// Batch FFT Implementation
+// ============================================================================
+
+template <>
+void FFT_CUDA<float>::setupBatchFFT()
+{
+    if (c_batch_handle != 0)
+    {
+        // Already initialized
+        return;
+    }
+
+    const int rank = 3;
+    int n[3] = {this->nz, this->ny, this->nx};
+    const int idist = this->nx * this->ny * this->nz;
+    const int odist = this->nx * this->ny * this->nz;
+    const int istride = 1;
+    const int ostride = 1;
+
+    // Create batch FFT plan using cufftPlanMany
+    CHECK_CUFFT(cufftPlanMany(&c_batch_handle,
+                              rank, n,
+                              nullptr, istride, idist,  // input parameters
+                              nullptr, ostride, odist,  // output parameters
+                              CUFFT_C2C,
+                              BATCH_FFT_SIZE));
+
+    // Allocate batch buffers on device
+    const size_t batch_buffer_size = BATCH_FFT_SIZE * this->nx * this->ny * this->nz;
+    resmem_cd_op()(this->c_auxr_batch_in, batch_buffer_size);
+    resmem_cd_op()(this->c_auxr_batch_out, batch_buffer_size);
+}
+
+template <>
+void FFT_CUDA<double>::setupBatchFFT()
+{
+    if (z_batch_handle != 0)
+    {
+        // Already initialized
+        return;
+    }
+
+    const int rank = 3;
+    int n[3] = {this->nz, this->ny, this->nx};
+    const int idist = this->nx * this->ny * this->nz;
+    const int odist = this->nx * this->ny * this->nz;
+    const int istride = 1;
+    const int ostride = 1;
+
+    // Create batch FFT plan using cufftPlanMany
+    CHECK_CUFFT(cufftPlanMany(&z_batch_handle,
+                              rank, n,
+                              nullptr, istride, idist,  // input parameters
+                              nullptr, ostride, odist,  // output parameters
+                              CUFFT_Z2Z,
+                              BATCH_FFT_SIZE));
+
+    // Allocate batch buffers on device
+    const size_t batch_buffer_size = BATCH_FFT_SIZE * this->nx * this->ny * this->nz;
+    resmem_zd_op()(this->z_auxr_batch_in, batch_buffer_size);
+    resmem_zd_op()(this->z_auxr_batch_out, batch_buffer_size);
+}
+
+template <>
+void FFT_CUDA<float>::fft3D_forward_batch(std::complex<float>* in_batch,
+                                          std::complex<float>* out_batch,
+                                          int batch_count) const
+{
+    // Validate batch_count
+    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
+    {
+        return;
+    }
+
+    CHECK_CUFFT(cufftExecC2C(this->c_batch_handle,
+                             reinterpret_cast<cufftComplex*>(in_batch),
+                             reinterpret_cast<cufftComplex*>(out_batch),
+                             CUFFT_FORWARD));
+}
+
+template <>
+void FFT_CUDA<double>::fft3D_forward_batch(std::complex<double>* in_batch,
+                                           std::complex<double>* out_batch,
+                                           int batch_count) const
+{
+    // Validate batch_count
+    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
+    {
+        return;
+    }
+
+    CHECK_CUFFT(cufftExecZ2Z(this->z_batch_handle,
+                             reinterpret_cast<cufftDoubleComplex*>(in_batch),
+                             reinterpret_cast<cufftDoubleComplex*>(out_batch),
+                             CUFFT_FORWARD));
+}
+
+template <>
+void FFT_CUDA<float>::fft3D_backward_batch(std::complex<float>* in_batch,
+                                           std::complex<float>* out_batch,
+                                           int batch_count) const
+{
+    // Validate batch_count
+    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
+    {
+        return;
+    }
+
+    CHECK_CUFFT(cufftExecC2C(this->c_batch_handle,
+                             reinterpret_cast<cufftComplex*>(in_batch),
+                             reinterpret_cast<cufftComplex*>(out_batch),
+                             CUFFT_INVERSE));
+}
+
+template <>
+void FFT_CUDA<double>::fft3D_backward_batch(std::complex<double>* in_batch,
+                                            std::complex<double>* out_batch,
+                                            int batch_count) const
+{
+    // Validate batch_count
+    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
+    {
+        return;
+    }
+
+    CHECK_CUFFT(cufftExecZ2Z(this->z_batch_handle,
+                             reinterpret_cast<cufftDoubleComplex*>(in_batch),
+                             reinterpret_cast<cufftDoubleComplex*>(out_batch),
+                             CUFFT_INVERSE));
+}
+
+template <>
+bool FFT_CUDA<float>::is_batch_fft_ready() const
+{
+    return (c_batch_handle != 0 && c_auxr_batch_in != nullptr && c_auxr_batch_out != nullptr);
+}
+
+template <>
+bool FFT_CUDA<double>::is_batch_fft_ready() const
+{
+    return (z_batch_handle != 0 && z_auxr_batch_in != nullptr && z_auxr_batch_out != nullptr);
+}
+
+template <>
+int FFT_CUDA<float>::get_batch_size() const
+{
+    return BATCH_FFT_SIZE;
+}
+
+template <>
+int FFT_CUDA<double>::get_batch_size() const
+{
+    return BATCH_FFT_SIZE;
+}
+
+template <>
+std::complex<float>* FFT_CUDA<float>::get_batch_input_buffer() const
+{
+    return this->c_auxr_batch_in;
+}
+
+template <>
+std::complex<double>* FFT_CUDA<double>::get_batch_input_buffer() const
+{
+    return this->z_auxr_batch_in;
+}
+
+template <>
+std::complex<float>* FFT_CUDA<float>::get_batch_output_buffer() const
+{
+    return this->c_auxr_batch_out;
+}
+
+template <>
+std::complex<double>* FFT_CUDA<double>::get_batch_output_buffer() const
+{
+    return this->z_auxr_batch_out;
+}
+
+// Template instantiations (must be at the end after all specializations)
 template FFT_CUDA<float>::FFT_CUDA();
 template FFT_CUDA<float>::~FFT_CUDA();
 template FFT_CUDA<double>::FFT_CUDA();
