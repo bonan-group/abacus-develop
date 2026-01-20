@@ -20,6 +20,32 @@ __global__ void cal_density_real_kernel(
     }
 }
 
+// Batched version: process multiple density calculations in one launch
+template <typename FPTYPE>
+__global__ void cal_density_real_kernel_batch(
+    const thrust::complex<FPTYPE> *psi_nk,          // Constant input (nrxx elements)
+    const thrust::complex<FPTYPE> *psi_mq_batch,    // Batch input (batch_size × nrxx)
+    thrust::complex<FPTYPE> *density_batch,         // Batch output (batch_size × nrxx)
+    const FPTYPE omega,
+    int nrxx,
+    int batch_size)
+{
+    // 1D thread indexing across both spatial and batch dimensions
+    int linear_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_elements = nrxx * batch_size;
+
+    if (linear_idx < total_elements)
+    {
+        int batch_idx = linear_idx / nrxx;           // Which batch element (0-7)
+        int spatial_idx = linear_idx % nrxx;         // Which spatial point (0-nrxx-1)
+
+        // Calculate: density[batch,spatial] = psi_nk[spatial] * conj(psi_mq[batch,spatial]) / omega
+        density_batch[linear_idx] = psi_nk[spatial_idx]
+                                  * thrust::conj(psi_mq_batch[linear_idx])
+                                  / static_cast<thrust::complex<FPTYPE>>(omega);
+    }
+}
+
 template <typename FPTYPE>
 struct cal_density_real_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>
 {
@@ -39,6 +65,34 @@ struct cal_density_real_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>
         if (err != cudaSuccess)
         {
             throw std::runtime_error("CUDA error in cal_density_real_kernel: " + std::string(cudaGetErrorString(err)));
+        }
+    }
+
+    // Batched operator
+    void operator_batch(
+        const T *psi_nk,
+        const T *psi_mq_batch,
+        T *density_batch,
+        double omega,
+        int nrxx,
+        int batch_size)
+    {
+        const int total_elements = nrxx * batch_size;
+        const int threads_per_block = 256;
+        const int blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+
+        cal_density_real_kernel_batch<FPTYPE><<<blocks, threads_per_block>>>(
+            reinterpret_cast<const thrust::complex<FPTYPE>*>(psi_nk),
+            reinterpret_cast<const thrust::complex<FPTYPE>*>(psi_mq_batch),
+            reinterpret_cast<thrust::complex<FPTYPE>*>(density_batch),
+            static_cast<FPTYPE>(omega),
+            nrxx,
+            batch_size);
+
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess)
+        {
+            throw std::runtime_error("CUDA error in cal_density_real_kernel_batch: " + std::string(cudaGetErrorString(err)));
         }
     }
 };

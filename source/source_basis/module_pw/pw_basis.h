@@ -291,6 +291,69 @@ public:
                     const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
 
     /**
+     * @brief Batch transform from real space to reciprocal space (GPU only)
+     * @param ctx Device context
+     * @param in_batch Input data batch (size: batch_count * nrxx)
+     * @param out_batch Output data batch (size: batch_count * npw)
+     * @param batch_count Number of transforms to process
+     * @param add If true, add to output; if false, overwrite output
+     * @param factor Scaling factor
+     *
+     * Performs batch_count real-to-reciprocal transforms in a single operation.
+     * Falls back to sequential transforms if batch FFT not available.
+     * Simpler than PW_Basis_K version - no k-point indexing needed.
+     */
+    template <typename FPTYPE, typename Device,
+              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
+    void real_to_recip_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
+    /**
+     * @brief Batch transform from reciprocal space to real space (GPU only)
+     * @param ctx Device context
+     * @param in_batch Input data batch (size: batch_count * npw)
+     * @param out_batch Output data batch (size: batch_count * nrxx)
+     * @param batch_count Number of transforms to process
+     * @param add If true, add to output; if false, overwrite output
+     * @param factor Scaling factor
+     *
+     * Performs batch_count reciprocal-to-real transforms in a single operation.
+     * Falls back to sequential transforms if batch FFT not available.
+     * Simpler than PW_Basis_K version - no k-point indexing needed.
+     */
+    template <typename FPTYPE, typename Device,
+              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
+    void recip_to_real_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
+    // CPU stub versions (just call sequential - batching doesn't help CPU)
+    template <typename FPTYPE, typename Device,
+              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
+    void real_to_recip_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
+    template <typename FPTYPE, typename Device,
+              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
+    void recip_to_real_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
+    /**
      * @brief Converts data from reciprocal space to real space on Cpu
      *
      * This function handles the conversion of data from reciprocal space (Fourier space) to real space.

@@ -31,6 +31,7 @@ precision single
 # Not using ACE
 exxace 0
 exx_separate_loop 0
+exx_batch_fft 1
 
 #exx_hybrid_alpha        0.25
 

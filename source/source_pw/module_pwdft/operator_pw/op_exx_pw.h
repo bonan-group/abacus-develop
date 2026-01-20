@@ -113,6 +113,14 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     void cal_density_recip(const T* psi_nk_real, const T* psi_mq_real, double omega) const;
 
+    void cal_density_recip_batch(const T* psi_nk_real,
+                                  T* psi_mq_real_batch,
+                                  T* density_real_batch,
+                                  T* density_recip_batch,
+                                  int batch_size,
+                                  const int* ik_batch,
+                                  double omega) const;
+
     void rho_recip2real(const T* rho_recip, T* rho_real, bool add = false, Real factor = 1.0) const;
 
     mutable int cnt = 0;
@@ -143,6 +151,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     // Batch FFT buffers (allocated once, reused across iterations)
     T *psi_mq_batch_real = nullptr;  // batch_size × wfcpw->npwk_max (input) / nrxx (output after transform)
+    T *density_real_batch = nullptr;   // batch_size × rhopw_dev->nrxx (for batched real-space densities)
+    T *density_recip_batch = nullptr;  // batch_size × rhopw_dev->npw (for batched reciprocal-space densities)
 
     // Batch control
     static constexpr int BATCH_FFT_SIZE = 8;  // Match FFT_CUDA batch size

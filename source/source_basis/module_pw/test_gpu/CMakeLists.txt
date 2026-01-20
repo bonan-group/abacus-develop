@@ -6,11 +6,18 @@ AddTest(
   SOURCES pw_test.cpp  pw_basis_C2R.cpp pw_basis_C2C.cpp  pw_basis_k_C2C.cpp
 )
 
-# Batch FFT test
+# Batch FFT test for PW_Basis_K (wavefunction transforms)
 AddTest(
   TARGET pw_batch_fft_test
   LIBS parameter ${math_libs} base planewave device
   SOURCES pw_basis_k_batch_test.cpp
+)
+
+# Batch FFT test for PW_Basis (density transforms)
+AddTest(
+  TARGET pw_basis_batch_test
+  LIBS parameter ${math_libs} base planewave device
+  SOURCES pw_basis_batch_test.cpp
 )
 endif()
 

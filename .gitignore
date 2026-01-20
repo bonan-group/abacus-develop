@@ -1,5 +1,9 @@
 /build*
 build_info.h
+external/
+batch_fft_compare/
+*.nsys-rep
+examples/**/output*
 bin
 obj
 *.o

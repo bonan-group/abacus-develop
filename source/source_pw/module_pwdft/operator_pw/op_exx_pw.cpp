@@ -71,6 +71,8 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
 
     // Allocate batch FFT buffers (for batch recip_to_real transform)
     resmem_complex_op()(psi_mq_batch_real, BATCH_FFT_SIZE * wfcpw->nrxx);
+    resmem_complex_op()(density_real_batch, BATCH_FFT_SIZE * rhopw->nrxx);
+    resmem_complex_op()(density_recip_batch, BATCH_FFT_SIZE * rhopw->npw);
 
     int nks = wfcpw->nks;
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -140,6 +142,8 @@ OperatorEXXPW<T, Device>::~OperatorEXXPW()
 
     // Free batch FFT buffers
     delmem_complex_op()(psi_mq_batch_real);
+    delmem_complex_op()(density_real_batch);
+    delmem_complex_op()(density_recip_batch);
 
     // Clean up EXX potential cache
     clear_exx_potential_cache();
@@ -351,6 +355,8 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     setmem_complex_op()(psi_nk_real, 0, wfcpw->nrxx);
     setmem_complex_op()(psi_mq_real, 0, wfcpw->nrxx);
     setmem_complex_op()(psi_mq_batch_real, 0, BATCH_FFT_SIZE * wfcpw->nrxx);
+    setmem_complex_op()(density_real_batch, 0, BATCH_FFT_SIZE * rhopw_dev->nrxx);
+    setmem_complex_op()(density_recip_batch, 0, BATCH_FFT_SIZE * rhopw_dev->npw);
 
     auto q_points = get_q_points(this->ik);
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -417,36 +423,69 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                         Real(1.0));
                     ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
 
-                    // Process each batch element through density/potential pipeline
-                    ModuleBase::timer::tick("act_op_batch", "process_batch");
+                    // === STAGE 1: Batch density calculation (element-wise + real2recip FFT) ===
+                    ModuleBase::timer::tick("act_op_batch", "cal_density_recip_batch");
+                    cal_density_recip_batch(
+                        psi_nk_real,           // psi_nk (same for all batch elements)
+                        psi_mq_batch_real,     // batch of psi_mq (batch_idx × nrxx)
+                        density_real_batch,    // output batch (batch_idx × nrxx)
+                        density_recip_batch,   // output batch (batch_idx × npw)
+                        batch_idx,
+                        ik_batch,
+                        ucell->omega);
+                    ModuleBase::timer::tick("act_op_batch", "cal_density_recip_batch");
+
+                    // === STAGE 2: Batch multiply with potential ===
+                    ModuleBase::timer::tick("act_op_batch", "multiply_potential_batch");
                     for (int ib = 0; ib < batch_idx; ib++)
                     {
+                        T* density_recip_ib = density_recip_batch + ib * rhopw_dev->npw;
+                        multiply_potential(density_recip_ib, this->ik, iq);
+                    }
+                    ModuleBase::timer::tick("act_op_batch", "multiply_potential_batch");
+
+                    // === STAGE 3: Batch recip2real FFT for densities ===
+                    ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch_density");
+
+                    // Now we can call batch method directly (works for both CPU and GPU)
+                    rhopw_dev->recip_to_real_batch<Real, Device>(
+                        this->ctx,
+                        density_recip_batch,     // Input: batch_idx × npw
+                        density_real_batch,      // Output: batch_idx × nrxx
+                        batch_idx,
+                        false,
+                        Real(1.0));
+
+                    ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch_density");
+
+                    // === STAGE 4: Batch element-wise multiply ===
+                    ModuleBase::timer::tick("act_op_batch", "vec_mul_vec_batch");
+                    for (int ib = 0; ib < batch_idx; ib++)
+                    {
+                        T* density_real_ib = density_real_batch + ib * rhopw_dev->nrxx;
                         T* psi_mq_real_ib = psi_mq_batch_real + ib * wfcpw->nrxx;
 
-                        // Density calculation: psi_nk * psi_mq
-                        cal_density_recip(psi_nk_real, psi_mq_real_ib, ucell->omega);
-
-                        // Multiply with potential
-                        multiply_potential(density_recip, this->ik, iq);
-
-                        // Transform potential back to real space
-                        rho_recip2real(density_recip, density_real);
-
-                        // Multiply density with psi_mq
                         vec_mul_vec_complex_op<T, Device>()(
-                            density_real, psi_mq_real_ib, density_real, wfcpw->nrxx);
+                            density_real_ib, psi_mq_real_ib, density_real_ib, wfcpw->nrxx);
+                    }
+                    ModuleBase::timer::tick("act_op_batch", "vec_mul_vec_batch");
 
-                        // Accumulate into h_psi_real
+                    // === STAGE 5: Sequential accumulation (cannot batch due to different scalars) ===
+                    ModuleBase::timer::tick("act_op_batch", "accumulate");
+                    for (int ib = 0; ib < batch_idx; ib++)
+                    {
+                        T* density_real_ib = density_real_batch + ib * rhopw_dev->nrxx;
                         T wk_iq = kv->wk[iq];
                         T tmp_scalar = wg_batch[ib] / wk_iq / nqs;
+
                         axpy_complex_op()(wfcpw->nrxx,
                                          &tmp_scalar,
-                                         density_real,
+                                         density_real_ib,
                                          1,
                                          h_psi_real,
                                          1);
                     }
-                    ModuleBase::timer::tick("act_op_batch", "process_batch");
+                    ModuleBase::timer::tick("act_op_batch", "accumulate");
 
                     // Reset batch
                     batch_idx = 0;
@@ -898,6 +937,68 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::cal_density_re
     rhopw_dev->real2recip(density_real, density_recip);
 }
 
+// Batch density calculation (CPU double precision)
+template <>
+void OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>::cal_density_recip_batch(
+    const std::complex<double>* psi_nk_real,
+    std::complex<double>* psi_mq_real_batch,
+    std::complex<double>* density_real_batch,
+    std::complex<double>* density_recip_batch,
+    int batch_size,
+    const int* ik_batch,
+    double omega) const
+{
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+
+    // Process each batch element sequentially on CPU
+    for (int ib = 0; ib < batch_size; ib++)
+    {
+        std::complex<double>* psi_mq_ib = psi_mq_real_batch + ib * wfcpw->nrxx;
+        std::complex<double>* density_real_ib = density_real_batch + ib * rhopw_dev->nrxx;
+        std::complex<double>* density_recip_ib = density_recip_batch + ib * rhopw_dev->npw;
+
+        // Element-wise multiply: density = psi_nk * conj(psi_mq) / omega
+        cal_density_real_op<std::complex<double>, base_device::DEVICE_CPU>()(
+            psi_nk_real, psi_mq_ib, density_real_ib, omega, wfcpw->nrxx);
+
+        // FFT: real -> recip
+        rhopw_dev->real2recip(density_real_ib, density_recip_ib);
+    }
+
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+}
+
+// Batch density calculation (CPU single precision)
+template <>
+void OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::cal_density_recip_batch(
+    const std::complex<float>* psi_nk_real,
+    std::complex<float>* psi_mq_real_batch,
+    std::complex<float>* density_real_batch,
+    std::complex<float>* density_recip_batch,
+    int batch_size,
+    const int* ik_batch,
+    double omega) const
+{
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+
+    // Process each batch element sequentially on CPU
+    for (int ib = 0; ib < batch_size; ib++)
+    {
+        std::complex<float>* psi_mq_ib = psi_mq_real_batch + ib * wfcpw->nrxx;
+        std::complex<float>* density_real_ib = density_real_batch + ib * rhopw_dev->nrxx;
+        std::complex<float>* density_recip_ib = density_recip_batch + ib * rhopw_dev->npw;
+
+        // Element-wise multiply: density = psi_nk * conj(psi_mq) / omega
+        cal_density_real_op<std::complex<float>, base_device::DEVICE_CPU>()(
+            psi_nk_real, psi_mq_ib, density_real_ib, omega, wfcpw->nrxx);
+
+        // FFT: real -> recip
+        rhopw_dev->real2recip(density_real_ib, density_recip_ib);
+    }
+
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+}
+
 template <>
 void OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>::rho_recip2real(const std::complex<double>* rho_recip,
                                                                              std::complex<double>* rho_real,
@@ -956,6 +1057,83 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::rho_recip2real
                                                                              float factor) const
 {
     rhopw_dev->recip2real_gpu(rho_recip, rho_real, add, factor);
+}
+
+// Batch density calculation (GPU double precision)
+// For now, use sequential transforms for real->recip (focus optimization on recip->real bottleneck)
+template <>
+void OperatorEXXPW<std::complex<double>, base_device::DEVICE_GPU>::cal_density_recip_batch(
+    const std::complex<double>* psi_nk_real,
+    std::complex<double>* psi_mq_real_batch,
+    std::complex<double>* density_real_batch,
+    std::complex<double>* density_recip_batch,
+    int batch_size,
+    const int* ik_batch,
+    double omega) const
+{
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+
+    // Step 1: Batched element-wise multiply
+    ModuleBase::timer::tick("cal_density_recip_batch", "element_wise_batch");
+    cal_density_real_op<std::complex<double>, base_device::DEVICE_GPU>().operator_batch(
+        psi_nk_real,           // Constant (nrxx)
+        psi_mq_real_batch,     // Batch input (batch_size × nrxx)
+        density_real_batch,    // Batch output (batch_size × nrxx)
+        omega,
+        wfcpw->nrxx,
+        batch_size);
+    ModuleBase::timer::tick("cal_density_recip_batch", "element_wise_batch");
+
+    // Step 2: Batch FFT real → recip
+    ModuleBase::timer::tick("cal_density_recip_batch", "real2recip_batch");
+    rhopw_dev->real_to_recip_batch<double, base_device::DEVICE_GPU>(
+        this->ctx,
+        density_real_batch,      // Input: batch_size × nrxx
+        density_recip_batch,     // Output: batch_size × npw
+        batch_size,
+        false,
+        1.0);
+    ModuleBase::timer::tick("cal_density_recip_batch", "real2recip_batch");
+
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+}
+
+// Batch density calculation (GPU single precision)
+template <>
+void OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::cal_density_recip_batch(
+    const std::complex<float>* psi_nk_real,
+    std::complex<float>* psi_mq_real_batch,
+    std::complex<float>* density_real_batch,
+    std::complex<float>* density_recip_batch,
+    int batch_size,
+    const int* ik_batch,
+    double omega) const
+{
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
+
+    // Step 1: Batched element-wise multiply
+    ModuleBase::timer::tick("cal_density_recip_batch", "element_wise_batch");
+    cal_density_real_op<std::complex<float>, base_device::DEVICE_GPU>().operator_batch(
+        psi_nk_real,           // Constant (nrxx)
+        psi_mq_real_batch,     // Batch input (batch_size × nrxx)
+        density_real_batch,    // Batch output (batch_size × nrxx)
+        omega,
+        wfcpw->nrxx,
+        batch_size);
+    ModuleBase::timer::tick("cal_density_recip_batch", "element_wise_batch");
+
+    // Step 2: Batch FFT real → recip
+    ModuleBase::timer::tick("cal_density_recip_batch", "real2recip_batch");
+    rhopw_dev->real_to_recip_batch<float, base_device::DEVICE_GPU>(
+        this->ctx,
+        density_real_batch,      // Input: batch_size × nrxx
+        density_recip_batch,     // Output: batch_size × npw
+        batch_size,
+        false,
+        1.0f);
+    ModuleBase::timer::tick("cal_density_recip_batch", "real2recip_batch");
+
+    ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
 }
 
 #endif

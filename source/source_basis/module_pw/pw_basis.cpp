@@ -60,16 +60,20 @@ void PW_Basis::setuptransform()
     this->distribute_g();
     this->getstartgr();
     this->fft_bundle.clear();
-    
-    if(this->xprime)    
+
+    if(this->xprime)
     {
         this->fft_bundle.initfft(this->nx,this->ny,this->nz,this->lix,this->rix,this->nst,this->nplane,this->poolnproc,this->gamma_only, this->xprime);
     }
-    else                
+    else
     {
         this->fft_bundle.initfft(this->nx,this->ny,this->nz,this->liy,this->riy,this->nst,this->nplane,this->poolnproc,this->gamma_only, this->xprime);
     }
     this->fft_bundle.setupFFT();
+
+    // Setup batch FFT for GPU acceleration (automatically skipped if not GPU or not available)
+    this->fft_bundle.setupBatchFFT();
+
     ModuleBase::timer::tick(this->classname, "setuptransform");
 }
 
