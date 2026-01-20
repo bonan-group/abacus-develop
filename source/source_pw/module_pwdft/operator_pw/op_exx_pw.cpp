@@ -15,6 +15,7 @@
 #include "source_pw/module_pwdft/kernels/exx_cal_energy_op.h"
 #include "source_pw/module_pwdft/kernels/mul_potential_op.h"
 #include "source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.h"
+#include "source_pw/module_pwdft/kernels/axpy_batch_op.h"
 
 #include <cmath>
 #include <complex>
@@ -437,11 +438,16 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
                     // === STAGE 2: Batch multiply with potential ===
                     ModuleBase::timer::tick("act_op_batch", "multiply_potential_batch");
-                    for (int ib = 0; ib < batch_idx; ib++)
-                    {
-                        T* density_recip_ib = density_recip_batch + ib * rhopw_dev->npw;
-                        multiply_potential(density_recip_ib, this->ik, iq);
-                    }
+
+                    // Call batched operator (works for both CPU and GPU)
+                    // - GPU: Single batched kernel launch for efficiency
+                    // - CPU: Sequential processing with OpenMP per element
+                    mul_potential_op<T, Device>().operator_batch(
+                        pot,                     // Same potential for all batch elements
+                        density_recip_batch,     // Batch input/output (batch_idx × npw)
+                        rhopw_dev->npw,
+                        batch_idx);
+
                     ModuleBase::timer::tick("act_op_batch", "multiply_potential_batch");
 
                     // === STAGE 3: Batch recip2real FFT for densities ===
@@ -460,31 +466,63 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
                     // === STAGE 4: Batch element-wise multiply ===
                     ModuleBase::timer::tick("act_op_batch", "vec_mul_vec_batch");
-                    for (int ib = 0; ib < batch_idx; ib++)
-                    {
-                        T* density_real_ib = density_real_batch + ib * rhopw_dev->nrxx;
-                        T* psi_mq_real_ib = psi_mq_batch_real + ib * wfcpw->nrxx;
 
-                        vec_mul_vec_complex_op<T, Device>()(
-                            density_real_ib, psi_mq_real_ib, density_real_ib, wfcpw->nrxx);
-                    }
+                    // Call batched operator (works for both CPU and GPU)
+                    // - GPU: Single batched kernel launch
+                    // - CPU: Sequential loop with OpenMP per element
+                    vec_mul_vec_complex_op<T, Device>().operator_batch(
+                        density_real_batch,      // Input batch 1 (batch_idx × nrxx)
+                        psi_mq_batch_real,       // Input batch 2 (batch_idx × nrxx)
+                        density_real_batch,      // Output batch (batch_idx × nrxx, in-place)
+                        wfcpw->nrxx,
+                        batch_idx);
+
                     ModuleBase::timer::tick("act_op_batch", "vec_mul_vec_batch");
 
-                    // === STAGE 5: Sequential accumulation (cannot batch due to different scalars) ===
+                    // === STAGE 6: Batched accumulation with custom kernel ===
                     ModuleBase::timer::tick("act_op_batch", "accumulate");
+
+                    // Prepare alpha_batch array with all scalar weights on CPU
+                    T alpha_batch_host[BATCH_FFT_SIZE];  // CPU array
+                    T wk_iq = kv->wk[iq];
                     for (int ib = 0; ib < batch_idx; ib++)
                     {
-                        T* density_real_ib = density_real_batch + ib * rhopw_dev->nrxx;
-                        T wk_iq = kv->wk[iq];
-                        T tmp_scalar = wg_batch[ib] / wk_iq / nqs;
-
-                        axpy_complex_op()(wfcpw->nrxx,
-                                         &tmp_scalar,
-                                         density_real_ib,
-                                         1,
-                                         h_psi_real,
-                                         1);
+                        alpha_batch_host[ib] = wg_batch[ib] / wk_iq / nqs;
                     }
+
+                    // For GPU: allocate device memory and copy alpha values
+                    // For CPU: use host array directly
+                    T* alpha_batch_ptr = nullptr;
+                    if (this->device == base_device::GpuDevice)
+                    {
+                        // Allocate device memory for alpha values
+                        resmem_complex_op()(alpha_batch_ptr, batch_idx);
+
+                        // Copy from CPU to GPU (Device, DEVICE_CPU = HostToDevice)
+                        syncmem_complex_c2d_op()(alpha_batch_ptr, alpha_batch_host, batch_idx);
+                    }
+                    else
+                    {
+                        // CPU: use host array directly
+                        alpha_batch_ptr = alpha_batch_host;
+                    }
+
+                    // Call custom batched AXPY kernel
+                    // GPU: Single kernel with atomic accumulation (device pointers)
+                    // CPU: Sequential BLAS calls (host pointers)
+                    hamilt::axpy_batch_op<T, Device>()(
+                        wfcpw->nrxx,          // n
+                        alpha_batch_ptr,      // Scalar weights (device memory for GPU, host for CPU)
+                        density_real_batch,   // Input batch (batch_idx × nrxx)
+                        h_psi_real,           // Output (accumulates, nrxx elements)
+                        batch_idx);           // batch_size
+
+                    // Free device memory if allocated
+                    if (this->device == base_device::GpuDevice)
+                    {
+                        delmem_complex_op()(alpha_batch_ptr);
+                    }
+
                     ModuleBase::timer::tick("act_op_batch", "accumulate");
 
                     // Reset batch
