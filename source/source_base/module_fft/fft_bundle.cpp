@@ -316,7 +316,7 @@ void FFT_Bundle::setupBatchFFT()
         auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
         if (fft_cuda_double != nullptr)
         {
-            fft_cuda_double->setupBatchFFT();
+            fft_cuda_double->setupBatchFFT(this->batch_size);
         }
     }
     if (float_flag && fft_float != nullptr)
@@ -324,7 +324,7 @@ void FFT_Bundle::setupBatchFFT()
         auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
         if (fft_cuda_float != nullptr)
         {
-            fft_cuda_float->setupBatchFFT();
+            fft_cuda_float->setupBatchFFT(this->batch_size);
         }
     }
 #endif

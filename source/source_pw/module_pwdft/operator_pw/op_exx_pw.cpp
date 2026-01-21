@@ -84,14 +84,17 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     resmem_complex_op()(h_psi_recip, wfcpw->npwk_max);
     // resmem_complex_op()(this->ctx, psi_all_real, wfcpw->nrxx * GlobalV::NBANDS);
 
+    // Query batch size from FFT infrastructure
+    const int batch_fft_size = this->wfcpw->fft_bundle.get_batch_size<typename GetTypeReal<T>::type>();
+
     // Allocate batch FFT buffers (for batch recip_to_real transform)
-    resmem_complex_op()(psi_mq_batch_real, BATCH_FFT_SIZE * wfcpw->nrxx);
-    resmem_complex_op()(density_real_batch, BATCH_FFT_SIZE * rhopw->nrxx);
-    resmem_complex_op()(density_recip_batch, BATCH_FFT_SIZE * rhopw->npw);
+    resmem_complex_op()(psi_mq_batch_real, batch_fft_size * wfcpw->nrxx);
+    resmem_complex_op()(density_real_batch, batch_fft_size * rhopw->nrxx);
+    resmem_complex_op()(density_recip_batch, batch_fft_size * rhopw->npw);
 
     // Alpha buffers allocated lazily in act_op_batch (need psi.get_nbands())
-    // Just allocate the batch buffer here since BATCH_FFT_SIZE is known
-    resmem_complex_op()(alpha_batch_device, BATCH_FFT_SIZE);
+    // Just allocate the batch buffer here since batch_fft_size is known
+    resmem_complex_op()(alpha_batch_device, batch_fft_size);
 
     int nks = wfcpw->nks;
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -388,9 +391,11 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
     setmem_complex_op()(psi_nk_real, 0, wfcpw->nrxx);
     setmem_complex_op()(psi_mq_real, 0, wfcpw->nrxx);
-    setmem_complex_op()(psi_mq_batch_real, 0, BATCH_FFT_SIZE * wfcpw->nrxx);
-    setmem_complex_op()(density_real_batch, 0, BATCH_FFT_SIZE * rhopw_dev->nrxx);
-    setmem_complex_op()(density_recip_batch, 0, BATCH_FFT_SIZE * rhopw_dev->npw);
+
+    const int batch_fft_size = this->get_batch_fft_size();
+    setmem_complex_op()(psi_mq_batch_real, 0, batch_fft_size * wfcpw->nrxx);
+    setmem_complex_op()(density_real_batch, 0, batch_fft_size * rhopw_dev->nrxx);
+    setmem_complex_op()(density_recip_batch, 0, batch_fft_size * rhopw_dev->npw);
 
     auto q_points = get_q_points(this->ik);
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -446,11 +451,13 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
             // === BATCH FFT SECTION ===
             // Accumulate m_iband iterations into batches
             int batch_idx = 0;
-            const T* psi_mq_ptrs[BATCH_FFT_SIZE];  // Pointers to input wavefunctions
-            int ik_batch[BATCH_FFT_SIZE];          // k-point indices for batch
-            T wg_batch[BATCH_FFT_SIZE];            // Weights for each element (converted to T type)
-            int batch_local_band_idx[BATCH_FFT_SIZE];  // Track which valid indices are in this batch
-            int batch_actual_band_idx[BATCH_FFT_SIZE]; // Track actual band indices for alpha retrieval
+
+            // Heap-allocated arrays (std::vector provides dynamic sizing)
+            std::vector<const T*> psi_mq_ptrs(batch_fft_size);      // Pointers to input wavefunctions
+            std::vector<int> ik_batch(batch_fft_size);              // k-point indices for batch
+            std::vector<T> wg_batch(batch_fft_size);                // Weights for each element (converted to T type)
+            std::vector<int> batch_local_band_idx(batch_fft_size);  // Track which valid indices are in this batch
+            std::vector<int> batch_actual_band_idx(batch_fft_size); // Track actual band indices for alpha retrieval
             local_band_index =0; // reset valid band counter
             for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
             {
@@ -469,19 +476,19 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                 batch_idx++;
 
                 // Flush batch when full OR at last m_iband
-                if (batch_idx == BATCH_FFT_SIZE || m_iband == psi.get_nbands() - 1)
+                if (batch_idx == batch_fft_size || m_iband == psi.get_nbands() - 1)
                 {
                     nvtxRangePush("Flushing batch");
                     // Copy batch inputs to contiguous buffer
                     ModuleBase::timer::tick("act_op_batch", "prepare_batch");
-                    if (consecutive_integers(batch_actual_band_idx, batch_idx) && (psi.get_k_first()))
+                    if (consecutive_integers(batch_actual_band_idx.data(), batch_idx) && (psi.get_k_first()))
                     {
                        ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch direct");
                         wfcpw->recip_to_real_batch<Real, Device>(
                             ctx,
                             psi_mq_ptrs[0],              // Input: Pointer to the first wavefunction in the batch
                             psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
-                            ik_batch,
+                            ik_batch.data(),
                             batch_idx,
                             false,
                             Real(1.0));
@@ -505,7 +512,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                             ctx,
                             psi_mq_batch_real,           // Input: batch_idx × npwk_max
                             psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
-                            ik_batch,
+                            ik_batch.data(),
                             batch_idx,
                             false,
                             Real(1.0));
@@ -520,7 +527,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                         density_real_batch,    // output batch (batch_idx × nrxx)
                         density_recip_batch,   // output batch (batch_idx × npw)
                         batch_idx,
-                        ik_batch,
+                        ik_batch.data(),
                         ucell->omega);
                     ModuleBase::timer::tick("act_op_batch", "cal_density_recip_batch");
 
@@ -907,6 +914,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy(psi::Psi<T, Device> *psi_) const
 template <typename T, typename Device>
 double OperatorEXXPW<T, Device>::cal_exx_energy_op(psi::Psi<T, Device> *ppsi_) const
 {
+    nvtxRangePush("cal exx_energy_op");
     psi::Psi<T, Device> psi_ = *ppsi_;
 
     using setmem_complex_op = base_device::memory::set_memory_op<T, Device>;
@@ -1020,6 +1028,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op(psi::Psi<T, Device> *ppsi_) c
     setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
     setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
 
+    nvtxRangePop();
     return Eexx_ik_real;
 }
 
@@ -1239,6 +1248,24 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::cal_density_re
 
     ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
 }
+
+// ============================================================================
+// Batch FFT size accessor
+// ============================================================================
+
+template <typename T, typename Device>
+int OperatorEXXPW<T, Device>::get_batch_fft_size() const
+{
+    return this->wfcpw->fft_bundle.get_batch_size<typename GetTypeReal<T>::type>();
+}
+
+// Explicit template instantiations
+template int OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::get_batch_fft_size() const;
+template int OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>::get_batch_fft_size() const;
+#if defined(__CUDA) || defined(__ROCM)
+template int OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::get_batch_fft_size() const;
+template int OperatorEXXPW<std::complex<double>, base_device::DEVICE_GPU>::get_batch_fft_size() const;
+#endif
 
 #endif
 

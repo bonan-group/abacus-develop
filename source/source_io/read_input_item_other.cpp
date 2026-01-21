@@ -552,6 +552,18 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
+        Input_Item item("batch_fft_size");
+        item.annotation = "batch size for batch FFT (1-128, default: 8)";
+        read_sync_int(input.batch_fft_size);
+        item.check_value = [](const Input_Item& item, const Parameter& param) {
+            if (param.input.batch_fft_size < 1 || param.input.batch_fft_size > 128)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "batch_fft_size must be in range [1, 128]");
+            }
+        };
+        this->add_item(item);
+    }
+    {
         Input_Item item("exx_thr_type");
         item.annotation = "threshold type for exx outer loop, energy or density";
         read_sync_string(input.exx_thr_type);

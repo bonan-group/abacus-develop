@@ -4,6 +4,7 @@
 #include "source_base/memory.h"
 #include "source_base/timer.h"
 #include "source_io/module_parameter/parameter.h"
+#include "source_pw/module_pwdft/global.h"
 
 #include <utility>
 namespace ModulePW
@@ -235,6 +236,9 @@ void PW_Basis_K::setuptransform()
                                  this->xprime);
     }
     this->fft_bundle.setupFFT();
+
+    // Initialize batch FFT size from input parameters
+    this->fft_bundle.init_batch_size(PARAM.inp.batch_fft_size);
 
     // Setup batch FFT for GPU acceleration (automatically skipped if not GPU or not available)
     this->fft_bundle.setupBatchFFT();

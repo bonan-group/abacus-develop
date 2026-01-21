@@ -1,5 +1,6 @@
 #include "fft_cuda.h"
 
+#include <cassert>
 #include "source_base/module_device/memory_op.h"
 #include "source_pw/module_pwdft/global.h"
 
@@ -158,13 +159,15 @@ std::complex<double>* FFT_CUDA<double>::get_auxr_3d_data() const
 // ============================================================================
 
 template <>
-void FFT_CUDA<float>::setupBatchFFT()
+void FFT_CUDA<float>::setupBatchFFT(int batch_size_in)
 {
     if (c_batch_handle != 0)
     {
         // Already initialized
         return;
     }
+
+    this->batch_size = batch_size_in;
 
     const int rank = 3;
     int n[3] = {this->nz, this->ny, this->nx};
@@ -179,22 +182,24 @@ void FFT_CUDA<float>::setupBatchFFT()
                               nullptr, istride, idist,  // input parameters
                               nullptr, ostride, odist,  // output parameters
                               CUFFT_C2C,
-                              BATCH_FFT_SIZE));
+                              this->batch_size));
 
     // Allocate batch buffers on device
-    const size_t batch_buffer_size = BATCH_FFT_SIZE * this->nx * this->ny * this->nz;
+    const size_t batch_buffer_size = this->batch_size * this->nx * this->ny * this->nz;
     resmem_cd_op()(this->c_auxr_batch_in, batch_buffer_size);
     resmem_cd_op()(this->c_auxr_batch_out, batch_buffer_size);
 }
 
 template <>
-void FFT_CUDA<double>::setupBatchFFT()
+void FFT_CUDA<double>::setupBatchFFT(int batch_size_in)
 {
     if (z_batch_handle != 0)
     {
         // Already initialized
         return;
     }
+
+    this->batch_size = batch_size_in;
 
     const int rank = 3;
     int n[3] = {this->nz, this->ny, this->nx};
@@ -209,10 +214,10 @@ void FFT_CUDA<double>::setupBatchFFT()
                               nullptr, istride, idist,  // input parameters
                               nullptr, ostride, odist,  // output parameters
                               CUFFT_Z2Z,
-                              BATCH_FFT_SIZE));
+                              this->batch_size));
 
     // Allocate batch buffers on device
-    const size_t batch_buffer_size = BATCH_FFT_SIZE * this->nx * this->ny * this->nz;
+    const size_t batch_buffer_size = this->batch_size * this->nx * this->ny * this->nz;
     resmem_zd_op()(this->z_auxr_batch_in, batch_buffer_size);
     resmem_zd_op()(this->z_auxr_batch_out, batch_buffer_size);
 }
@@ -222,11 +227,9 @@ void FFT_CUDA<float>::fft3D_forward_batch(std::complex<float>* in_batch,
                                           std::complex<float>* out_batch,
                                           int batch_count) const
 {
-    // Validate batch_count
-    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
-    {
-        return;
-    }
+    // Validate batch_count - programming error if out of range
+    assert(batch_count > 0 && "batch_count must be positive");
+    assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
 
     CHECK_CUFFT(cufftExecC2C(this->c_batch_handle,
                              reinterpret_cast<cufftComplex*>(in_batch),
@@ -239,11 +242,9 @@ void FFT_CUDA<double>::fft3D_forward_batch(std::complex<double>* in_batch,
                                            std::complex<double>* out_batch,
                                            int batch_count) const
 {
-    // Validate batch_count
-    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
-    {
-        return;
-    }
+    // Validate batch_count - programming error if out of range
+    assert(batch_count > 0 && "batch_count must be positive");
+    assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
 
     CHECK_CUFFT(cufftExecZ2Z(this->z_batch_handle,
                              reinterpret_cast<cufftDoubleComplex*>(in_batch),
@@ -256,11 +257,9 @@ void FFT_CUDA<float>::fft3D_backward_batch(std::complex<float>* in_batch,
                                            std::complex<float>* out_batch,
                                            int batch_count) const
 {
-    // Validate batch_count
-    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
-    {
-        return;
-    }
+    // Validate batch_count - programming error if out of range
+    assert(batch_count > 0 && "batch_count must be positive");
+    assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
 
     CHECK_CUFFT(cufftExecC2C(this->c_batch_handle,
                              reinterpret_cast<cufftComplex*>(in_batch),
@@ -273,11 +272,9 @@ void FFT_CUDA<double>::fft3D_backward_batch(std::complex<double>* in_batch,
                                             std::complex<double>* out_batch,
                                             int batch_count) const
 {
-    // Validate batch_count
-    if (batch_count <= 0 || batch_count > BATCH_FFT_SIZE)
-    {
-        return;
-    }
+    // Validate batch_count - programming error if out of range
+    assert(batch_count > 0 && "batch_count must be positive");
+    assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
 
     CHECK_CUFFT(cufftExecZ2Z(this->z_batch_handle,
                              reinterpret_cast<cufftDoubleComplex*>(in_batch),
@@ -300,13 +297,13 @@ bool FFT_CUDA<double>::is_batch_fft_ready() const
 template <>
 int FFT_CUDA<float>::get_batch_size() const
 {
-    return BATCH_FFT_SIZE;
+    return this->batch_size;
 }
 
 template <>
 int FFT_CUDA<double>::get_batch_size() const
 {
-    return BATCH_FFT_SIZE;
+    return this->batch_size;
 }
 
 template <>

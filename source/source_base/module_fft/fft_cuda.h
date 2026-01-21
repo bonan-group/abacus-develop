@@ -58,11 +58,12 @@ class FFT_CUDA : public FFT_BASE<FPTYPE>
         // Batch FFT methods
         /**
          * @brief Setup batch FFT plans and allocate batch buffers
+         * @param batch_size_in Number of FFTs per batch (1-128)
          *
-         * This function initializes cufftPlanMany for batch FFT operations
-         * and allocates device memory for batch input/output buffers.
+         * Must be called after initfft(). Creates cuFFTPlanMany with
+         * the specified batch size and allocates device memory.
          */
-        void setupBatchFFT();
+        void setupBatchFFT(int batch_size_in = 8);
 
         /**
          * @brief Clean up batch FFT plans
@@ -117,12 +118,11 @@ class FFT_CUDA : public FFT_BASE<FPTYPE>
          */
         std::complex<FPTYPE>* get_batch_output_buffer() const;
 
-        // Batch FFT size constant
-        static constexpr int BATCH_FFT_SIZE = 8;
-
     private:
         cufftHandle c_handle = {};
         cufftHandle z_handle = {};
+
+        int batch_size = 8;  // Runtime batch size (configurable)
 
         std::complex<float>* c_auxr_3d = nullptr;  // fft space
         std::complex<double>* z_auxr_3d = nullptr; // fft space

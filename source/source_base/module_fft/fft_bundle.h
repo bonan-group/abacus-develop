@@ -75,6 +75,17 @@ class FFT_Bundle
         this->fft_mode = fft_mode_in;
     }
 
+    /**
+     * @brief Initialize the batch FFT size.
+     * @param batch_size_in  batch size for batch FFT (1-128)
+     *
+     * the function will initialize the batch FFT size.
+     */
+    void init_batch_size(int batch_size_in)
+    {
+        this->batch_size = batch_size_in;
+    }
+
     void setupFFT();
 
     void clearFFT();
@@ -260,6 +271,7 @@ class FFT_Bundle
 
   private:
     int fft_mode = 0;
+    int batch_size = 8;  // Default batch size for batch FFT
     bool float_flag = false;
     bool double_flag = false;
     std::shared_ptr<FFT_BASE<float>> fft_float = nullptr;

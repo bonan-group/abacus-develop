@@ -4,6 +4,7 @@
 #include "source_base/mymath.h"
 #include "source_base/timer.h"
 #include "source_base/global_function.h"
+#include "source_pw/module_pwdft/global.h"
 
 
 namespace ModulePW
@@ -70,6 +71,9 @@ void PW_Basis::setuptransform()
         this->fft_bundle.initfft(this->nx,this->ny,this->nz,this->liy,this->riy,this->nst,this->nplane,this->poolnproc,this->gamma_only, this->xprime);
     }
     this->fft_bundle.setupFFT();
+
+    // Initialize batch FFT size from input parameters
+    this->fft_bundle.init_batch_size(PARAM.inp.batch_fft_size);
 
     // Setup batch FFT for GPU acceleration (automatically skipped if not GPU or not available)
     this->fft_bundle.setupBatchFFT();
