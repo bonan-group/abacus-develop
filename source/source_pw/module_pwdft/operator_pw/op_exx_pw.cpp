@@ -25,6 +25,19 @@
 
 namespace hamilt
 {
+
+bool consecutive_integers(int* arr, size_t size)
+{
+    if (size == 0) return false;
+    for (size_t i = 1; i < size; i++)
+    {
+        if (arr[i] != arr[i - 1] + 1)
+        {
+            return false;
+        }
+    }
+    return true;
+}
 template <typename T, typename Device>
 std::vector<typename GetTypeReal<T>::type> OperatorEXXPW<T, Device>::fock_div = {};
 
@@ -436,7 +449,8 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
             const T* psi_mq_ptrs[BATCH_FFT_SIZE];  // Pointers to input wavefunctions
             int ik_batch[BATCH_FFT_SIZE];          // k-point indices for batch
             T wg_batch[BATCH_FFT_SIZE];            // Weights for each element (converted to T type)
-            int batch_m_iband_indices[BATCH_FFT_SIZE];  // Track which valid indices are in this batch
+            int batch_local_band_idx[BATCH_FFT_SIZE];  // Track which valid indices are in this batch
+            int batch_actual_band_idx[BATCH_FFT_SIZE]; // Track actual band indices for alpha retrieval
             local_band_index =0; // reset valid band counter
             for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
             {
@@ -450,7 +464,8 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                 psi_mq_ptrs[batch_idx] = get_pw(m_iband, iq);
                 ik_batch[batch_idx] = iq;
                 wg_batch[batch_idx] = wg_mqb_real;  // Implicit conversion to T
-                batch_m_iband_indices[batch_idx] = local_band_index;  // Track valid index
+                batch_local_band_idx[batch_idx] = local_band_index;  // Track valid index
+                batch_actual_band_idx[batch_idx] = m_iband;  // Track valid index
                 batch_idx++;
 
                 // Flush batch when full OR at last m_iband
@@ -459,26 +474,43 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                     nvtxRangePush("Flushing batch");
                     // Copy batch inputs to contiguous buffer
                     ModuleBase::timer::tick("act_op_batch", "prepare_batch");
-                    for (int ib = 0; ib < batch_idx; ib++)
+                    if (consecutive_integers(batch_actual_band_idx, batch_idx) && (psi.get_k_first()))
                     {
-                        syncmem_complex_op()(
-                            psi_mq_batch_real + ib * wfcpw->npwk_max,
-                            psi_mq_ptrs[ib],
-                            wfcpw->npwk_max);
+                       ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch direct");
+                        wfcpw->recip_to_real_batch<Real, Device>(
+                            ctx,
+                            psi_mq_ptrs[0],              // Input: Pointer to the first wavefunction in the batch
+                            psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
+                            ik_batch,
+                            batch_idx,
+                            false,
+                            Real(1.0));
+                       ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch direct");
                     }
-                    ModuleBase::timer::tick("act_op_batch", "prepare_batch");
+                    else
+                    {
+                        for (int ib = 0; ib < batch_idx; ib++)
+                        {
+                            // Use the batch buffer for in-place FFT
+                            syncmem_complex_op()(
+                                psi_mq_batch_real + ib * wfcpw->npwk_max,
+                                psi_mq_ptrs[ib],
+                                wfcpw->npwk_max);
+                        }
+                        ModuleBase::timer::tick("act_op_batch", "prepare_batch");
 
-                    // Batch recip_to_real transform
-                    ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
-                    wfcpw->recip_to_real_batch<Real, Device>(
-                        ctx,
-                        psi_mq_batch_real,           // Input: batch_idx × npwk_max
-                        psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
-                        ik_batch,
-                        batch_idx,
-                        false,
-                        Real(1.0));
-                    ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
+                        // Batch recip_to_real transform
+                        ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
+                        wfcpw->recip_to_real_batch<Real, Device>(
+                            ctx,
+                            psi_mq_batch_real,           // Input: batch_idx × npwk_max
+                            psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
+                            ik_batch,
+                            batch_idx,
+                            false,
+                            Real(1.0));
+                        ModuleBase::timer::tick("act_op_batch", "recip_to_real_batch");
+                    }
 
                     // === STAGE 1: Batch density calculation (element-wise + real2recip FFT) ===
                     ModuleBase::timer::tick("act_op_batch", "cal_density_recip_batch");
@@ -540,7 +572,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                     // alpha_all_device is a vector, density_real_batch is a matrix, and we accumulate into 
                     // a single vector h_psi_real
                     // std::cout << "Before gemv accumulation, batch size: " << batch_idx << std::endl;
-                    // std::cout << local_q_idx << " " << nbands << " " << batch_m_iband_indices[0] << std::endl;
+                    // std::cout << local_q_idx << " " << nbands << " " << batch_local_band_idx[0] << std::endl;
                     ModuleBase::timer::tick("act_op_batch", "accumulate");
                     ModuleBase::gemv_op<T, Device>()(
                         'N',
@@ -549,7 +581,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                         &one,            // alpha
                         density_real_batch,   // matrix (batch_idx, nrxx), memory layout as (nrxx, batch_idx) in column major
                         wfcpw->nrxx,         // lda
-                        alpha_all_device + (local_q_idx * nbands + batch_m_iband_indices[0]),  // vector (batch_idx, )
+                        alpha_all_device + (local_q_idx * nbands + batch_local_band_idx[0]),  // vector (batch_idx, )
                         inc,                   // incx
                         &one,            // beta
                         h_psi_real,          // output vector (nrxx)
@@ -1209,5 +1241,6 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::cal_density_re
 }
 
 #endif
+
 
 } // namespace hamilt
