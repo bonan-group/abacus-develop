@@ -154,6 +154,11 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     T *density_real_batch = nullptr;   // batch_size × rhopw_dev->nrxx (for batched real-space densities)
     T *density_recip_batch = nullptr;  // batch_size × rhopw_dev->npw (for batched reciprocal-space densities)
 
+    // Alpha value buffers for batched accumulation (Option 3 optimization)
+    mutable T *alpha_all_device = nullptr;      // All precomputed alpha values (q_points × valid_bands)
+    mutable T *alpha_batch_device = nullptr;    // Subset for current batch (batch_size)
+    mutable int *m_iband_map = nullptr;         // Maps m_iband → valid index (CPU array)
+
     // Batch control
     static constexpr int BATCH_FFT_SIZE = 8;  // Match FFT_CUDA batch size
 

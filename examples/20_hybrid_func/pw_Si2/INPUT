@@ -8,7 +8,7 @@ basis_type              pw
 ks_solver               dav
 ecutwfc                 50
 scf_thr                 1e-9
-scf_nmax                100
+scf_nmax                5
 gamma_only              0
 symmetry                -1
 smearing_method         fixed

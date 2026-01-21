@@ -16,6 +16,7 @@
 #include "source_pw/module_pwdft/kernels/mul_potential_op.h"
 #include "source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.h"
 #include "source_pw/module_pwdft/kernels/axpy_batch_op.h"
+#include <nvtx3/nvToolsExt.h>
 
 #include <cmath>
 #include <complex>
@@ -74,6 +75,10 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     resmem_complex_op()(psi_mq_batch_real, BATCH_FFT_SIZE * wfcpw->nrxx);
     resmem_complex_op()(density_real_batch, BATCH_FFT_SIZE * rhopw->nrxx);
     resmem_complex_op()(density_recip_batch, BATCH_FFT_SIZE * rhopw->npw);
+
+    // Alpha buffers allocated lazily in act_op_batch (need psi.get_nbands())
+    // Just allocate the batch buffer here since BATCH_FFT_SIZE is known
+    resmem_complex_op()(alpha_batch_device, BATCH_FFT_SIZE);
 
     int nks = wfcpw->nks;
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -145,6 +150,20 @@ OperatorEXXPW<T, Device>::~OperatorEXXPW()
     delmem_complex_op()(psi_mq_batch_real);
     delmem_complex_op()(density_real_batch);
     delmem_complex_op()(density_recip_batch);
+
+    // Free alpha value buffers (with null checks for lazy allocation)
+    if (alpha_all_device != nullptr)
+    {
+        delmem_complex_op()(alpha_all_device);
+    }
+    if (alpha_batch_device != nullptr)
+    {
+        delmem_complex_op()(alpha_batch_device);
+    }
+    if (m_iband_map != nullptr)
+    {
+        delete[] m_iband_map;
+    }
 
     // Clean up EXX potential cache
     clear_exx_potential_cache();
@@ -346,6 +365,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                                             const int ngk_ik,
                                             const bool is_first_node) const
 {
+    nvtxMark("Entering act_op_batch");
     ModuleBase::timer::tick("OperatorEXXPW", "act_op_batch");
 
     // Initialize buffers (same as act_op)
@@ -363,13 +383,46 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
     int nk = wfcpw->nks / nk_fac;
 
+    // Precompute the weighting factors used for axpy call
+    int nqb = q_points.size() * psi.get_nbands();
+    std::vector<T> alpha_all_host(nqb); // Temporary host buffer for all alpha values
+    int nqs = q_points.size();
+    int local_band_index = 0;  // counter for the valid bands (non-negligible weight)
+    int local_q_idx = 0;
+    const T one{1, 0}; // Scalar one for gemv
+    const int inc{1}; // Increment for gemv 
+    for (int iband = 0; iband < nbands; iband++)
+    {                
+        local_q_idx = 0;
+        double wg_mqb_real = (*wg)(this->ik, iband);
+        if (wg_mqb_real < 1e-12)
+        {
+                continue;  // Skip negligible weights
+        }
+        double wg_m = (*wg)(this->ik, iband);
+        for (int iq: q_points)
+        {
+            T wk_iq = kv->wk[iq];
+            alpha_all_host[local_q_idx * nbands + local_band_index] = static_cast<T>(wg_m) / wk_iq / static_cast<T>(nqs);
+            local_q_idx++;
+        }
+        local_band_index++; 
+    }
+    // Copy to device ONCE per n_iband iteration (only for GPU)
+    alpha_all_device = nullptr;
+    resmem_complex_op()(alpha_all_device, nqb);
+    syncmem_complex_c2d_op()(alpha_all_device, alpha_all_host.data(), nqb);
+
     // Outer loop over bands (same structure as act_op)
     for (int n_iband = 0; n_iband < nbands; n_iband++)
     {
+        local_q_idx = 0;
         const T *psi_nk = tmpsi_in + n_iband * nbasis;
         wfcpw->recip_to_real(ctx, psi_nk, psi_nk_real, this->ik);
 
         Real nqs = q_points.size();
+
+        // Now loop over q-points
         for (int iq: q_points)
         {
             ModuleBase::timer::tick("act_op_batch", "get_exx_potential");
@@ -383,7 +436,8 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
             const T* psi_mq_ptrs[BATCH_FFT_SIZE];  // Pointers to input wavefunctions
             int ik_batch[BATCH_FFT_SIZE];          // k-point indices for batch
             T wg_batch[BATCH_FFT_SIZE];            // Weights for each element (converted to T type)
-
+            int batch_m_iband_indices[BATCH_FFT_SIZE];  // Track which valid indices are in this batch
+            local_band_index =0; // reset valid band counter
             for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
             {
                 double wg_mqb_real = (*wg)(this->ik, m_iband);
@@ -396,11 +450,13 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                 psi_mq_ptrs[batch_idx] = get_pw(m_iband, iq);
                 ik_batch[batch_idx] = iq;
                 wg_batch[batch_idx] = wg_mqb_real;  // Implicit conversion to T
+                batch_m_iband_indices[batch_idx] = local_band_index;  // Track valid index
                 batch_idx++;
 
                 // Flush batch when full OR at last m_iband
                 if (batch_idx == BATCH_FFT_SIZE || m_iband == psi.get_nbands() - 1)
                 {
+                    nvtxRangePush("Flushing batch");
                     // Copy batch inputs to contiguous buffer
                     ModuleBase::timer::tick("act_op_batch", "prepare_batch");
                     for (int ib = 0; ib < batch_idx; ib++)
@@ -479,61 +535,38 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
                     ModuleBase::timer::tick("act_op_batch", "vec_mul_vec_batch");
 
-                    // === STAGE 6: Batched accumulation with custom kernel ===
+                    // === STAGE 6: Batched accumulation with precomputed alpha values ===
+                    // The axpy is replaced with GEMV call as new we are doing matrix vector product
+                    // alpha_all_device is a vector, density_real_batch is a matrix, and we accumulate into 
+                    // a single vector h_psi_real
+                    // std::cout << "Before gemv accumulation, batch size: " << batch_idx << std::endl;
+                    // std::cout << local_q_idx << " " << nbands << " " << batch_m_iband_indices[0] << std::endl;
                     ModuleBase::timer::tick("act_op_batch", "accumulate");
-
-                    // Prepare alpha_batch array with all scalar weights on CPU
-                    T alpha_batch_host[BATCH_FFT_SIZE];  // CPU array
-                    T wk_iq = kv->wk[iq];
-                    for (int ib = 0; ib < batch_idx; ib++)
-                    {
-                        alpha_batch_host[ib] = wg_batch[ib] / wk_iq / nqs;
-                    }
-
-                    // For GPU: allocate device memory and copy alpha values
-                    // For CPU: use host array directly
-                    T* alpha_batch_ptr = nullptr;
-                    if (this->device == base_device::GpuDevice)
-                    {
-                        // Allocate device memory for alpha values
-                        resmem_complex_op()(alpha_batch_ptr, batch_idx);
-
-                        // Copy from CPU to GPU (Device, DEVICE_CPU = HostToDevice)
-                        syncmem_complex_c2d_op()(alpha_batch_ptr, alpha_batch_host, batch_idx);
-                    }
-                    else
-                    {
-                        // CPU: use host array directly
-                        alpha_batch_ptr = alpha_batch_host;
-                    }
-
-                    // Call custom batched AXPY kernel
-                    // GPU: Single kernel with atomic accumulation (device pointers)
-                    // CPU: Sequential BLAS calls (host pointers)
-                    hamilt::axpy_batch_op<T, Device>()(
-                        wfcpw->nrxx,          // n
-                        alpha_batch_ptr,      // Scalar weights (device memory for GPU, host for CPU)
-                        density_real_batch,   // Input batch (batch_idx × nrxx)
-                        h_psi_real,           // Output (accumulates, nrxx elements)
-                        batch_idx);           // batch_size
-
-                    // Free device memory if allocated
-                    if (this->device == base_device::GpuDevice)
-                    {
-                        delmem_complex_op()(alpha_batch_ptr);
-                    }
-
+                    ModuleBase::gemv_op<T, Device>()(
+                        'N',
+                        wfcpw->nrxx,          // m
+                        batch_idx,           // n
+                        &one,            // alpha
+                        density_real_batch,   // matrix (batch_idx, nrxx), memory layout as (nrxx, batch_idx) in column major
+                        wfcpw->nrxx,         // lda
+                        alpha_all_device + (local_q_idx * nbands + batch_m_iband_indices[0]),  // vector (batch_idx, )
+                        inc,                   // incx
+                        &one,            // beta
+                        h_psi_real,          // output vector (nrxx)
+                        inc);                  // incy
                     ModuleBase::timer::tick("act_op_batch", "accumulate");
 
                     // Reset batch
                     batch_idx = 0;
+                    nvtxRangePop();
                 }
+                local_band_index++;  // Increment valid band counter
             } // end m_iband loop
 
             // Clear buffers for next iq
             setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
             setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
-
+            local_q_idx++;
         } // end iq loop
 
         // Transform h_psi back to reciprocal space
@@ -545,6 +578,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     } // end n_iband loop
 
     ModuleBase::timer::tick("OperatorEXXPW", "act_op_batch");
+    nvtxMark("Exiting act_op_batch");
 }
 
 template <typename T, typename Device>
