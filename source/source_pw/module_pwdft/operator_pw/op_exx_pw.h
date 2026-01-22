@@ -161,6 +161,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     T *psi_mq_batch_real = nullptr;  // batch_size × wfcpw->npwk_max (input) / nrxx (output after transform)
     T *density_real_batch = nullptr;   // batch_size × rhopw_dev->nrxx (for batched real-space densities)
     T *density_recip_batch = nullptr;  // batch_size × rhopw_dev->npw (for batched reciprocal-space densities)
+    Real *energy_batch = nullptr;         // batch_size (for batched energy accumulation)
 
     // Alpha value buffers for batched accumulation (Option 3 optimization)
     mutable T *alpha_all_device = nullptr;      // All precomputed alpha values (q_points × valid_bands)

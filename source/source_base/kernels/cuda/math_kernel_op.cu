@@ -179,6 +179,25 @@ void gemv_op<double, base_device::DEVICE_GPU>::operator()(const char& trans,
 }
 
 template <>
+void gemv_op<float, base_device::DEVICE_GPU>::operator()(const char& trans,
+                                                          const int& m,
+                                                          const int& n,
+                                                          const float* alpha,
+                                                          const float* A,
+                                                          const int& lda,
+                                                          const float* X,
+                                                          const int& incx,
+                                                          const float* beta,
+                                                          float* Y,
+                                                          const int& incy)
+{
+    cublasOperation_t cutrans = judge_trans_op(false, trans, "gemv_op");
+    cublasErrcheck(cublasSgemv(cublas_handle, cutrans, m, n, alpha, A, lda, X, incx, beta, Y, incx));
+}
+
+
+
+template <>
 void gemv_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(const char& trans,
                                                                        const int& m,
                                                                        const int& n,

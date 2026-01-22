@@ -91,6 +91,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     resmem_complex_op()(psi_mq_batch_real, batch_fft_size * wfcpw->nrxx);
     resmem_complex_op()(density_real_batch, batch_fft_size * rhopw->nrxx);
     resmem_complex_op()(density_recip_batch, batch_fft_size * rhopw->npw);
+    resmem_real_op()(energy_batch, batch_fft_size);
 
     // Alpha buffers allocated lazily in act_op_batch (need psi.get_nbands())
     // Just allocate the batch buffer here since batch_fft_size is known
@@ -166,6 +167,7 @@ OperatorEXXPW<T, Device>::~OperatorEXXPW()
     delmem_complex_op()(psi_mq_batch_real);
     delmem_complex_op()(density_real_batch);
     delmem_complex_op()(density_recip_batch);
+    delmem_real_op()(energy_batch);
 
     // Free alpha value buffers (with null checks for lazy allocation)
     if (alpha_all_device != nullptr)
@@ -396,6 +398,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     setmem_complex_op()(psi_mq_batch_real, 0, batch_fft_size * wfcpw->nrxx);
     setmem_complex_op()(density_real_batch, 0, batch_fft_size * rhopw_dev->nrxx);
     setmem_complex_op()(density_recip_batch, 0, batch_fft_size * rhopw_dev->npw);
+    setmem_real_op()(energy_batch, 0, batch_fft_size);
 
     auto q_points = get_q_points(this->ik);
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -409,6 +412,9 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     int local_q_idx = 0;
     const T one{1, 0}; // Scalar one for gemv
     const int inc{1}; // Increment for gemv 
+
+    // Precompute the weighting factor array used for inner loop so 
+    // blas GEMV can be used for fast operation
     for (int iband = 0; iband < nbands; iband++)
     {                
         local_q_idx = 0;
@@ -426,6 +432,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
         }
         local_band_index++; 
     }
+
     // Copy to device ONCE per n_iband iteration (only for GPU)
     alpha_all_device = nullptr;
     resmem_complex_op()(alpha_all_device, nqb);
@@ -1047,6 +1054,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
     ModuleBase::timer::tick("OperatorEXXPW", "cal_exx_energy_batch");
 
     psi::Psi<T, Device> psi_ = *ppsi_;
+    int npw = rhopw_dev->npw;
 
     // === INITIALIZATION (reuse from cal_exx_energy_op) ===
     using setmem_complex_op = base_device::memory::set_memory_op<T, Device>;
@@ -1066,10 +1074,23 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
     if (wg == nullptr) return 0.0;
     const int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
     double Eexx_ik_real = 0.0;
+    assert(npw < rhopw_dev.nrxx *2 && "realspaced grid too small for reusing density_real_batch as buffer"); // make sure potential buffer is large enough
 
     // === OUTER LOOPS: ik, n_iband (same as cal_exx_energy_op) ===
     for (int ik = 0; ik < wfcpw->nks; ik++)
-    {
+        {
+
+        // For precomputing alpha values for accumulation
+        auto q_points = get_q_points(ik);
+        int nbands = psi_.get_nbands();
+        int nqs = q_points.size();
+        int nqb = nqs * psi_.get_nbands();
+        int local_band_index = 0;  // counter for the valid bands (non-negligible weight)
+        int local_q_idx = 0;
+        std::vector<Real> weight_real_host(nqb); // Temporary host buffer for all weighting factors
+        Real* weight_real_device = nullptr;
+        resmem_real_op()(weight_real_device, nqb);
+
         for (int n_iband = 0; n_iband < psi.get_nbands(); n_iband++)
         {
             // Reset buffers (from cal_exx_energy_op lines 938-941)
@@ -1081,15 +1102,31 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
             double wg_ikb_real = (*wg)(ik, n_iband);
             if (wg_ikb_real < 1e-12) continue;  // Skip negligible weights
 
+            // Precompute the weighting factor array used for inner iq, m_iband loop so 
+            // blas GEMV can be used for fast operation
+            local_q_idx = 0;
+            for (int iq: q_points)
+            {                
+                local_band_index = 0;
+                for (int m_iband = 0; m_iband < psi_.get_nbands(); m_iband++)
+                {
+                    double wg_mqb_real = (*wg)(iq, m_iband);
+                    if (wg_mqb_real < 1e-12) continue;  // Skip negligible
+                    weight_real_host[local_q_idx * nbands + local_band_index] = wg_mqb_real / nqs * wg_ikb_real / kv->wk[iq];
+                    local_band_index++;
+                }
+                local_q_idx++; 
+            }
+            // Copy to device
+            syncmem_real_c2d_op()(weight_real_device, weight_real_host.data(), nqb);
+
+
             psi.fix_kb(ik, n_iband);
             const T* psi_nk = psi.get_pointer();
             wfcpw->recip_to_real(ctx, psi_nk, psi_nk_real, ik);
 
-            // Use get_q_points helper (same as act_op_batch line 400)
-            auto q_points = get_q_points(ik);
-            double nqs = q_points.size();
-
             // === Q-POINT LOOP ===
+            local_q_idx = 0;
             for (int iq: q_points)
             {
                 int nk = wfcpw->nks / nk_fac;
@@ -1100,9 +1137,10 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                 int batch_idx = 0;
                 std::vector<const T*> psi_mq_ptrs(batch_fft_size);
                 std::vector<int> ik_batch(batch_fft_size);
-                std::vector<double> scalar_batch(batch_fft_size);
                 std::vector<int> batch_actual_band_idx(batch_fft_size);
+                std::vector<int> batch_local_band_idx(batch_fft_size);
 
+                local_band_index = 0;  // counter for the valid bands (non-negligible weight)
                 for (int m_iband = 0; m_iband < psi_.get_nbands(); m_iband++)
                 {
                     double wg_iqb_real = (*wg)(iq, m_iband);
@@ -1112,13 +1150,15 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                     psi_.fix_kb(iq, m_iband);
                     psi_mq_ptrs[batch_idx] = psi_.get_pointer();
                     ik_batch[batch_idx] = iq;
-                    scalar_batch[batch_idx] = wg_iqb_real / nqs * wg_ikb_real / kv->wk[ik];
                     batch_actual_band_idx[batch_idx] = m_iband;
+                    batch_local_band_idx[batch_idx] = local_band_index;
                     batch_idx++;
 
                     // Flush when batch full OR last iteration
                     if (batch_idx == batch_fft_size || m_iband == psi_.get_nbands() - 1)
                     {
+
+                        nvtxRangePush("Flushing batch calc_exx_energy");
                         ModuleBase::timer::tick("cal_exx_energy_batch", "process_batch");
 
                         // === STAGE 1: Batch FFT (recip_to_real for psi_mq) ===
@@ -1152,21 +1192,39 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                         // === STAGE 3: Energy reduction (sequential per batch element) ===
                         // NOTE: exx_cal_energy_op applies potential internally, so no need to multiply here
                         ModuleBase::timer::tick("cal_exx_energy_batch", "energy_reduction");
-                        for (int ib = 0; ib < batch_idx; ib++)
-                        {
-                            T* density_ib = density_recip_batch + ib * rhopw_dev->npw;
-                            double E_ib = exx_cal_energy_op<T, Device>()(
-                                density_ib, pot, scalar_batch[ib], rhopw_dev->npw);
-                            Eexx_ik_real += E_ib;
-                        }
+                        // baseline squential operation
+                        // for (int ib = 0; ib < batch_idx; ib++)
+                        // {
+                        //     T* density_ib = density_recip_batch + ib * rhopw_dev->npw;
+                        //     double E_ib = exx_cal_energy_op<T, Device>()(
+                        //         density_ib, pot, scalar_batch[ib], rhopw_dev->npw);
+                        //     Eexx_ik_real += E_ib;
+                        // }
+                        // Compute the squared norms for the density, use the 
+                        // TODO this is not working ! We need to pre-compute scalar-batch outside
+                        // the loop and pass it to the kernel as the final energy needs to be weighted!!
+                        Eexx_ik_real += static_cast<double>(
+                            exx_vector_elementwise_norm_squared_op<T, Device>()(
+                            density_recip_batch,
+                            reinterpret_cast<Real*>(density_real_batch),
+                            pot,
+                            energy_batch, 
+                            weight_real_device + (local_q_idx * nbands + batch_local_band_idx[0]),
+                            npw,
+                            batch_idx)
+                        );
+
                         ModuleBase::timer::tick("cal_exx_energy_batch", "energy_reduction");
 
                         ModuleBase::timer::tick("cal_exx_energy_batch", "process_batch");
 
                         // Reset batch
                         batch_idx = 0;
+                        nvtxRangePop();
                     }
+                    local_band_index++;  // Increment valid band counter
                 } // m_iband loop
+            local_q_idx++;
             } // iq loop
         } // n_iband loop
     } // ik loop
