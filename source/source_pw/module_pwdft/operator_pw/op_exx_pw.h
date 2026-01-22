@@ -115,6 +115,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     double cal_exx_energy_op(psi::Psi<T, Device> *psi_) const;
 
+    double cal_exx_energy_batch(psi::Psi<T, Device> *psi_) const;
+
     double cal_exx_energy_ace(psi::Psi<T, Device> *psi_) const;
 
     void cal_density_recip(const T* psi_nk_real, const T* psi_mq_real, double omega) const;
