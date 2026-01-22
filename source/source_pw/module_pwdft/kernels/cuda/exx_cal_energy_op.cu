@@ -58,7 +58,7 @@ __global__ void cal_vec_elem_norm_squared(
 
 
 template <typename FPTYPE>
-struct exx_vector_elementwise_norm_squared_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>
+struct exx_density_potential_mul_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>
 {
     using T = std::complex<FPTYPE>;
     FPTYPE operator()(const T *vector_in,
@@ -147,6 +147,6 @@ struct exx_cal_energy_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>
 
 template struct exx_cal_energy_op<std::complex<float>, base_device::DEVICE_GPU>;
 template struct exx_cal_energy_op<std::complex<double>, base_device::DEVICE_GPU>;
-template struct exx_vector_elementwise_norm_squared_op<std::complex<float>, base_device::DEVICE_GPU>;
-template struct exx_vector_elementwise_norm_squared_op<std::complex<double>, base_device::DEVICE_GPU>;
+template struct exx_density_potential_mul_op<std::complex<float>, base_device::DEVICE_GPU>;
+template struct exx_density_potential_mul_op<std::complex<double>, base_device::DEVICE_GPU>;
 } // namespace hamilt

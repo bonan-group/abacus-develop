@@ -11,9 +11,10 @@ struct exx_cal_energy_op
 };
 
 
-// Operator to calculate element-wise norm squared of a complex vector
+// Operator to compute a batch of psi_in[i] * conj(psi_in[i]) and multiples the potential
+// returns the total energy of an entire batch of bands
 template <typename T, typename Device>
-struct exx_vector_elementwise_norm_squared_op
+struct exx_density_potential_mul_op
 {
 
     using FPTYPE = typename GetTypeReal<T>::type;

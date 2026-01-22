@@ -1204,7 +1204,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                         // TODO this is not working ! We need to pre-compute scalar-batch outside
                         // the loop and pass it to the kernel as the final energy needs to be weighted!!
                         Eexx_ik_real += static_cast<double>(
-                            exx_vector_elementwise_norm_squared_op<T, Device>()(
+                            exx_density_potential_mul_op<T, Device>()(
                             density_recip_batch,
                             reinterpret_cast<Real*>(density_real_batch),
                             pot,

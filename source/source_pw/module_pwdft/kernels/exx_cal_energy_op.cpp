@@ -40,7 +40,7 @@ struct exx_cal_energy_op<std::complex<FPTYPE>, base_device::DEVICE_CPU>
 };
 
 template <typename FPTYPE>
-struct exx_vector_elementwise_norm_squared_op<std::complex<FPTYPE>, base_device::DEVICE_CPU>
+struct exx_density_potential_mul_op<std::complex<FPTYPE>, base_device::DEVICE_CPU>
 {
     using T = std::complex<FPTYPE>;
     FPTYPE operator()(const T *vector_in, FPTYPE *vector_buffer, const FPTYPE *pot, FPTYPE *vec_temp, FPTYPE *weights,
@@ -84,6 +84,6 @@ struct exx_vector_elementwise_norm_squared_op<std::complex<FPTYPE>, base_device:
 
 template struct exx_cal_energy_op<std::complex<float>, base_device::DEVICE_CPU>;
 template struct exx_cal_energy_op<std::complex<double>, base_device::DEVICE_CPU>;
-template struct exx_vector_elementwise_norm_squared_op<std::complex<float>, base_device::DEVICE_CPU>;
-template struct exx_vector_elementwise_norm_squared_op<std::complex<double>, base_device::DEVICE_CPU>;
+template struct exx_density_potential_mul_op<std::complex<float>, base_device::DEVICE_CPU>;
+template struct exx_density_potential_mul_op<std::complex<double>, base_device::DEVICE_CPU>;
 } // namespace hamilt
