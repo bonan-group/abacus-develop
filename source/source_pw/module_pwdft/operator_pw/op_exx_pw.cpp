@@ -404,9 +404,9 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
     int nk = wfcpw->nks / nk_fac;
 
-    // Precompute the weighting factors used for axpy call
+    // Precompute the weighting factors used for gemv call
     int nqb = q_points.size() * psi.get_nbands();
-    std::vector<T> alpha_all_host(nqb); // Temporary host buffer for all alpha values
+    std::vector<T> alpha_all_host(nqb); // Temporary host buffer for all weight values
     int nqs = q_points.size();
     int local_band_index = 0;  // counter for the valid bands (non-negligible weight)
     int local_q_idx = 0;
@@ -433,7 +433,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
         local_band_index++; 
     }
 
-    // Copy to device ONCE per n_iband iteration (only for GPU)
+    // Copy to device ONCE
     alpha_all_device = nullptr;
     resmem_complex_op()(alpha_all_device, nqb);
     syncmem_complex_c2d_op()(alpha_all_device, alpha_all_host.data(), nqb);
@@ -461,7 +461,6 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
             // Heap-allocated arrays (std::vector provides dynamic sizing)
             std::vector<const T*> psi_mq_ptrs(batch_fft_size);      // Pointers to input wavefunctions
-            std::vector<int> ik_batch(batch_fft_size);              // k-point indices for batch
             std::vector<T> wg_batch(batch_fft_size);                // Weights for each element (converted to T type)
             std::vector<int> batch_local_band_idx(batch_fft_size);  // Track which valid indices are in this batch
             std::vector<int> batch_actual_band_idx(batch_fft_size); // Track actual band indices for alpha retrieval
@@ -476,7 +475,6 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
                 // Add to batch
                 psi_mq_ptrs[batch_idx] = get_pw(m_iband, iq);
-                ik_batch[batch_idx] = iq;
                 wg_batch[batch_idx] = wg_mqb_real;  // Implicit conversion to T
                 batch_local_band_idx[batch_idx] = local_band_index;  // Track valid index
                 batch_actual_band_idx[batch_idx] = m_iband;  // Track valid index
@@ -495,7 +493,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                             ctx,
                             psi_mq_ptrs[0],              // Input: Pointer to the first wavefunction in the batch
                             psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
-                            ik_batch.data(),
+                            iq,
                             batch_idx,
                             false,
                             Real(1.0));
@@ -519,7 +517,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                             ctx,
                             psi_mq_batch_real,           // Input: batch_idx × npwk_max
                             psi_mq_batch_real,           // Output: batch_idx × nrxx (reuse buffer)
-                            ik_batch.data(),
+                            iq,
                             batch_idx,
                             false,
                             Real(1.0));
@@ -534,7 +532,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                         density_real_batch,    // output batch (batch_idx × nrxx)
                         density_recip_batch,   // output batch (batch_idx × npw)
                         batch_idx,
-                        ik_batch.data(),
+                        iq,
                         ucell->omega);
                     ModuleBase::timer::tick("act_op_batch", "cal_density_recip_batch");
 
@@ -1136,7 +1134,6 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                 // === BATCHING SECTION: m_iband loop ===
                 int batch_idx = 0;
                 std::vector<const T*> psi_mq_ptrs(batch_fft_size);
-                std::vector<int> ik_batch(batch_fft_size);
                 std::vector<int> batch_actual_band_idx(batch_fft_size);
                 std::vector<int> batch_local_band_idx(batch_fft_size);
 
@@ -1149,7 +1146,6 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                     // Accumulate into batch
                     psi_.fix_kb(iq, m_iband);
                     psi_mq_ptrs[batch_idx] = psi_.get_pointer();
-                    ik_batch[batch_idx] = iq;
                     batch_actual_band_idx[batch_idx] = m_iband;
                     batch_local_band_idx[batch_idx] = local_band_index;
                     batch_idx++;
@@ -1168,7 +1164,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                             // Direct batch transform (no copy needed)
                             wfcpw->recip_to_real_batch<Real, Device>(
                                 ctx, psi_mq_ptrs[0], psi_mq_batch_real,
-                                ik_batch.data(), batch_idx, false, Real(1.0));
+                                iq, batch_idx, false, Real(1.0));
                         }
                         else
                         {
@@ -1180,14 +1176,14 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                             }
                             wfcpw->recip_to_real_batch<Real, Device>(
                                 ctx, psi_mq_batch_real, psi_mq_batch_real,
-                                ik_batch.data(), batch_idx, false, Real(1.0));
+                                iq, batch_idx, false, Real(1.0));
                         }
 
                         // === STAGE 2: Batch density calculation ===
                         cal_density_recip_batch(
                             psi_nk_real, psi_mq_batch_real,
                             density_real_batch, density_recip_batch,
-                            batch_idx, ik_batch.data(), ucell->omega);
+                            batch_idx, iq, ucell->omega);
 
                         // === STAGE 3: Energy reduction (sequential per batch element) ===
                         // NOTE: exx_cal_energy_op applies potential internally, so no need to multiply here
@@ -1272,7 +1268,7 @@ void OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>::cal_density_r
     std::complex<double>* density_real_batch,
     std::complex<double>* density_recip_batch,
     int batch_size,
-    const int* ik_batch,
+    int ik,
     double omega) const
 {
     ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
@@ -1303,7 +1299,7 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::cal_density_re
     std::complex<float>* density_real_batch,
     std::complex<float>* density_recip_batch,
     int batch_size,
-    const int* ik_batch,
+    int ik,
     double omega) const
 {
     ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
@@ -1395,7 +1391,7 @@ void OperatorEXXPW<std::complex<double>, base_device::DEVICE_GPU>::cal_density_r
     std::complex<double>* density_real_batch,
     std::complex<double>* density_recip_batch,
     int batch_size,
-    const int* ik_batch,
+    int ik,
     double omega) const
 {
     ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");
@@ -1433,7 +1429,7 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::cal_density_re
     std::complex<float>* density_real_batch,
     std::complex<float>* density_recip_batch,
     int batch_size,
-    const int* ik_batch,
+    int ik,
     double omega) const
 {
     ModuleBase::timer::tick("OperatorEXXPW", "cal_density_recip_batch");

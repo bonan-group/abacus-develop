@@ -23,6 +23,15 @@ struct set_3d_fft_box_op {
         const int* box_index,
         const std::complex<FPTYPE>* in,
         std::complex<FPTYPE>* out);
+
+    void operator_batch(
+        const int npwk,
+        const int nxyz,
+        const int in_stride,
+        const int* box_index,
+        const int nbatch,
+        const std::complex<FPTYPE>* in,
+        std::complex<FPTYPE>* out);
 };
 
 template <typename FPTYPE, typename Device>
@@ -48,6 +57,24 @@ struct set_recip_to_real_output_op {
         const int nrxx,
         const bool add,
         const FPTYPE factor,
+        const std::complex<FPTYPE>* in,
+        FPTYPE* out);
+
+    void operator_batch(
+        const int nrxx,
+        const int npw,
+        const int nbatch,
+        const bool add,
+        const FPTYPE* factor,
+        const std::complex<FPTYPE>* in,
+        std::complex<FPTYPE>* out);
+
+    void operator_batch(
+        const int nrxx,
+        const int npw,
+        const int nbatch,
+        const bool add,
+        const FPTYPE* factor,
         const std::complex<FPTYPE>* in,
         FPTYPE* out);
 };
@@ -83,6 +110,28 @@ struct set_real_to_recip_output_op {
         const int* box_index,
         const std::complex<FPTYPE>* in,
         FPTYPE* out);
+
+    void operator_batch(
+        const int npw_k,
+        const int nxyz,
+        const int out_stride,
+        const int nbatch,
+        const bool add,
+        const FPTYPE* factor,
+        const int* box_index,
+        const std::complex<FPTYPE>* in,
+        std::complex<FPTYPE>* out);
+
+    void operator_batch(
+        const int npw_k,
+        const int nxyz,
+        const int out_stride,
+        const int nbatch,
+        const bool add,
+        const FPTYPE* factor,
+        const int* box_index,
+        const std::complex<FPTYPE>* in,
+        FPTYPE* out);
 };
 
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
@@ -94,6 +143,14 @@ struct set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>
                     const int* box_index,
                     const std::complex<FPTYPE>* in,
                     std::complex<FPTYPE>* out);
+
+    void operator_batch(const int npwk,
+                        const int nxyz,
+                        const int in_stride,
+                        const int* box_index,
+                        const int nbatch,
+                        const std::complex<FPTYPE>* in,
+                        std::complex<FPTYPE>* out);
 };
 
 template <typename FPTYPE>
@@ -110,6 +167,22 @@ struct set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_GPU>
                     const FPTYPE factor,
                     const std::complex<FPTYPE>* in,
                     FPTYPE* out);
+
+    void operator_batch(const int nrxx,
+                        const int npw,
+                        const int nbatch,
+                        const bool add,
+                        const FPTYPE* factor,
+                        const std::complex<FPTYPE>* in,
+                        std::complex<FPTYPE>* out);
+
+    void operator_batch(const int nrxx,
+                        const int npw,
+                        const int nbatch,
+                        const bool add,
+                        const FPTYPE* factor,
+                        const std::complex<FPTYPE>* in,
+                        FPTYPE* out);
 };
 
 template <typename FPTYPE>
@@ -129,6 +202,26 @@ struct set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_GPU>
                     const int* box_index,
                     const std::complex<FPTYPE>* in,
                     FPTYPE* out);
+
+    void operator_batch(const int npw_k,
+                        const int nxyz,
+                        const int out_stride,
+                        const int nbatch,
+                        const bool add,
+                        const FPTYPE* factor,
+                        const int* box_index,
+                        const std::complex<FPTYPE>* in,
+                        std::complex<FPTYPE>* out);
+
+    void operator_batch(const int npw_k,
+                        const int nxyz,
+                        const int out_stride,
+                        const int nbatch,
+                        const bool add,
+                        const FPTYPE* factor,
+                        const int* box_index,
+                        const std::complex<FPTYPE>* in,
+                        FPTYPE* out);
 };
 
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM

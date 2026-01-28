@@ -139,33 +139,40 @@ void PW_Basis::real_to_recip_batch(const Device* ctx,
     // Batch FFT path
     assert(this->gamma_only == false);
 
-    // Get batch buffers from FFT bundle
-    std::complex<FPTYPE>* batch_in = this->fft_bundle.get_batch_input_buffer<FPTYPE>();
+    // Get batch output buffer from FFT bundle
     std::complex<FPTYPE>* batch_out = this->fft_bundle.get_batch_output_buffer<FPTYPE>();
     const int nxyz = this->nxyz;
 
-    // Copy input data to batch FFT input buffer
-    base_device::memory::synchronize_memory_op<std::complex<FPTYPE>,
-                                               base_device::DEVICE_GPU,
-                                               base_device::DEVICE_GPU>()(
-        batch_in, in_batch, batch_count * this->nrxx);
-
-    // Perform batch forward FFT
-    this->fft_bundle.fft3D_forward_batch(batch_in, batch_out, batch_count);
+    // Perform batch forward FFT directly on input (out-of-place FFT doesn't modify input)
+    // const_cast is safe because cuFFT out-of-place C2C transform only reads from input
+    this->fft_bundle.fft3D_forward_batch(const_cast<std::complex<FPTYPE>*>(in_batch), batch_out, batch_count);
 
     // Extract results for each transform in batch
     // NOTE: Unlike PW_Basis_K, all batch elements use the SAME ig2ixyz_gpu mapping
-    for (int ib = 0; ib < batch_count; ++ib)
-    {
-        set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_GPU>()(
-            this->npw,
-            nxyz,
-            add,
-            factor,
-            this->ig2ixyz_gpu,                    // Same for all batch elements!
-            batch_out + ib * nxyz,                // Input: batch element's FFT grid
-            out_batch + ib * this->npw);          // Output: batch element's plane waves
-    }
+
+    // Create factor vector (all elements have same value)
+    std::vector<FPTYPE> factor_vec(batch_count, factor);
+
+    // Allocate and copy factor vector to GPU
+    FPTYPE* d_factors = nullptr;
+    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(d_factors, batch_count);
+    base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(
+        d_factors, factor_vec.data(), batch_count);
+
+    // Call batch operator once instead of loop
+    set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_GPU>().operator_batch(
+        this->npw,
+        nxyz,
+        this->npw,      // out_stride = npw (same as count for PW_Basis)
+        batch_count,
+        add,
+        d_factors,
+        this->ig2ixyz_gpu,
+        batch_out,
+        out_batch);
+
+    // Free GPU memory
+    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(d_factors);
 
     ModuleBase::timer::tick(this->classname, "real_to_recip_batch gpu");
 }
@@ -211,26 +218,42 @@ void PW_Basis::recip_to_real_batch(const Device* ctx,
         0,
         batch_count * nxyz);
 
-    // Set up 3D FFT input grids for all batch elements
-    for (int ib = 0; ib < batch_count; ++ib)
-    {
-        set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>()(
-            this->npw,
-            this->ig2ixyz_gpu,                    // Same for all batch elements!
-            in_batch + ib * this->npw,            // Input: batch element's plane waves
-            batch_in + ib * nxyz);                // Output: batch element's FFT grid
-    }
+    // Set up 3D FFT input grids for all batch elements using batched kernel
+    set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>().operator_batch(
+        this->npw,
+        nxyz,
+        this->npw,          // in_stride = npw (same as count for PW_Basis)
+        this->ig2ixyz_gpu,
+        batch_count,
+        in_batch,
+        batch_in);
 
     // Perform batch backward FFT
     this->fft_bundle.fft3D_backward_batch(batch_in, batch_out, batch_count);
 
-    // Extract results
-    set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_GPU>()(
-        batch_count * this->nrxx,
+    // Extract results - use batch operator instead of treating as one large array
+
+    // Create factor vector
+    std::vector<FPTYPE> factor_vec(batch_count, factor);
+
+    // Allocate and copy to GPU
+    FPTYPE* d_factors = nullptr;
+    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(d_factors, batch_count);
+    base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(
+        d_factors, factor_vec.data(), batch_count);
+
+    // Call batch operator
+    set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_GPU>().operator_batch(
+        this->nrxx,     // Per-element size (not total!)
+        nxyz,           // Input stride
+        batch_count,
         add,
-        factor,
+        d_factors,
         batch_out,
         out_batch);
+
+    // Free memory
+    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(d_factors);
 
     ModuleBase::timer::tick(this->classname, "recip_to_real_batch gpu");
 }

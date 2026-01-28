@@ -212,7 +212,8 @@ void OperatorEXXPW<T, Device>::construct_ace() const
             else
             {
                 *ik_ = ik;
-                act_op_kpar(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false);
+                //act_op_kpar(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false);
+                act_op_batch(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false);
                 // psi_h_psi_ace = psi^\dagger * h_psi_ace
                 // p_exx_helper->psi.fix_kb(0, 0);
                 gemm_complex_op()('C',

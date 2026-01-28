@@ -113,6 +113,14 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                       const int ngk_ik = 0,
                       const bool is_first_node = false) const;
 
+    void act_op_kpar_batch(const int nbands,
+                           const int nbasis,
+                           const int npol,
+                           const T *tmpsi_in,
+                           T *tmhpsi,
+                           const int ngk_ik = 0,
+                           const bool is_first_node = false) const;
+
     double cal_exx_energy_op(psi::Psi<T, Device> *psi_) const;
 
     double cal_exx_energy_batch(psi::Psi<T, Device> *psi_) const;
@@ -126,7 +134,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                                   T* density_real_batch,
                                   T* density_recip_batch,
                                   int batch_size,
-                                  const int* ik_batch,
+                                  int ik,
                                   double omega) const;
 
     void rho_recip2real(const T* rho_recip, T* rho_real, bool add = false, Real factor = 1.0) const;

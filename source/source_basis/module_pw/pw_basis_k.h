@@ -194,7 +194,7 @@ public:
     void real_to_recip_batch(const Device* ctx,
                              const std::complex<FPTYPE>* in_batch,
                              std::complex<FPTYPE>* out_batch,
-                             const int* ik_batch,
+                             const int ik,
                              int batch_count,
                              const bool add = false,
                              const FPTYPE factor = 1.0) const;
@@ -216,7 +216,7 @@ public:
     void recip_to_real_batch(const Device* ctx,
                              const std::complex<FPTYPE>* in_batch,
                              std::complex<FPTYPE>* out_batch,
-                             const int* ik_batch,
+                             const int ik,
                              int batch_count,
                              const bool add = false,
                              const FPTYPE factor = 1.0) const;
