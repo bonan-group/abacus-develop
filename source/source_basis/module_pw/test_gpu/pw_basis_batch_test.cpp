@@ -1,3 +1,4 @@
+#include "mpi.h"
 #include "cuda_runtime.h"
 #include "source_base/module_device/device.h"
 #include "source_base/module_device/memory_op.h"
@@ -59,6 +60,10 @@ class PW_BASIS_BATCH_TEST : public ::testing::Test
             pwtest.set_precision("double");
         }
 
+        // IMPORTANT: Also set device/precision on fft_bundle directly
+        // (PW_Basis::set_device/set_precision don't propagate to fft_bundle)
+        pwtest.fft_bundle.setfft(pwtest.get_device(), pwtest.get_precision());
+
         // Initialize PW_Basis (no k-points - simpler than PW_Basis_K)
         ModuleBase::Matrix3 latvec(1, 0, 0, 0, 1, 0, 0, 0, 1);
         T lat0 = 10.0;
@@ -77,8 +82,11 @@ class PW_BASIS_BATCH_TEST : public ::testing::Test
         pwtest.initmpi(nproc_in_pool, rank_in_pool, POOL_WORLD);
         pwtest.initgrids(lat0, latvec, wfcecut);
         pwtest.initparameters(gamma_only, wfcecut);
-        pwtest.setuptransform();  // This should call setupBatchFFT()
+        pwtest.setuptransform();
         pwtest.collect_local_pw();
+
+        // Setup batch FFT explicitly
+        pwtest.fft_bundle.setupBatchFFT();
 
         // Store dimensions
         npw = pwtest.npw;

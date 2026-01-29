@@ -204,7 +204,7 @@ public:
      * @param ctx Device context
      * @param in_batch Input data batch (size: batch_count * npwk_max)
      * @param out_batch Output data batch (size: batch_count * nrxx)
-     * @param ik_batch Array of k-point indices (size: batch_count)
+     * @param ik k-point index (all transforms use same k-point)
      * @param batch_count Actual number of transforms to process
      * @param add If true, add to output; if false, overwrite output
      * @param factor Scaling factor

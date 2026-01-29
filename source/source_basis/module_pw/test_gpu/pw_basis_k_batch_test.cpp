@@ -1,3 +1,4 @@
+#include "mpi.h"
 #include "cuda_runtime.h"
 #include "source_base/module_device/device.h"
 #include "source_base/module_device/memory_op.h"
@@ -57,6 +58,10 @@ class PW_BASIS_K_BATCH_TEST : public ::testing::Test
         {
             pwtest.set_precision("double");
         }
+
+        // IMPORTANT: Also set device/precision on fft_bundle directly
+        // (PW_Basis_K::set_device/set_precision don't propagate to fft_bundle)
+        pwtest.fft_bundle.setfft(pwtest.get_device(), pwtest.get_precision());
 
         // Initialize PW_Basis_K with multiple k-points
         // Strategy: Small grid + very high cutoff = keep most/all modes
@@ -164,8 +169,8 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, RecipToRealBatch)
     const int nrxx = this->nrxx;
     const int npwk_max = this->npwk_max;
 
-    // Prepare k-point indices for batch
-    int ik_batch[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    // All batch transforms use the same k-point (batch function takes single ik)
+    const int ik = 0;
 
     // Allocate and fill input data (reciprocal space, sparse)
     complex<T>* d_in_recip_batch = nullptr;
@@ -183,7 +188,7 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, RecipToRealBatch)
         this->pwtest.template recip_to_real<std::complex<T>, Device>(
             d_in_recip_batch + ib * npwk_max,
             d_out_real_seq + ib * nrxx,
-            ik_batch[ib],
+            ik,
             false,
             T(1.0));
     }
@@ -193,7 +198,7 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, RecipToRealBatch)
         nullptr,  // ctx parameter
         d_in_recip_batch,
         d_out_real_batch,
-        ik_batch,
+        ik,
         batch_count,
         false,
         T(1.0));
@@ -232,8 +237,8 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, RealToRecipBatch)
     const int nrxx = this->nrxx;
     const int npwk_max = this->npwk_max;
 
-    // Prepare k-point indices for batch
-    int ik_batch[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    // All batch transforms use the same k-point (batch function takes single ik)
+    const int ik = 0;
 
     // Allocate and fill input data (real space, dense)
     complex<T>* d_in_real_batch = nullptr;
@@ -251,7 +256,7 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, RealToRecipBatch)
         this->pwtest.template real_to_recip<std::complex<T>, Device>(
             d_in_real_batch + ib * nrxx,
             d_out_recip_seq + ib * npwk_max,
-            ik_batch[ib],
+            ik,
             false,
             T(1.0));
     }
@@ -261,7 +266,7 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, RealToRecipBatch)
         nullptr,  // ctx parameter
         d_in_real_batch,
         d_out_recip_batch,
-        ik_batch,
+        ik,
         batch_count,
         false,
         T(1.0));
@@ -299,7 +304,8 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, PartialBatch)
     const int nrxx = this->nrxx;
     const int npwk_max = this->npwk_max;
 
-    int ik_batch[5] = {0, 1, 2, 3, 4};
+    // All batch transforms use the same k-point (batch function takes single ik)
+    const int ik = 0;
 
     complex<T>* d_in_recip_batch = nullptr;
     base_device::memory::resize_memory_op<complex<T>, Device>()(d_in_recip_batch, batch_count * npwk_max);
@@ -316,7 +322,7 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, PartialBatch)
         this->pwtest.template recip_to_real<std::complex<T>, Device>(
             d_in_recip_batch + ib * npwk_max,
             d_out_real_seq + ib * nrxx,
-            ik_batch[ib]);
+            ik);
     }
 
     // Batch with partial count
@@ -324,7 +330,7 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, PartialBatch)
         nullptr,
         d_in_recip_batch,
         d_out_real_batch,
-        ik_batch,
+        ik,
         batch_count);
 
     // Verify
@@ -344,4 +350,13 @@ TYPED_TEST(PW_BASIS_K_BATCH_TEST, PartialBatch)
     base_device::memory::delete_memory_op<complex<T>, Device>()(d_out_real_batch);
     delete[] h_out_seq;
     delete[] h_out_batch;
+}
+
+int main(int argc, char** argv)
+{
+    MPI_Init(&argc, &argv);
+    ::testing::InitGoogleTest(&argc, argv);
+    int result = RUN_ALL_TESTS();
+    MPI_Finalize();
+    return result;
 }

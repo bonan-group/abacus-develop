@@ -1072,7 +1072,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
     if (wg == nullptr) return 0.0;
     const int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
     double Eexx_ik_real = 0.0;
-    assert(npw < rhopw_dev.nrxx *2 && "realspaced grid too small for reusing density_real_batch as buffer"); // make sure potential buffer is large enough
+    assert(npw < rhopw_dev->nrxx *2 && "realspaced grid too small for reusing density_real_batch as buffer"); // make sure potential buffer is large enough
 
     // === OUTER LOOPS: ik, n_iband (same as cal_exx_energy_op) ===
     for (int ik = 0; ik < wfcpw->nks; ik++)
