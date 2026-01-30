@@ -7,6 +7,67 @@
 
 #include <complex>
 #include <type_traits>
+#include <cstdio>
+#include <execinfo.h>
+#include <cxxabi.h>
+#include <cstdlib>
+
+// Set to 1 to enable GPU memory allocation debugging
+#define DEBUG_GPU_MEMORY_ALLOC 1
+
+#if DEBUG_GPU_MEMORY_ALLOC
+// Helper function to print a short backtrace (caller info)
+static void print_caller_info(int max_frames = 6)
+{
+    void* callstack[16];
+    int frames = backtrace(callstack, max_frames + 2);  // +2 to skip this function and resize_memory_op
+    char** symbols = backtrace_symbols(callstack, frames);
+
+    if (symbols == nullptr) {
+        fprintf(stderr, "    [backtrace unavailable]\n");
+        return;
+    }
+
+    // Skip first 2 frames (print_caller_info and resize_memory_op)
+    for (int i = 2; i < frames; i++)
+    {
+        // Try to demangle the symbol
+        char* symbol = symbols[i];
+        char* mangled_start = nullptr;
+        char* mangled_end = nullptr;
+
+        // Find the mangled name between '(' and '+'
+        for (char* p = symbol; *p; ++p) {
+            if (*p == '(') {
+                mangled_start = p + 1;
+            } else if (*p == '+' && mangled_start) {
+                mangled_end = p;
+                break;
+            }
+        }
+
+        if (mangled_start && mangled_end && mangled_end > mangled_start)
+        {
+            *mangled_end = '\0';
+            int status = 0;
+            char* demangled = abi::__cxa_demangle(mangled_start, nullptr, nullptr, &status);
+            if (status == 0 && demangled) {
+                fprintf(stderr, "    #%d %s\n", i - 2, demangled);
+                free(demangled);
+            } else {
+                *mangled_end = '+';  // restore
+                fprintf(stderr, "    #%d %s\n", i - 2, symbol);
+            }
+        }
+        else
+        {
+            fprintf(stderr, "    #%d %s\n", i - 2, symbol);
+        }
+    }
+
+    free(symbols);
+}
+#endif
 
 #define THREADS_PER_BLOCK 256
 
@@ -60,7 +121,57 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
     {
         delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(arr);
     }
-    cudaErrcheck(cudaMalloc((void**)&arr, sizeof(FPTYPE) * size));
+
+    const size_t alloc_bytes = sizeof(FPTYPE) * size;
+    const char* record_name = record_in ? record_in : "unknown";
+
+#if DEBUG_GPU_MEMORY_ALLOC
+    // Query GPU memory status before allocation
+    size_t free_mem = 0, total_mem = 0;
+    cudaMemGetInfo(&free_mem, &total_mem);
+
+    // Print allocation attempt info
+    fprintf(stderr, "[GPU_ALLOC] %s: requesting %.2f MB (free: %.2f MB / %.2f MB total)\n",
+            record_name,
+            alloc_bytes / (1024.0 * 1024.0),
+            free_mem / (1024.0 * 1024.0),
+            total_mem / (1024.0 * 1024.0));
+
+    // Print caller backtrace
+    print_caller_info(4);
+    fflush(stderr);
+
+    // Check if allocation will likely fail
+    if (alloc_bytes > free_mem)
+    {
+        fprintf(stderr, "[GPU_ALLOC] WARNING: %s allocation (%.2f MB) exceeds free memory (%.2f MB)!\n",
+                record_name,
+                alloc_bytes / (1024.0 * 1024.0),
+                free_mem / (1024.0 * 1024.0));
+        fprintf(stderr, "  Call stack at failure:\n");
+        print_caller_info(8);
+        fflush(stderr);
+    }
+#endif
+
+    cudaError_t err = cudaMalloc((void**)&arr, alloc_bytes);
+
+#if DEBUG_GPU_MEMORY_ALLOC
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "[GPU_ALLOC] FAILED: %s - %s (requested %.2f MB, free was %.2f MB)\n",
+                record_name,
+                cudaGetErrorString(err),
+                alloc_bytes / (1024.0 * 1024.0),
+                free_mem / (1024.0 * 1024.0));
+        fprintf(stderr, "  Call stack at failure:\n");
+        print_caller_info(10);
+        fflush(stderr);
+    }
+#endif
+
+    cudaErrcheck(err);
+
     std::string record_string;
     if (record_in != nullptr)
     {
@@ -73,7 +184,7 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
 
     if (record_string != "no_record")
     {
-        ModuleBase::Memory::record_gpu(record_string, sizeof(FPTYPE) * size);
+        ModuleBase::Memory::record_gpu(record_string, alloc_bytes);
     }
 }
 

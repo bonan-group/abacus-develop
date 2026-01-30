@@ -27,7 +27,6 @@ class pseudopot_cell_vnl
               Structure_Factor* psf_in,
               const ModulePW::PW_Basis_K* wfc_basis = nullptr,
               const bool allocate_vkb = true);
-
     double cell_factor = 0.0; // LiuXh add 20180619
 
     int nkb = 0; // total number of beta functions considering all atoms

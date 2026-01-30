@@ -107,10 +107,10 @@ void PW_Basis_K::initparameters(const bool gamma_only_in,
     {
         if (this->float_data_)
         {
-            resmem_sd_op()(this->s_kvec_c, this->nks * 3);
+            resmem_sd_op()(this->s_kvec_c, this->nks * 3, "PW_BK::s_kvec_c");
             castmem_d2s_h2d_op()(this->s_kvec_c, reinterpret_cast<double*>(&this->kvec_c[0][0]), this->nks * 3);
         }
-        resmem_dd_op()(this->d_kvec_c, this->nks * 3);
+        resmem_dd_op()(this->d_kvec_c, this->nks * 3, "PW_BK::d_kvec_c");
         syncmem_d2d_h2d_op()(this->d_kvec_c, reinterpret_cast<double*>(&this->kvec_c[0][0]), this->nks * 3);
     }
     else
@@ -183,7 +183,7 @@ void PW_Basis_K::setupIndGk()
 #if defined(__CUDA) || defined(__ROCM)
     if (this->device == "gpu")
     {
-        resmem_int_op()(this->d_igl2isz_k, this->npwk_max * this->nks);
+        resmem_int_op()(this->d_igl2isz_k, this->npwk_max * this->nks, "PW_BK::d_igl2isz_k");
         syncmem_int_h2d_op()(this->d_igl2isz_k, this->igl2isz_k, this->npwk_max * this->nks);
     }
 #endif
@@ -308,8 +308,8 @@ void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_h
     {
         if (this->float_data_)
         {
-            resmem_sd_op()(this->s_gk2, this->npwk_max * this->nks);
-            resmem_sd_op()(this->s_gcar, this->npwk_max * this->nks * 3);
+            resmem_sd_op()(this->s_gk2, this->npwk_max * this->nks, "PW_BK::s_gk2");
+            resmem_sd_op()(this->s_gcar, this->npwk_max * this->nks * 3, "PW_BK::s_gcar");
             castmem_d2s_h2d_op()(this->s_gk2, this->gk2, this->npwk_max * this->nks);
             castmem_d2s_h2d_op()(this->s_gcar,
                                  reinterpret_cast<double*>(&this->gcar[0][0]),
@@ -317,8 +317,8 @@ void PW_Basis_K::collect_local_pw(const double& erf_ecut_in, const double& erf_h
         }
         if (this->double_data_)
         {
-            resmem_dd_op()(this->d_gk2, this->npwk_max * this->nks);
-            resmem_dd_op()(this->d_gcar, this->npwk_max * this->nks * 3);
+            resmem_dd_op()(this->d_gk2, this->npwk_max * this->nks, "PW_BK::d_gk2");
+            resmem_dd_op()(this->d_gcar, this->npwk_max * this->nks * 3, "PW_BK::d_gcar");
             syncmem_d2d_h2d_op()(this->d_gk2, this->gk2, this->npwk_max * this->nks);
             syncmem_d2d_h2d_op()(this->d_gcar,
                                  reinterpret_cast<double*>(&this->gcar[0][0]),
@@ -433,7 +433,7 @@ void PW_Basis_K::get_ig2ixyz_k()
             ig2ixyz_k_cpu[igl + ik * npwk_max] = iz + iy * nz + ix * ny * nz;
         }
     }
-    resmem_int_op()(ig2ixyz_k, this->npwk_max * this->nks);
+    resmem_int_op()(ig2ixyz_k, this->npwk_max * this->nks, "PW_BK::ig2ixyz_k");
     syncmem_int_h2d_op()(this->ig2ixyz_k, ig2ixyz_k_cpu.data(), this->npwk_max * this->nks);
 }
 

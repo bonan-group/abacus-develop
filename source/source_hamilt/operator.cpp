@@ -1,6 +1,7 @@
 #include "operator.h"
 
 #include "source_base/timer.h"
+#include "source_base/module_device/nvtx_helper.h"
 
 using namespace hamilt;
 
@@ -96,6 +97,7 @@ typename Operator<T, Device>::hpsi_info Operator<T, Device>::hPsi(hpsi_info& inp
 		}
     };
 
+    NVTX_RANGE_PUSH("Operator::hPsi");
     ModuleBase::timer::tick("Operator", "hPsi");
 
     call_act(this, true); // first node
@@ -109,6 +111,7 @@ typename Operator<T, Device>::hpsi_info Operator<T, Device>::hPsi(hpsi_info& inp
     }
 
     ModuleBase::timer::tick("Operator", "hPsi");
+    NVTX_RANGE_POP();
 
     return hpsi_info(this->hpsi, psi::Range(1, 0, 0, nbands / psi_input->get_npol()), hpsi_pointer);
 }

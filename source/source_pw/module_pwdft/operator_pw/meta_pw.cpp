@@ -4,6 +4,7 @@
 #include "source_pw/module_pwdft/global.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_base/tool_quit.h"
+#include "source_base/module_device/nvtx_helper.h"
 
 namespace hamilt {
 
@@ -52,6 +53,7 @@ void Meta<OperatorPW<T, Device>>::act(
         return;
     }
 
+    NVTX_RANGE_PUSH("Meta::act");
     ModuleBase::timer::tick("Operator", "MetaPW");
     if(is_first_node)
     {
@@ -66,21 +68,32 @@ void Meta<OperatorPW<T, Device>>::act(
     {
         for (int j = 0; j < 3; j++)
         {
+            NVTX_RANGE_PUSH("meta_op_forward");
             meta_op()(this->ctx, this->ik, j, ngk_ik, this->wfcpw->npwk_max, this->tpiba, wfcpw->get_gcar_data<Real>(), wfcpw->get_kvec_c_data<Real>(), tmpsi_in, this->porter);
+            NVTX_RANGE_POP();
+            NVTX_RANGE_PUSH("recip_to_real");
             wfcpw->recip_to_real(this->ctx, this->porter, this->porter, this->ik);
+            NVTX_RANGE_POP();
 
             if(this->vk_col != 0) {
+                NVTX_RANGE_PUSH("vector_mul_vector");
                 vector_mul_vector_op()(this->vk_col, this->porter, this->porter, this->vk + current_spin * this->vk_col);
+                NVTX_RANGE_POP();
             }
 
+            NVTX_RANGE_PUSH("real_to_recip");
             wfcpw->real_to_recip(this->ctx, this->porter, this->porter, this->ik);
+            NVTX_RANGE_POP();
+            NVTX_RANGE_PUSH("meta_op_backward");
             meta_op()(this->ctx, this->ik, j, ngk_ik, this->wfcpw->npwk_max, this->tpiba, wfcpw->get_gcar_data<Real>(), wfcpw->get_kvec_c_data<Real>(), this->porter, tmhpsi, true);
+            NVTX_RANGE_POP();
 
         } // x,y,z directions
         tmhpsi += max_npw;
         tmpsi_in += max_npw;
     }
     ModuleBase::timer::tick("Operator", "MetaPW");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>

@@ -1,5 +1,6 @@
 #include "esolver_ks_pw.h"
 
+#include "source_base/module_device/nvtx_helper.h"
 #include "source_estate/cal_ux.h"
 #include "source_estate/elecstate_pw.h"
 #include "source_estate/module_charge/symmetry_rho.h"
@@ -194,6 +195,7 @@ void ESolver_KS_PW<T, Device>::iter_init(UnitCell& ucell, const int istep, const
 template <typename T, typename Device>
 void ESolver_KS_PW<T, Device>::hamilt2rho_single(UnitCell& ucell, const int istep, const int iter, const double ethr)
 {
+    NVTX_RANGE_PUSH("hamilt2rho_single");
     ModuleBase::timer::tick("ESolver_KS_PW", "hamilt2rho_single");
 
     // reset energy
@@ -263,6 +265,7 @@ void ESolver_KS_PW<T, Device>::hamilt2rho_single(UnitCell& ucell, const int iste
     }
 
     ModuleBase::timer::tick("ESolver_KS_PW", "hamilt2rho_single");
+    NVTX_RANGE_POP();
 }
 
 

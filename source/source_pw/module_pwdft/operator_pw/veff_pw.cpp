@@ -2,6 +2,7 @@
 
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
+#include "source_base/module_device/nvtx_helper.h"
 
 namespace hamilt {
 
@@ -47,6 +48,7 @@ void Veff<OperatorPW<T, Device>>::act(
     const int ngk_ik,
     const bool is_first_node)const
 {
+    NVTX_RANGE_PUSH("Veff::act");
     ModuleBase::timer::tick("Operator", "veff_pw");
     if(is_first_node)
     {
@@ -61,6 +63,7 @@ void Veff<OperatorPW<T, Device>>::act(
         ModuleBase::FFT_Guard guard(wfcpw->fft_bundle);
         for (int ib = 0; ib < nbands; ib += npol)
         {
+            NVTX_RANGE_PUSH("convolution");
             wfcpw->convolution(this->ctx,
                                this->ik,
                                this->veff_col,
@@ -68,6 +71,7 @@ void Veff<OperatorPW<T, Device>>::act(
                                this->veff + current_spin * this->veff_col,
                                tmhpsi,
                                true);
+            NVTX_RANGE_POP();
             tmhpsi   += psi_offset;
             tmpsi_in += psi_offset;
         }
@@ -80,11 +84,17 @@ void Veff<OperatorPW<T, Device>>::act(
         }
         for (int ib = 0; ib < nbands; ib += npol)
         {
+            NVTX_RANGE_PUSH("recip_to_real_npol2");
             wfcpw->recip_to_real<T, Device>(tmpsi_in, this->porter, this->ik);
             wfcpw->recip_to_real<T, Device>(tmpsi_in + max_npw, this->porter1, this->ik);
+            NVTX_RANGE_POP();
+            NVTX_RANGE_PUSH("veff_op_npol2");
             veff_op()(this->ctx, this->veff_col, this->porter, this->porter1, current_veff);
+            NVTX_RANGE_POP();
+            NVTX_RANGE_PUSH("real_to_recip_npol2");
             wfcpw->real_to_recip<T, Device>(this->porter, tmhpsi, this->ik, true);
             wfcpw->real_to_recip<T, Device>(this->porter1, tmhpsi + max_npw, this->ik, true);
+            NVTX_RANGE_POP();
             tmhpsi   += psi_offset;
             tmpsi_in += psi_offset;
         }
@@ -96,12 +106,18 @@ void Veff<OperatorPW<T, Device>>::act(
     {
         for (int ib = 0; ib < nbands; ib += npol)
         {
+            NVTX_RANGE_PUSH("recip_to_real");
             wfcpw->recip_to_real<T, Device>(tmpsi_in, this->porter, this->ik);
+            NVTX_RANGE_POP();
             // NOTICE: when MPI threads are larger than the number of Z grids
             // veff would contain nothing, and nothing should be done in real space
             // but the 3DFFT can not be skipped, it will cause hanging
+            NVTX_RANGE_PUSH("veff_op");
             veff_op()(this->ctx, this->veff_col, this->porter, this->veff + current_spin * this->veff_col);
+            NVTX_RANGE_POP();
+            NVTX_RANGE_PUSH("real_to_recip");
             wfcpw->real_to_recip<T, Device>(this->porter, tmhpsi, this->ik, true);
+            NVTX_RANGE_POP();
             tmhpsi   += psi_offset;
             tmpsi_in += psi_offset;
         }
@@ -116,12 +132,18 @@ void Veff<OperatorPW<T, Device>>::act(
         for (int ib = 0; ib < nbands; ib += npol)
         {
             // FFT to real space and do things.
+            NVTX_RANGE_PUSH("recip_to_real_npol2");
             wfcpw->recip_to_real<T, Device>(tmpsi_in, this->porter, this->ik);
             wfcpw->recip_to_real<T, Device>(tmpsi_in + max_npw, this->porter1, this->ik);
+            NVTX_RANGE_POP();
+            NVTX_RANGE_PUSH("veff_op_npol2");
             veff_op()(this->ctx, this->veff_col, this->porter, this->porter1, current_veff);
+            NVTX_RANGE_POP();
             // FFT back to G space.
+            NVTX_RANGE_PUSH("real_to_recip_npol2");
             wfcpw->real_to_recip<T, Device>(this->porter, tmhpsi, this->ik, true);
             wfcpw->real_to_recip<T, Device>(this->porter1, tmhpsi + max_npw, this->ik, true);
+            NVTX_RANGE_POP();
             tmhpsi   += psi_offset;
             tmpsi_in += psi_offset;
         }
@@ -130,6 +152,7 @@ void Veff<OperatorPW<T, Device>>::act(
     }
 #endif
     ModuleBase::timer::tick("Operator", "veff_pw");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>

@@ -1,14 +1,13 @@
 INPUT_PARAMETERS
 pseudo_dir              ../../../tests/PP_ORB
 orbital_dir             ../../../tests/PP_ORB
-nbands                  8
-nspin                   2
+nbands                  4
+nspin                   1
 calculation             scf
 basis_type              pw
 ks_solver               dav
 ecutwfc                 50
 scf_thr                 1e-9
-scf_ene_thr                 1e-9
 scf_nmax                50
 gamma_only              0
 symmetry                -1
@@ -32,7 +31,7 @@ precision single
 # Not using ACE
 exxace 0
 exx_separate_loop 0
-exx_batch_fft 0
+exx_batch_fft 1
 
 #exx_hybrid_alpha        0.25
 

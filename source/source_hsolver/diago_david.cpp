@@ -3,6 +3,7 @@
 #include "source_base/timer.h"                  // ModuleBase::timer::tick
 #include "source_base/tool_title.h"             // ModuleBase::TITLE
 #include "source_base/module_device/device.h"
+#include "source_base/module_device/nvtx_helper.h"
 
 #include "source_hsolver/kernels/hegvd_op.h"
 #include "source_base/kernels/math_kernel_op.h"
@@ -129,6 +130,7 @@ int DiagoDavid<T, Device>::diag_once(const HPsiFunc& hpsi_func,
     {
         ModuleBase::TITLE("DiagoDavid", "diag_once");
     }
+    NVTX_RANGE_PUSH("DiagoDavid::diag_once");
     ModuleBase::timer::tick("DiagoDavid", "diag_once");
 
     // convflag[m] = true if the m th band is converged
@@ -286,6 +288,7 @@ int DiagoDavid<T, Device>::diag_once(const HPsiFunc& hpsi_func,
     } while (true);
 
     ModuleBase::timer::tick("DiagoDavid", "diag_once");
+    NVTX_RANGE_POP();
 
     return dav_iter;
 }

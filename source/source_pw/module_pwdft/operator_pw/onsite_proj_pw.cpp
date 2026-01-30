@@ -3,6 +3,7 @@
 #include "source_base/timer.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/tool_quit.h"
+#include "source_base/module_device/nvtx_helper.h"
 #include "source_lcao/module_deltaspin/spin_constrain.h"
 #include "source_lcao/module_dftu/dftu.h"
 #include "source_pw/module_pwdft/onsite_projector.h"
@@ -51,6 +52,7 @@ OnsiteProj<OperatorPW<T, Device>>::~OnsiteProj() {
 template<typename T, typename Device>
 void OnsiteProj<OperatorPW<T, Device>>::init(const int ik_in)
 {
+    NVTX_RANGE_PUSH("OnsiteProj::init");
     ModuleBase::timer::tick("OnsiteProj", "getvnl");
     this->ik = ik_in;
 
@@ -64,6 +66,7 @@ void OnsiteProj<OperatorPW<T, Device>>::init(const int ik_in)
     }
 
     ModuleBase::timer::tick("OnsiteProj", "getvnl");
+    NVTX_RANGE_POP();
 }
 
 //--------------------------------------------------------------------------
@@ -72,6 +75,7 @@ void OnsiteProj<OperatorPW<T, Device>>::init(const int ik_in)
 template<typename T, typename Device>
 void OnsiteProj<OperatorPW<T, Device>>::add_onsite_proj(T *hpsi_in, const int npol, const int m) const
 {
+    NVTX_RANGE_PUSH("OnsiteProj::add_onsite_proj");
     ModuleBase::timer::tick("OnsiteProj", "add_onsite_proj");
 
     auto* onsite_p = projectors::OnsiteProjector<double, Device>::get_instance();
@@ -83,6 +87,7 @@ void OnsiteProj<OperatorPW<T, Device>>::add_onsite_proj(T *hpsi_in, const int np
     char transa = 'N';
     char transb = 'T';
     int npm = m;
+    NVTX_RANGE_PUSH("gemm");
     gemm_op()(
         transa,
         transb,
@@ -98,16 +103,20 @@ void OnsiteProj<OperatorPW<T, Device>>::add_onsite_proj(T *hpsi_in, const int np
         hpsi_in,
         npwx
     );
+    NVTX_RANGE_POP();
     ModuleBase::timer::tick("OnsiteProj", "add_onsite_proj");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>
 void OnsiteProj<OperatorPW<T, Device>>::update_becp(const T *psi_in, const int npol, const int m) const
 {
+    NVTX_RANGE_PUSH("update_becp");
     auto* onsite_p = projectors::OnsiteProjector<double, Device>::get_instance();
-    // calculate <alpha|psi> 
+    // calculate <alpha|psi>
     // std::cout << __FILE__ << ":" << __LINE__ << " nbands = " << m << std::endl;
     onsite_p->overlap_proj_psi(m, psi_in);
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>
@@ -115,6 +124,7 @@ void OnsiteProj<OperatorPW<T, Device>>::cal_ps_delta_spin(const int npol, const 
 {
     if(!this->has_delta_spin) return;
 
+    NVTX_RANGE_PUSH("cal_ps_delta_spin");
     auto* onsite_p = projectors::OnsiteProjector<double, Device>::get_instance();
     const std::complex<double>* becp = onsite_p->get_becp();
 
@@ -162,12 +172,13 @@ void OnsiteProj<OperatorPW<T, Device>>::cal_ps_delta_spin(const int npol, const 
 
     hamilt::onsite_ps_op<Real, Device>()(
         this->ctx,   // device context
-        m, 
+        m,
         npol,
-        this->ip_iat, 
-        tnp,  
+        this->ip_iat,
+        tnp,
         this->lambda_coeff,
         this->ps, becp);
+    NVTX_RANGE_POP();
 
     /*int sum = 0;
     if (npol == 1)
@@ -212,14 +223,15 @@ void OnsiteProj<OperatorPW<T, Device>>::cal_ps_delta_spin(const int npol, const 
 
 template<typename T, typename Device>
 void OnsiteProj<OperatorPW<T, Device>>::cal_ps_dftu(
-		const int npol, 
+		const int npol,
 		const int m) const
 {
-	if(!this->has_dftu) 
+	if(!this->has_dftu)
 	{
 		return;
 	}
 
+    NVTX_RANGE_PUSH("cal_ps_dftu");
     auto* onsite_p = projectors::OnsiteProjector<double, Device>::get_instance();
     const std::complex<double>* becp = onsite_p->get_becp();
 
@@ -298,15 +310,16 @@ void OnsiteProj<OperatorPW<T, Device>>::cal_ps_dftu(
 
     hamilt::onsite_ps_op<Real, Device>()(
         this->ctx,   // device context
-        m, 
+        m,
         npol,
         this->orb_l_iat,
         this->ip_iat,
         this->ip_m,
-        this->vu_begin_iat, 
-        tnp,  
+        this->vu_begin_iat,
+        tnp,
         this->vu_device,
         this->ps, becp);
+    NVTX_RANGE_POP();
 
     /*
     int sum = 0;
@@ -422,12 +435,14 @@ void OnsiteProj<OperatorPW<T, Device>>::act(
     const int ngk_ik,
     const bool is_first_node)const
 {
+    NVTX_RANGE_PUSH("OnsiteProj::act");
     ModuleBase::timer::tick("Operator", "OnsiteProjPW");
     this->update_becp(tmpsi_in, npol, nbands);
     this->cal_ps_delta_spin(npol, nbands);
     this->cal_ps_dftu(npol, nbands);
     this->add_onsite_proj(tmhpsi, npol, nbands);
     ModuleBase::timer::tick("Operator", "OnsiteProjPW");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>

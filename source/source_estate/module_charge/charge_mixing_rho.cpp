@@ -1,12 +1,14 @@
 #include "charge_mixing.h"
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
+#include "source_base/module_device/nvtx_helper.h"
 #include "source_pw/module_pwdft/global.h"
 
 void Charge_Mixing::mix_rho_recip(Charge* chr)
 {
     ModuleBase::TITLE("Charge_Mixing", "mix_rho_recip");
     ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip");
+    NVTX_RANGE_PUSH("mix_rho_recip");
 
     const int nspin = PARAM.inp.nspin;
     assert(nspin==1 || nspin==2 || nspin==4);
@@ -307,6 +309,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
     }
 
     ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip");
+    NVTX_RANGE_POP();
     return;
 }
 

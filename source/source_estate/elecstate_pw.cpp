@@ -4,6 +4,7 @@
 #include "source_base/libm/libm.h"
 #include "source_base/math_ylmreal.h"
 #include "source_base/module_device/device.h"
+#include "source_base/module_device/nvtx_helper.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
 #include "source_hamilt/module_xc/xc_functional.h"
@@ -111,6 +112,7 @@ void ElecStatePW<T, Device>::psiToRho(const psi::Psi<T, Device>& psi)
 {
     ModuleBase::TITLE("ElecStatePW", "psiToRho");
     ModuleBase::timer::tick("ElecStatePW", "psiToRho");
+    NVTX_RANGE_PUSH("psiToRho");
 
     this->init_rho_data();
 
@@ -151,6 +153,7 @@ void ElecStatePW<T, Device>::psiToRho(const psi::Psi<T, Device>& psi)
     }
     this->parallelK();
     ModuleBase::timer::tick("ElecStatePW", "psiToRho");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>
@@ -171,6 +174,7 @@ template<typename T, typename Device>
 void ElecStatePW<T, Device>::rhoBandK(const psi::Psi<T, Device>& psi)
 {
     ModuleBase::TITLE("ElecStatePW", "rhoBandK");
+    NVTX_RANGE_PUSH("rhoBandK");
 
     // moved by denghui to constructor at 20221110
     // used for plane wavefunction FFT3D to real space
@@ -264,6 +268,7 @@ void ElecStatePW<T, Device>::rhoBandK(const psi::Psi<T, Device>& psi)
             }
         }
     }
+    NVTX_RANGE_POP();
 }
 
 template <typename T, typename Device>

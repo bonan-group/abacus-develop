@@ -4,6 +4,7 @@
 #include "source_io/json_output/init_info.h"
 #include "source_io/json_output/output_info.h"
 
+#include "source_base/module_device/nvtx_helper.h"
 #include "source_estate/update_pot.h" // mohan add 20251016
 #include "source_estate/module_charge/chgmixing.h" // mohan add 20251018
 #include "source_pw/module_pwdft/setup_pwwfc.h" // mohan add 20251018
@@ -130,9 +131,12 @@ void ESolver_KS<T, Device>::runner(UnitCell& ucell, const int istep)
 {
     ModuleBase::TITLE("ESolver_KS", "runner");
     ModuleBase::timer::tick(this->classname, "runner");
+    NVTX_RANGE_PUSH("SCF_runner");
 
     // 1) before_scf (electronic iteration loops)
+    NVTX_RANGE_PUSH("before_scf");
     this->before_scf(ucell, istep);
+    NVTX_RANGE_POP();
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "INIT SCF");
 
     // 2) SCF iterations
@@ -147,14 +151,24 @@ void ESolver_KS<T, Device>::runner(UnitCell& ucell, const int istep)
 			this->scf_nmax_flag=true;
 		}
 
+		NVTX_RANGE_PUSH("SCF_iter");
+
 		// 3) initialization of SCF iterations
+		NVTX_RANGE_PUSH("iter_init");
 		this->iter_init(ucell, istep, iter);
+		NVTX_RANGE_POP();
 
         // 4) use Hamiltonian to obtain charge density
+        NVTX_RANGE_PUSH("hamilt2rho");
         this->hamilt2rho(ucell, istep, iter, diag_ethr);
+        NVTX_RANGE_POP();
 
         // 5) finish scf iterations
+        NVTX_RANGE_PUSH("iter_finish");
         this->iter_finish(ucell, istep, iter, conv_esolver);
+        NVTX_RANGE_POP();
+
+        NVTX_RANGE_POP(); // SCF_iter
 
         // 6) check convergence
         if (conv_esolver || this->oscillate_esolver)
@@ -169,8 +183,11 @@ void ESolver_KS<T, Device>::runner(UnitCell& ucell, const int istep)
     } // end scf iterations
 
 	// 7) after scf
+	NVTX_RANGE_PUSH("after_scf");
     this->after_scf(ucell, istep, conv_esolver);
+    NVTX_RANGE_POP();
 
+    NVTX_RANGE_POP(); // SCF_runner
     ModuleBase::timer::tick(this->classname, "runner");
     return;
 };

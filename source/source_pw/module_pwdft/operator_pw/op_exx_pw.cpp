@@ -16,7 +16,7 @@
 #include "source_pw/module_pwdft/kernels/mul_potential_op.h"
 #include "source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.h"
 #include "source_pw/module_pwdft/kernels/axpy_batch_op.h"
-#include <nvtx3/nvToolsExt.h>
+#include "source_base/module_device/nvtx_helper.h"
 
 #include <cmath>
 #include <complex>
@@ -383,7 +383,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                                             const int ngk_ik,
                                             const bool is_first_node) const
 {
-    nvtxMark("Entering act_op_batch");
+    NVTX_MARK("Entering act_op_batch");
     ModuleBase::timer::tick("OperatorEXXPW", "act_op_batch");
 
     // Initialize buffers (same as act_op)
@@ -483,7 +483,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                 // Flush batch when full OR at last m_iband
                 if (batch_idx == batch_fft_size || m_iband == psi.get_nbands() - 1)
                 {
-                    nvtxRangePush("Flushing batch");
+                        NVTX_RANGE_PUSH("Flushing batch");
                     // Copy batch inputs to contiguous buffer
                     ModuleBase::timer::tick("act_op_batch", "prepare_batch");
                     if (consecutive_integers(batch_actual_band_idx.data(), batch_idx) && (psi.get_k_first()))
@@ -602,7 +602,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
                     // Reset batch
                     batch_idx = 0;
-                    nvtxRangePop();
+                    NVTX_RANGE_POP();
                 }
                 local_band_index++;  // Increment valid band counter
             } // end m_iband loop
@@ -622,7 +622,7 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     } // end n_iband loop
 
     ModuleBase::timer::tick("OperatorEXXPW", "act_op_batch");
-    nvtxMark("Exiting act_op_batch");
+    NVTX_MARK("Exiting act_op_batch");
 }
 
 template <typename T, typename Device>
@@ -927,7 +927,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy(psi::Psi<T, Device> *psi_) const
 template <typename T, typename Device>
 double OperatorEXXPW<T, Device>::cal_exx_energy_op(psi::Psi<T, Device> *ppsi_) const
 {
-    nvtxRangePush("cal exx_energy_op");
+    NVTX_RANGE_PUSH("cal_exx_energy_op");
     psi::Psi<T, Device> psi_ = *ppsi_;
 
     using setmem_complex_op = base_device::memory::set_memory_op<T, Device>;
@@ -1041,14 +1041,14 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op(psi::Psi<T, Device> *ppsi_) c
     setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
     setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
 
-    nvtxRangePop();
+    NVTX_RANGE_POP();
     return Eexx_ik_real;
 }
 
 template <typename T, typename Device>
 double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_) const
 {
-    nvtxRangePush("cal_exx_energy_batch");
+    NVTX_RANGE_PUSH("cal_exx_energy_batch");
     ModuleBase::timer::tick("OperatorEXXPW", "cal_exx_energy_batch");
 
     psi::Psi<T, Device> psi_ = *ppsi_;
@@ -1154,7 +1154,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                     if (batch_idx == batch_fft_size || m_iband == psi_.get_nbands() - 1)
                     {
 
-                        nvtxRangePush("Flushing batch calc_exx_energy");
+                        NVTX_RANGE_PUSH("Flushing batch calc_exx_energy");
                         ModuleBase::timer::tick("cal_exx_energy_batch", "process_batch");
 
                         // === STAGE 1: Batch FFT (recip_to_real for psi_mq) ===
@@ -1216,7 +1216,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
 
                         // Reset batch
                         batch_idx = 0;
-                        nvtxRangePop();
+                        NVTX_RANGE_POP();
                     }
                     local_band_index++;  // Increment valid band counter
                 } // m_iband loop
@@ -1238,7 +1238,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
     setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
 
     ModuleBase::timer::tick("OperatorEXXPW", "cal_exx_energy_batch");
-    nvtxRangePop();
+    NVTX_RANGE_POP();
     return Eexx_ik_real;
 }
 

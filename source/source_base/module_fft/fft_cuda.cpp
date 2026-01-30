@@ -17,13 +17,13 @@ template <>
 void FFT_CUDA<float>::setupFFT()
 {
     cufftPlan3d(&c_handle, this->nx, this->ny, this->nz, CUFFT_C2C);
-    resmem_cd_op()(this->c_auxr_3d, this->nx * this->ny * this->nz);
+    resmem_cd_op()(this->c_auxr_3d, this->nx * this->ny * this->nz, "FFT_CUDA::c_auxr_3d");
 }
 template <>
 void FFT_CUDA<double>::setupFFT()
 {
     cufftPlan3d(&z_handle, this->nx, this->ny, this->nz, CUFFT_Z2Z);
-    resmem_zd_op()(this->z_auxr_3d, this->nx * this->ny * this->nz);
+    resmem_zd_op()(this->z_auxr_3d, this->nx * this->ny * this->nz, "FFT_CUDA::z_auxr_3d");
 }
 template <>
 void FFT_CUDA<float>::cleanFFT()
@@ -186,8 +186,8 @@ void FFT_CUDA<float>::setupBatchFFT(int batch_size_in)
 
     // Allocate batch buffers on device
     const size_t batch_buffer_size = this->batch_size * this->nx * this->ny * this->nz;
-    resmem_cd_op()(this->c_auxr_batch_in, batch_buffer_size);
-    resmem_cd_op()(this->c_auxr_batch_out, batch_buffer_size);
+    resmem_cd_op()(this->c_auxr_batch_in, batch_buffer_size, "FFT_CUDA::c_batch_in");
+    resmem_cd_op()(this->c_auxr_batch_out, batch_buffer_size, "FFT_CUDA::c_batch_out");
 }
 
 template <>
@@ -218,8 +218,8 @@ void FFT_CUDA<double>::setupBatchFFT(int batch_size_in)
 
     // Allocate batch buffers on device
     const size_t batch_buffer_size = this->batch_size * this->nx * this->ny * this->nz;
-    resmem_zd_op()(this->z_auxr_batch_in, batch_buffer_size);
-    resmem_zd_op()(this->z_auxr_batch_out, batch_buffer_size);
+    resmem_zd_op()(this->z_auxr_batch_in, batch_buffer_size, "FFT_CUDA::z_batch_in");
+    resmem_zd_op()(this->z_auxr_batch_out, batch_buffer_size, "FFT_CUDA::z_batch_out");
 }
 
 template <>

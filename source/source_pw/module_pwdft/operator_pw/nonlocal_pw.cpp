@@ -4,6 +4,7 @@
 #include "source_base/timer.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/tool_quit.h"
+#include "source_base/module_device/nvtx_helper.h"
 
 
 namespace hamilt {
@@ -39,12 +40,15 @@ Nonlocal<OperatorPW<T, Device>>::~Nonlocal() {
 template<typename T, typename Device>
 void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
 {
+    NVTX_RANGE_PUSH("Nonlocal::init");
     ModuleBase::timer::tick("Nonlocal", "getvnl");
     this->ik = ik_in;
     // Calculate nonlocal pseudopotential vkb
 	if(this->ppcell->nkb > 0) //xiaohui add 2013-09-02. Attention...
 	{
+		NVTX_RANGE_PUSH("getvnl");
 		this->ppcell->getvnl(this->ctx, *this->ucell, this->ik, this->vkb);
+		NVTX_RANGE_POP();
 	}
 
     if(this->next_op != nullptr)
@@ -53,6 +57,7 @@ void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
     }
 
     ModuleBase::timer::tick("Nonlocal", "getvnl");
+    NVTX_RANGE_POP();
 }
 
 //--------------------------------------------------------------------------
@@ -61,6 +66,7 @@ void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
 template<typename T, typename Device>
 void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp, const int m) const
 {
+    NVTX_RANGE_PUSH("Nonlocal::add_nonlocal_pp");
     ModuleBase::timer::tick("Nonlocal", "add_nonlocal_pp");
 
     // number of projectors
@@ -84,6 +90,7 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
             const int nproj = this->ucell->atoms[it].ncpp.nh;
             // denghui replace 2022-10-20
             // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            NVTX_RANGE_PUSH("nonlocal_op");
             nonlocal_op()(
                 this->ctx,   // device context
                 this->ucell->atoms[it].na, m, nproj, // four loop size
@@ -91,6 +98,7 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
                 this->ppcell->deeq.getBound2(), this->ppcell->deeq.getBound3(), this->ppcell->deeq.getBound4(), // realArray operator()
                 this->deeq, // array of data
                 this->ps, this->becp); //  array of data
+            NVTX_RANGE_POP();
             // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
             // for (int ia = 0; ia < this->ucell->atoms[it].na; ia++)
             // {
@@ -120,6 +128,7 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
             const int nproj = this->ucell->atoms[it].ncpp.nh;
             // added by denghui at 20221109
             // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            NVTX_RANGE_PUSH("nonlocal_op_npol2");
             nonlocal_op()(
                 this->ctx,   // device context
                 this->ucell->atoms[it].na, m, nproj, // four loop size
@@ -127,6 +136,7 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
                 this->ppcell->deeq_nc.getBound2(), this->ppcell->deeq_nc.getBound3(), this->ppcell->deeq_nc.getBound4(), // realArray operator()
                 this->deeq_nc, // array of data
                 this->ps, this->becp); //  array of data
+            NVTX_RANGE_POP();
             // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
             // for (int ia = 0; ia < this->ucell->atoms[it].na; ia++)
             // {
@@ -166,6 +176,7 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
         int inc = 1;
         // denghui replace 2022-10-20
         // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        NVTX_RANGE_PUSH("gemv");
         gemv_op()(
             transa,
             this->npw,
@@ -178,12 +189,14 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
             &this->one,
             hpsi_in,
             inc);
+        NVTX_RANGE_POP();
     }
     else
     {
         int npm = m;
         //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         // denghui replace 2022-10-20
+        NVTX_RANGE_PUSH("gemm");
         #ifdef __DSP
             ModuleBase::gemm_op_mt<T, Device>()
         #else
@@ -204,8 +217,10 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp,
             hpsi_in,
             this->max_npw
         );
+        NVTX_RANGE_POP();
     }
     ModuleBase::timer::tick("Nonlocal", "add_nonlocal_pp");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>
@@ -218,6 +233,7 @@ void Nonlocal<OperatorPW<T, Device>>::act(
     const int ngk_ik,
     const bool is_first_node)const
 {
+    NVTX_RANGE_PUSH("Nonlocal::act");
     ModuleBase::timer::tick("Operator", "nonlocal_pw");
     if(is_first_node)
     {
@@ -233,7 +249,7 @@ void Nonlocal<OperatorPW<T, Device>>::act(
         //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         // qianrui optimize 2021-3-31
         int nkb = this->ppcell->nkb;
-        if (this->nkb_m < nbands * nkb) 
+        if (this->nkb_m < nbands * nkb)
         {
             resmem_complex_op()(this->becp, nbands * nkb, "Nonlocal<PW>::becp");
         }
@@ -245,6 +261,7 @@ void Nonlocal<OperatorPW<T, Device>>::act(
             int inc = 1;
             // denghui replace 2022-10-20
             // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            NVTX_RANGE_PUSH("becp_gemv");
             gemv_op()(
                 transa,
                 this->npw,
@@ -257,12 +274,14 @@ void Nonlocal<OperatorPW<T, Device>>::act(
                 &this->zero,
                 this->becp,
                 inc);
+            NVTX_RANGE_POP();
         }
         else
         {
             int npm = nbands;
             //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
             // denghui replace 2022-10-20
+            NVTX_RANGE_PUSH("becp_gemm");
             #ifdef __DSP
             ModuleBase::gemm_op_mt<T, Device>()
             #else
@@ -283,14 +302,18 @@ void Nonlocal<OperatorPW<T, Device>>::act(
                 this->becp,
                 nkb
             );
+            NVTX_RANGE_POP();
         }
 
+        NVTX_RANGE_PUSH("parallel_reduce");
         Parallel_Reduce::reduce_pool(becp, nkb * nbands);
+        NVTX_RANGE_POP();
 
         this->add_nonlocal_pp(tmhpsi, becp, nbands);
     }
 
     ModuleBase::timer::tick("Operator", "nonlocal_pw");
+    NVTX_RANGE_POP();
 }
 
 template<typename T, typename Device>

@@ -3,6 +3,7 @@
 #include "source_base/global_variable.h"
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
+#include "source_base/module_device/nvtx_helper.h"
 #include "source_estate/elecstate_pw.h"
 #include "source_hamilt/hamilt.h"
 #include "source_hsolver/diag_comm_info.h"
@@ -77,6 +78,7 @@ void HSolverPW<T, Device>::solve(hamilt::Hamilt<T, Device>* pHamilt,
 {
     ModuleBase::TITLE("HSolverPW", "solve");
     ModuleBase::timer::tick("HSolverPW", "solve");
+    NVTX_RANGE_PUSH("HSolverPW::solve");
 
     this->rank_in_pool = rank_in_pool_in;
     this->nproc_in_pool = nproc_in_pool_in;
@@ -226,9 +228,12 @@ void HSolverPW<T, Device>::solve(hamilt::Hamilt<T, Device>* pHamilt,
     }
     else
     {
+        NVTX_RANGE_PUSH("psiToRho");
         reinterpret_cast<elecstate::ElecStatePW<T, Device>*>(pes)->psiToRho(psi);
+        NVTX_RANGE_POP();
     }
 
+    NVTX_RANGE_POP(); // HSolverPW::solve
 	ModuleBase::timer::tick("HSolverPW", "solve");
 	return;
 }
@@ -240,6 +245,7 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T, Device>* hm,
                                            Real* eigenvalue,
                                            const int& nk_nums)
 {
+    NVTX_RANGE_PUSH("hamiltSolvePsiK");
     ModuleBase::timer::tick("HSolverPW", "solve_psik");
 #ifdef __MPI
     const diag_comm_info comm_info = {POOL_WORLD, this->rank_in_pool, this->nproc_in_pool};
@@ -468,6 +474,7 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T, Device>* hm,
                                                                                notconv_max));
     }
     ModuleBase::timer::tick("HSolverPW", "solve_psik");
+    NVTX_RANGE_POP();
     return;
 }
 
