@@ -40,6 +40,25 @@ class pseudopot_cell_vnl
     template <typename FPTYPE, typename Device>
     void getvnl(Device* ctx, const UnitCell& ucell, const int& ik, std::complex<FPTYPE>* vkb_in) const;
 
+    /**
+     * @brief Compute vkb (nonlocal projectors) for a range of atoms only
+     *
+     * This function computes the nonlocal projectors for atoms in the range [atom_start, atom_end).
+     * The output vkb_out is indexed from 0, not from indv_ijkb0[atom_start].
+     * This is used for chunked/streaming processing to reduce GPU memory usage.
+     *
+     * @param ctx Device context (CPU or GPU)
+     * @param ucell Unit cell containing atom information
+     * @param ik k-point index
+     * @param atom_start First atom index (inclusive)
+     * @param atom_end Last atom index (exclusive)
+     * @param vkb_out Output buffer for projectors, size = chunk_nkb * npwx
+     *                where chunk_nkb = sum of nh for atoms [atom_start, atom_end)
+     */
+    template <typename FPTYPE, typename Device>
+    void getvnl_atoms(Device* ctx, const UnitCell& ucell, const int& ik,
+                      int atom_start, int atom_end, std::complex<FPTYPE>* vkb_out) const;
+
     // void getvnl_alpha(const int &ik);
 
     void init_vnl_alpha(const UnitCell& cell);
