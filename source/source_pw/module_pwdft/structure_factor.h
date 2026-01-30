@@ -73,7 +73,7 @@ public:
 
   private:
 
-    const UnitCell* ucell=nullptr; 
+    const UnitCell* ucell=nullptr;
     std::complex<float> * c_eigts1 = nullptr;
     std::complex<float> * c_eigts2 = nullptr;
     std::complex<float> * c_eigts3 = nullptr;
@@ -84,5 +84,22 @@ public:
 
     const ModulePW::PW_Basis* rho_basis = nullptr;
     std::string device = "cpu";
+
+    // GPU device memory for structure factor computation
+    double* tau_d = nullptr;           // Atom positions [nat * 3] (flattened)
+    int* atom_index_d = nullptr;       // Cumulative atom indices [ntype+1]
+    double* gcar_d = nullptr;          // G-vector Cartesian coords [ngm * 3]
+    std::complex<double>* strucFac_d = nullptr;  // Structure factors [ntype * ngm]
+
+    // GPU device memory for eigts computation
+    double* gtau_d = nullptr;          // G^T · τ for each atom [nat * 3] (gtau.x, gtau.y, gtau.z)
+
+    // Helper methods for GPU computation
+    void allocate_gpu_memory(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void free_gpu_memory();
+    void compute_struc_fac_cpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void compute_struc_fac_gpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void compute_eigts_cpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void compute_eigts_gpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
 };
 #endif //PlaneWave class
