@@ -59,6 +59,34 @@ class pseudopot_cell_vnl
     void getvnl_atoms(Device* ctx, const UnitCell& ucell, const int& ik,
                       int atom_start, int atom_end, std::complex<FPTYPE>* vkb_out) const;
 
+    /**
+     * @brief Compute vkb using pre-computed (cached) gk, ylm, and sk arrays
+     *
+     * This optimized function computes the nonlocal projectors for atoms in the range
+     * [atom_start, atom_end), using pre-computed gk, ylm, and sk arrays that are cached
+     * at the k-point level. All data is already available, no per-chunk computation needed.
+     *
+     * This avoids redundant computation of gk, ylm, and sk when processing multiple chunks
+     * for the same k-point, providing significant performance improvement.
+     *
+     * @param ctx Device context (CPU or GPU)
+     * @param ucell Unit cell containing atom information
+     * @param ik k-point index
+     * @param atom_start First atom index (inclusive)
+     * @param atom_end Last atom index (exclusive)
+     * @param gk Pre-computed k+G vectors (size: npw * 3), cached at k-point level
+     * @param ylm Pre-computed spherical harmonics (size: (lmaxkb+1)² * npw), cached at k-point level
+     * @param sk_all Pre-computed structure factors for ALL atoms (size: nat * npw), cached at k-point level
+     * @param vkb_out Output buffer for projectors, size = chunk_nkb * npwx
+     *                where chunk_nkb = sum of nh for atoms [atom_start, atom_end)
+     */
+    template <typename FPTYPE, typename Device>
+    void getvnl_atoms_cached(Device* ctx, const UnitCell& ucell, const int& ik,
+                              int atom_start, int atom_end,
+                              const FPTYPE* gk, const FPTYPE* ylm,
+                              const std::complex<FPTYPE>* sk_all,
+                              std::complex<FPTYPE>* vkb_out) const;
+
     // void getvnl_alpha(const int &ik);
 
     void init_vnl_alpha(const UnitCell& cell);

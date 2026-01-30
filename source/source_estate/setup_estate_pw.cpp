@@ -2,6 +2,7 @@
 #include "source_estate/elecstate_pw.h" // init of pelec
 #include "source_estate/elecstate_pw_sdft.h" // init of pelec for sdft
 #include "source_estate/elecstate_tools.h" // occupations
+#include "source_pw/module_pwdft/operator_pw/nonlocal_pw.h" // use_chunked_vnl
 
 template <typename T, typename Device>
 void elecstate::setup_estate_pw(UnitCell& ucell, // unitcell
@@ -57,7 +58,32 @@ void elecstate::setup_estate_pw(UnitCell& ucell, // unitcell
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "LOCAL POTENTIAL");
 
     //! Initalize non-local pseudopotential
-    ppcell.init(ucell, &sf, pw_wfc);
+    // When chunked VNL processing is enabled, skip full vkb allocation to save some memory
+    // This reduces the overhead of storing a large array that scale as natoms^2 (nprojects * npw)
+    // not a huge problem for CPU as the plane waves are distributed (with g-vector decomposition)
+    // but can be a problem for GPU with limited memory when the system size is large
+    // use_chunked_vnl checks: 1) env override, 2) CPU=off, 3) GPU=on if vkb>4GB
+    const bool use_chunked = hamilt::use_chunked_vnl<T, Device>(ucell, pw_wfc);
+    const bool allocate_vkb = !use_chunked;
+
+    // Log chunked VNL status
+    if (use_chunked)
+    {
+        const int nkb = hamilt::calculate_nkb(ucell);
+        const int npwx = pw_wfc->npwk_max;
+        const size_t vkb_size_mb = static_cast<size_t>(nkb) * npwx * sizeof(T) / (1024 * 1024);
+        const int chunk_size = hamilt::get_chunk_size_override() > 0
+                             ? hamilt::get_chunk_size_override()
+                             : 64;  // default chunk size
+
+        std::cout << " NOTICE: Chunked VNL processing ENABLED" << std::endl;
+        std::cout << "         expected vkb size: " << vkb_size_mb << " MB, chunk size: " << chunk_size << " projectors" << std::endl;
+
+        GlobalV::ofs_running << "\n NOTICE: Chunked VNL processing ENABLED" << std::endl;
+        GlobalV::ofs_running << "         expected vkb size: " << vkb_size_mb << " MB, chunk size: " << chunk_size << " projectors" << std::endl;
+    }
+
+    ppcell.init(ucell, &sf, pw_wfc, allocate_vkb);
     ppcell.init_vnl(ucell, pw_rhod);
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "NON-LOCAL POTENTIAL");
 

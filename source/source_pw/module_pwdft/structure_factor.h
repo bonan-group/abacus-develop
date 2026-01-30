@@ -56,6 +56,15 @@ public:
 
     void get_sk(Device* ctx, const int ik, const ModulePW::PW_Basis_K* wfc_basis, std::complex<FPTYPE>* sk) const;
 
+    /// @brief Compute structure factor for a single atom (GPU-compatible version)
+    /// @param ctx Device context
+    /// @param ik k-point index
+    /// @param iat Global atom index (0 to nat-1)
+    /// @param wfc_basis PW basis
+    /// @param sk Output buffer (size: npw)
+    template <typename FPTYPE, typename Device>
+    void get_sk(Device* ctx, const int ik, const int iat, const ModulePW::PW_Basis_K* wfc_basis, std::complex<FPTYPE>* sk) const;
+
     std::complex<double>* get_skq(int ik,
                                   int it,
                                   int ia,

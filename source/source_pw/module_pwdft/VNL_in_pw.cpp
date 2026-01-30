@@ -259,9 +259,15 @@ void pseudopot_cell_vnl::init(const UnitCell& ucell,
         if (PARAM.globalv.has_float_data)
         {
             resmem_sd_op()(s_tab, this->tab.getSize());
-            resmem_cd_op()(c_vkb, nkb * npwx);
+            if (allocate_vkb && nkb > 0)
+            {
+                resmem_cd_op()(c_vkb, nkb * npwx);
+            }
         }
-        resmem_zd_op()(z_vkb, nkb * npwx);
+        if (allocate_vkb && nkb > 0)
+        {
+            resmem_zd_op()(z_vkb, nkb * npwx);
+        }
         resmem_dd_op()(d_tab, this->tab.getSize());
     }
     else
@@ -269,12 +275,18 @@ void pseudopot_cell_vnl::init(const UnitCell& ucell,
         if (PARAM.globalv.has_float_data)
         {
             resmem_sh_op()(s_tab, this->tab.getSize());
-            resmem_ch_op()(c_vkb, nkb * npwx);
+            if (allocate_vkb && nkb > 0)
+            {
+                resmem_ch_op()(c_vkb, nkb * npwx);
+            }
         }
         #ifdef __DSP
-        base_device::memory::resize_memory_op_mt<std::complex<double>, base_device::DEVICE_CPU>()
-        (this->z_vkb, this->vkb.size, "Nonlocal<PW>::ps");
-        memcpy(this->z_vkb,this->vkb.c,this->vkb.size*16);
+        if (allocate_vkb && this->vkb.size > 0)
+        {
+            base_device::memory::resize_memory_op_mt<std::complex<double>, base_device::DEVICE_CPU>()
+            (this->z_vkb, this->vkb.size, "Nonlocal<PW>::ps");
+            memcpy(this->z_vkb,this->vkb.c,this->vkb.size*16);
+        }
         #else
         this->z_vkb = this->vkb.c;
         #endif
@@ -570,6 +582,119 @@ void pseudopot_cell_vnl::getvnl_atoms(Device* ctx,
         delmem_int_op()(iat2it_dev);
     }
     ModuleBase::timer::tick("pp_cell_vnl", "getvnl_atoms");
+}
+
+//----------------------------------------------------------
+// Calculates beta functions using cached gk, ylm, and sk arrays
+// All data is pre-computed at k-point level, no per-chunk computation needed
+//----------------------------------------------------------
+template <typename FPTYPE, typename Device>
+void pseudopot_cell_vnl::getvnl_atoms_cached(Device* ctx,
+                                              const UnitCell& ucell,
+                                              const int& ik,
+                                              int atom_start,
+                                              int atom_end,
+                                              const FPTYPE* gk,
+                                              const FPTYPE* ylm,
+                                              const std::complex<FPTYPE>* sk_all,
+                                              std::complex<FPTYPE>* vkb_out) const
+{
+    if (PARAM.inp.test_pp)
+    {
+        ModuleBase::TITLE("pseudopot_cell_vnl", "getvnl_atoms_cached");
+    }
+    ModuleBase::timer::tick("pp_cell_vnl", "getvnl_atoms_cached");
+
+    using cal_vnl_atoms_cached_op = hamilt::cal_vnl_atoms_cached_op<FPTYPE, Device>;
+    using resmem_int_op = base_device::memory::resize_memory_op<int, Device>;
+    using delmem_int_op = base_device::memory::delete_memory_op<int, Device>;
+    using syncmem_int_op = base_device::memory::synchronize_memory_op<int, Device, base_device::DEVICE_CPU>;
+    using resmem_var_op = base_device::memory::resize_memory_op<FPTYPE, Device>;
+    using delmem_var_op = base_device::memory::delete_memory_op<FPTYPE, Device>;
+
+    if (lmaxkb < 0 || atom_start >= atom_end)
+    {
+        ModuleBase::timer::tick("pp_cell_vnl", "getvnl_atoms_cached");
+        return;
+    }
+
+    const int npw = this->wfcpw->npwk[ik];
+
+    int *atom_nh = nullptr, *atom_na = nullptr, *atom_nb = nullptr, *iat2it_dev = nullptr;
+    int *h_atom_nh = new int[ucell.ntype],
+        *h_atom_na = new int[ucell.ntype],
+        *h_atom_nb = new int[ucell.ntype];
+    for (int it = 0; it < ucell.ntype; it++)
+    {
+        h_atom_nb[it] = ucell.atoms[it].ncpp.nbeta;
+        h_atom_nh[it] = ucell.atoms[it].ncpp.nh;
+        h_atom_na[it] = ucell.atoms[it].na;
+    }
+
+    FPTYPE *vkb1 = nullptr, *_tab = this->get_tab_data<FPTYPE>(),
+           *_indv = this->get_indv_data<FPTYPE>(), *_nhtol = this->get_nhtol_data<FPTYPE>(),
+           *_nhtolm = this->get_nhtolm_data<FPTYPE>();
+    resmem_var_op()(vkb1, nhm * npw, "VNL::vkb1");
+
+    if (this->use_gpu_)
+    {
+        resmem_int_op()(atom_nh, ucell.ntype);
+        resmem_int_op()(atom_nb, ucell.ntype);
+        resmem_int_op()(atom_na, ucell.ntype);
+        resmem_int_op()(iat2it_dev, ucell.nat);
+        syncmem_int_op()(atom_nh, h_atom_nh, ucell.ntype);
+        syncmem_int_op()(atom_nb, h_atom_nb, ucell.ntype);
+        syncmem_int_op()(atom_na, h_atom_na, ucell.ntype);
+        syncmem_int_op()(iat2it_dev, ucell.iat2it, ucell.nat);
+    }
+    else
+    {
+        atom_nh = h_atom_nh;
+        atom_nb = h_atom_nb;
+        atom_na = h_atom_na;
+        iat2it_dev = const_cast<int*>(ucell.iat2it);
+    }
+
+    // sk_all is pre-computed for ALL atoms at k-point level
+    // The kernel uses global atom index (iat) to index into sk_all
+    cal_vnl_atoms_cached_op()(ctx,
+                               ucell.ntype,
+                               npw,
+                               this->wfcpw->npwk_max,
+                               this->nhm,
+                               this->tab.getBound2(),
+                               this->tab.getBound3(),
+                               atom_na,
+                               atom_nb,
+                               atom_nh,
+                               atom_start,
+                               atom_end,
+                               static_cast<FPTYPE>(PARAM.globalv.dq),
+                               static_cast<FPTYPE>(ucell.tpiba),
+                               static_cast<std::complex<FPTYPE>>(ModuleBase::NEG_IMAG_UNIT),
+                               gk,
+                               ylm,
+                               _indv,
+                               _nhtol,
+                               _nhtolm,
+                               _tab,
+                               vkb1,
+                               sk_all,  // Use the full all-atom sk array
+                               iat2it_dev,
+                               vkb_out);
+
+    delete[] h_atom_nh;
+    delete[] h_atom_na;
+    delete[] h_atom_nb;
+    delmem_var_op()(vkb1);
+    if (this->use_gpu_)
+    {
+        delmem_int_op()(atom_nh);
+        delmem_int_op()(atom_nb);
+        delmem_int_op()(atom_na);
+        delmem_int_op()(iat2it_dev);
+    }
+    ModuleBase::timer::tick("pp_cell_vnl", "getvnl_atoms_cached");
 }
 
 void pseudopot_cell_vnl::init_vnl(UnitCell& cell, const ModulePW::PW_Basis* rho_basis)
@@ -1885,6 +2010,24 @@ template void pseudopot_cell_vnl::getvnl_atoms<double, base_device::DEVICE_CPU>(
                                                                                 int,
                                                                                 int,
                                                                                 std::complex<double>*) const;
+template void pseudopot_cell_vnl::getvnl_atoms_cached<float, base_device::DEVICE_CPU>(base_device::DEVICE_CPU*,
+                                                                                       const UnitCell&,
+                                                                                       int const&,
+                                                                                       int,
+                                                                                       int,
+                                                                                       const float*,
+                                                                                       const float*,
+                                                                                       const std::complex<float>*,
+                                                                                       std::complex<float>*) const;
+template void pseudopot_cell_vnl::getvnl_atoms_cached<double, base_device::DEVICE_CPU>(base_device::DEVICE_CPU*,
+                                                                                        const UnitCell&,
+                                                                                        int const&,
+                                                                                        int,
+                                                                                        int,
+                                                                                        const double*,
+                                                                                        const double*,
+                                                                                        const std::complex<double>*,
+                                                                                        std::complex<double>*) const;
 #if defined(__CUDA) || defined(__ROCM)
 template void pseudopot_cell_vnl::getvnl<float, base_device::DEVICE_GPU>(base_device::DEVICE_GPU*,
                                                                          const UnitCell&,
@@ -1906,6 +2049,24 @@ template void pseudopot_cell_vnl::getvnl_atoms<double, base_device::DEVICE_GPU>(
                                                                                 int,
                                                                                 int,
                                                                                 std::complex<double>*) const;
+template void pseudopot_cell_vnl::getvnl_atoms_cached<float, base_device::DEVICE_GPU>(base_device::DEVICE_GPU*,
+                                                                                       const UnitCell&,
+                                                                                       int const&,
+                                                                                       int,
+                                                                                       int,
+                                                                                       const float*,
+                                                                                       const float*,
+                                                                                       const std::complex<float>*,
+                                                                                       std::complex<float>*) const;
+template void pseudopot_cell_vnl::getvnl_atoms_cached<double, base_device::DEVICE_GPU>(base_device::DEVICE_GPU*,
+                                                                                        const UnitCell&,
+                                                                                        int const&,
+                                                                                        int,
+                                                                                        int,
+                                                                                        const double*,
+                                                                                        const double*,
+                                                                                        const std::complex<double>*,
+                                                                                        std::complex<double>*) const;
 #endif
 
 template void pseudopot_cell_vnl::radial_fft_q<float, base_device::DEVICE_CPU>(base_device::DEVICE_CPU*,

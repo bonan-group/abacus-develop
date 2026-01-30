@@ -5,6 +5,7 @@
 #include "source_base/parallel_reduce.h"
 #include "source_base/tool_quit.h"
 #include "source_base/module_device/nvtx_helper.h"
+#include "source_base/math_ylmreal.h"
 
 
 namespace hamilt {
@@ -39,6 +40,8 @@ Nonlocal<OperatorPW<T, Device>>::~Nonlocal() {
     delmem_complex_op()(this->vkb_chunk);
     delmem_complex_op()(this->becp_chunk);
     delmem_complex_op()(this->ps_chunk);
+    // Clean up k-point level caches
+    invalidate_kpoint_caches();
 }
 
 template<typename T, typename Device>
@@ -48,7 +51,9 @@ void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
     ModuleBase::timer::tick("Nonlocal", "getvnl");
     this->ik = ik_in;
     // Calculate nonlocal pseudopotential vkb
-	if(this->ppcell->nkb > 0) //xiaohui add 2013-09-02. Attention...
+    // Skip when chunked processing is enabled - vkb is computed on-the-fly per chunk
+    // use_chunked_vnl checks: 1) env override, 2) CPU=off, 3) GPU=on if vkb>4GB
+	if(this->ppcell->nkb > 0 && !use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T))) //xiaohui add 2013-09-02. Attention...
 	{
 		NVTX_RANGE_PUSH("getvnl");
 		this->ppcell->getvnl(this->ctx, *this->ucell, this->ik, this->vkb);
@@ -238,7 +243,8 @@ void Nonlocal<OperatorPW<T, Device>>::act(
     const bool is_first_node)const
 {
     // Check if chunked processing is enabled
-    if (use_chunked_vnl() && this->ppcell->nkb > 0)
+    // use_chunked_vnl checks: 1) env override, 2) CPU=off, 3) GPU=on if vkb>4GB
+    if (use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T)) && this->ppcell->nkb > 0)
     {
         this->act_chunked(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
         return;
@@ -336,15 +342,11 @@ int Nonlocal<OperatorPW<T, Device>>::calculate_optimal_chunk_size(int npw, int n
     // This is a conservative value that works well for most cases
     int target_chunk = 64;
 
-    // Check for environment variable override
-    const char* env = std::getenv("ABACUS_VNL_CHUNK_SIZE");
-    if (env)
+    // Check for environment variable override (ABACUS_VNL_CHUNK_SIZE)
+    int env_chunk = get_chunk_size_override();
+    if (env_chunk > 0)
     {
-        int env_chunk = std::atoi(env);
-        if (env_chunk > 0)
-        {
-            target_chunk = env_chunk;
-        }
+        target_chunk = env_chunk;
     }
 
     // Clamp to reasonable range [8, nkb]
@@ -365,10 +367,24 @@ void Nonlocal<OperatorPW<T, Device>>::ensure_chunk_buffers(int chunk_nkb, int np
 
     if (need_realloc)
     {
-        // Free old buffers
-        delmem_complex_op()(this->vkb_chunk);
-        delmem_complex_op()(this->becp_chunk);
-        delmem_complex_op()(this->ps_chunk);
+        // Free old buffers and set to nullptr to avoid double-free
+        // (delmem_complex_op doesn't modify the pointer, resmem_complex_op
+        // checks for non-null and frees, causing double-free if not nulled)
+        if (this->vkb_chunk != nullptr)
+        {
+            delmem_complex_op()(this->vkb_chunk);
+            this->vkb_chunk = nullptr;
+        }
+        if (this->becp_chunk != nullptr)
+        {
+            delmem_complex_op()(this->becp_chunk);
+            this->becp_chunk = nullptr;
+        }
+        if (this->ps_chunk != nullptr)
+        {
+            delmem_complex_op()(this->ps_chunk);
+            this->ps_chunk = nullptr;
+        }
 
         // Allocate new buffers with some headroom
         int new_nkb_cap = std::max(chunk_nkb, this->chunk_buffer_capacity);
@@ -409,6 +425,10 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(
 
     const int nkb = this->ppcell->nkb;
     const int nat = this->ucell->nat;
+
+    // Ensure k-point level caches are valid (gk and ylm)
+    // These are computed once per k-point and reused across all chunks
+    ensure_kpoint_caches(this->ik, ngk_ik);
 
     // Calculate optimal chunk size
     int target_chunk = calculate_optimal_chunk_size(ngk_ik, nkb, nbands);
@@ -467,6 +487,7 @@ void Nonlocal<OperatorPW<T, Device>>::process_atom_chunk(
     int chunk_nkb) const
 {
     NVTX_RANGE_PUSH("Nonlocal::process_atom_chunk");
+    ModuleBase::timer::tick("Nonlocal", "process_chunk");
 
     const int npwx = this->wfcpw->npwk_max;
 
@@ -474,12 +495,16 @@ void Nonlocal<OperatorPW<T, Device>>::process_atom_chunk(
     ensure_chunk_buffers(chunk_nkb, npw, nbands);
 
     // 1. Compute vkb for atoms [atom_start, atom_end)
-    NVTX_RANGE_PUSH("getvnl_atoms");
-    this->ppcell->template getvnl_atoms<Real>(this->ctx, *this->ucell, this->ik,
-                                               atom_start, atom_end, this->vkb_chunk);
+    // Use the cached version that uses pre-computed gk, ylm, sk
+    NVTX_RANGE_PUSH("getvnl_atoms_cached");
+    this->ppcell->template getvnl_atoms_cached<Real>(this->ctx, *this->ucell, this->ik,
+                                               atom_start, atom_end,
+                                               this->cached_gk, this->cached_ylm, this->cached_sk,
+                                               this->vkb_chunk);
     NVTX_RANGE_POP();
 
     // 2. GEMM1: becp_chunk = vkb_chunk^H × psi
+    ModuleBase::timer::tick("Nonlocal", "chunk_gemm1");
     char transa = 'C';
     char transb = 'N';
     if (nbands == 1)
@@ -525,16 +550,20 @@ void Nonlocal<OperatorPW<T, Device>>::process_atom_chunk(
         );
         NVTX_RANGE_POP();
     }
+    ModuleBase::timer::tick("Nonlocal", "chunk_gemm1");
 
     // 3. Parallel reduce becp_chunk
     NVTX_RANGE_PUSH("parallel_reduce_chunk");
+    ModuleBase::timer::tick("Nonlocal", "chunk_reduce");
     Parallel_Reduce::reduce_pool(this->becp_chunk, chunk_nkb * nbands);
+    ModuleBase::timer::tick("Nonlocal", "chunk_reduce");
     NVTX_RANGE_POP();
 
     // 4. Apply deeq and GEMM2: hpsi += vkb_chunk × ps_chunk
     add_nonlocal_pp_chunk(hpsi, this->becp_chunk, atom_start, atom_end,
                           ikb_offset, chunk_nkb, nbands);
 
+    ModuleBase::timer::tick("Nonlocal", "process_chunk");
     NVTX_RANGE_POP();
 }
 
@@ -670,6 +699,153 @@ void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp_chunk(
     ModuleBase::timer::tick("Nonlocal", "add_nonlocal_pp_chunk");
     NVTX_RANGE_POP();
 }
+
+// =========== K-point level cache implementation ===========
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::invalidate_kpoint_caches() const
+{
+    if (this->cached_gk != nullptr)
+    {
+        delmem_real_op()(this->cached_gk);
+        this->cached_gk = nullptr;
+    }
+    if (this->cached_ylm != nullptr)
+    {
+        delmem_real_op()(this->cached_ylm);
+        this->cached_ylm = nullptr;
+    }
+    if (this->cached_sk != nullptr)
+    {
+        delmem_complex_op()(this->cached_sk);
+        this->cached_sk = nullptr;
+    }
+    this->cached_ik = -1;
+    this->cached_npw = 0;
+    this->cached_ylm_size = 0;
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::ensure_kpoint_caches(int ik, int npw) const
+{
+    // Check if cache is already valid for this k-point
+    if (this->cached_ik == ik && this->cached_npw == npw)
+    {
+        return;  // Cache is valid, nothing to do
+    }
+
+    NVTX_RANGE_PUSH("Nonlocal::ensure_kpoint_caches");
+    ModuleBase::timer::tick("Nonlocal", "kpoint_cache");
+
+    // Get lmaxkb from ppcell
+    const int lmaxkb = this->ppcell->lmaxkb;
+    if (lmaxkb < 0)
+    {
+        // No nonlocal projectors
+        this->cached_ik = ik;
+        this->cached_npw = npw;
+        this->cached_ylm_size = 0;
+        ModuleBase::timer::tick("Nonlocal", "kpoint_cache");
+        NVTX_RANGE_POP();
+        return;
+    }
+
+    const int x1 = (lmaxkb + 1) * (lmaxkb + 1);
+
+    // Memory type operations
+    using castmem_var_h2d_op = base_device::memory::cast_memory_op<Real, double, Device, base_device::DEVICE_CPU>;
+    using castmem_var_h2h_op
+        = base_device::memory::cast_memory_op<Real, double, base_device::DEVICE_CPU, base_device::DEVICE_CPU>;
+
+    // Check if we need to reallocate
+    bool need_realloc = (this->cached_gk == nullptr)
+                     || (this->cached_ylm == nullptr)
+                     || (npw > this->cached_npw)
+                     || (x1 != this->cached_ylm_size);
+
+    if (need_realloc)
+    {
+        // Free old buffers (only if not null)
+        if (this->cached_gk != nullptr)
+        {
+            delmem_real_op()(this->cached_gk);
+            this->cached_gk = nullptr;
+        }
+        if (this->cached_ylm != nullptr)
+        {
+            delmem_real_op()(this->cached_ylm);
+            this->cached_ylm = nullptr;
+        }
+
+        // Allocate new buffers
+        resmem_real_op()(this->cached_gk, npw * 3, "Nonlocal::cached_gk");
+        resmem_real_op()(this->cached_ylm, x1 * npw, "Nonlocal::cached_ylm");
+    }
+
+    // Compute gk = k+G vectors
+    NVTX_RANGE_PUSH("compute_gk");
+    ModuleBase::Vector3<double>* _gk = new ModuleBase::Vector3<double>[npw];
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 4096 / sizeof(Real))
+#endif
+    for (int ig = 0; ig < npw; ig++)
+    {
+        _gk[ig] = this->wfcpw->getgpluskcar(ik, ig);
+    }
+
+    // Copy to device (with potential type conversion)
+    const bool use_gpu = base_device::get_device_type<Device>(this->ctx) == base_device::GpuDevice;
+    if (use_gpu)
+    {
+        castmem_var_h2d_op()(this->cached_gk, reinterpret_cast<double*>(_gk), npw * 3);
+    }
+    else
+    {
+        if (std::is_same<Real, float>::value)
+        {
+            castmem_var_h2h_op()(this->cached_gk, reinterpret_cast<double*>(_gk), npw * 3);
+        }
+        else
+        {
+            // For double, just copy directly
+            std::memcpy(this->cached_gk, _gk, npw * 3 * sizeof(double));
+        }
+    }
+    delete[] _gk;
+    NVTX_RANGE_POP();
+
+    // Compute ylm = spherical harmonics
+    NVTX_RANGE_PUSH("compute_ylm");
+    ModuleBase::YlmReal::Ylm_Real(this->ctx, x1, npw, this->cached_gk, this->cached_ylm);
+    NVTX_RANGE_POP();
+
+    // Compute sk = structure factors for ALL atoms using efficient GPU kernel
+    // This avoids per-chunk CPU fallback which caused severe performance regression
+    NVTX_RANGE_PUSH("compute_sk");
+    const int nat = this->ucell->nat;
+    if (this->cached_sk == nullptr || npw > this->cached_npw)
+    {
+        if (this->cached_sk != nullptr)
+        {
+            delmem_complex_op()(this->cached_sk);
+            this->cached_sk = nullptr;
+        }
+        resmem_complex_op()(this->cached_sk, nat * npw, "Nonlocal::cached_sk");
+    }
+    // Use the efficient all-atom get_sk (uses GPU kernel on GPU, batch CPU on CPU)
+    this->ppcell->psf->get_sk(this->ctx, ik, this->wfcpw, this->cached_sk);
+    NVTX_RANGE_POP();
+
+    // Update cache metadata
+    this->cached_ik = ik;
+    this->cached_npw = npw;
+    this->cached_ylm_size = x1;
+
+    ModuleBase::timer::tick("Nonlocal", "kpoint_cache");
+    NVTX_RANGE_POP();
+}
+
+// =========== End k-point level cache implementation ===========
 
 template<typename T, typename Device>
 template<typename T_in, typename Device_in>

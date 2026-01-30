@@ -13,7 +13,10 @@
 #include <cstdlib>
 
 // Set to 1 to enable GPU memory allocation debugging
-#define DEBUG_GPU_MEMORY_ALLOC 1
+#define DEBUG_GPU_MEMORY_ALLOC 0
+
+// Only print allocation hints for allocations larger than this threshold (1GB)
+#define GPU_ALLOC_HINT_THRESHOLD (1024ULL * 1024ULL * 1024ULL)
 
 #if DEBUG_GPU_MEMORY_ALLOC
 // Helper function to print a short backtrace (caller info)
@@ -123,34 +126,38 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
     }
 
     const size_t alloc_bytes = sizeof(FPTYPE) * size;
-    const char* record_name = record_in ? record_in : "unknown";
 
 #if DEBUG_GPU_MEMORY_ALLOC
-    // Query GPU memory status before allocation
-    size_t free_mem = 0, total_mem = 0;
-    cudaMemGetInfo(&free_mem, &total_mem);
-
-    // Print allocation attempt info
-    fprintf(stderr, "[GPU_ALLOC] %s: requesting %.2f MB (free: %.2f MB / %.2f MB total)\n",
-            record_name,
-            alloc_bytes / (1024.0 * 1024.0),
-            free_mem / (1024.0 * 1024.0),
-            total_mem / (1024.0 * 1024.0));
-
-    // Print caller backtrace
-    print_caller_info(4);
-    fflush(stderr);
-
-    // Check if allocation will likely fail
-    if (alloc_bytes > free_mem)
+    const char* record_name = record_in ? record_in : "unknown";
+    // Only print allocation hints for large allocations (> 1GB)
+    if (alloc_bytes > GPU_ALLOC_HINT_THRESHOLD)
     {
-        fprintf(stderr, "[GPU_ALLOC] WARNING: %s allocation (%.2f MB) exceeds free memory (%.2f MB)!\n",
+        // Query GPU memory status before allocation
+        size_t free_mem = 0, total_mem = 0;
+        cudaMemGetInfo(&free_mem, &total_mem);
+
+        // Print allocation attempt info
+        fprintf(stderr, "[GPU_ALLOC] %s: requesting %.2f MB (free: %.2f MB / %.2f MB total)\n",
                 record_name,
                 alloc_bytes / (1024.0 * 1024.0),
-                free_mem / (1024.0 * 1024.0));
-        fprintf(stderr, "  Call stack at failure:\n");
-        print_caller_info(8);
+                free_mem / (1024.0 * 1024.0),
+                total_mem / (1024.0 * 1024.0));
+
+        // Print caller backtrace
+        print_caller_info(4);
         fflush(stderr);
+
+        // Check if allocation will likely fail
+        if (alloc_bytes > free_mem)
+        {
+            fprintf(stderr, "[GPU_ALLOC] WARNING: %s allocation (%.2f MB) exceeds free memory (%.2f MB)!\n",
+                    record_name,
+                    alloc_bytes / (1024.0 * 1024.0),
+                    free_mem / (1024.0 * 1024.0));
+            fprintf(stderr, "  Call stack at failure:\n");
+            print_caller_info(8);
+            fflush(stderr);
+        }
     }
 #endif
 
@@ -159,6 +166,10 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
 #if DEBUG_GPU_MEMORY_ALLOC
     if (err != cudaSuccess)
     {
+        // Query GPU memory status for error reporting
+        size_t free_mem = 0, total_mem = 0;
+        cudaMemGetInfo(&free_mem, &total_mem);
+
         fprintf(stderr, "[GPU_ALLOC] FAILED: %s - %s (requested %.2f MB, free was %.2f MB)\n",
                 record_name,
                 cudaGetErrorString(err),

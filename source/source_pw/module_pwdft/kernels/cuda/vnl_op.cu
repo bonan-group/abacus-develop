@@ -238,4 +238,129 @@ void cal_vnl_atoms_op<FPTYPE, base_device::DEVICE_GPU>::operator() (
 template struct cal_vnl_atoms_op<float, base_device::DEVICE_GPU>;
 template struct cal_vnl_atoms_op<double, base_device::DEVICE_GPU>;
 
+/// @brief CUDA kernel for computing vkb using cached gk/ylm/sk_all
+/// The sk_all array contains structure factors for ALL atoms (indexed by global iat)
+template<typename FPTYPE>
+__global__ void cal_vnl_atoms_cached(
+    const int ntype,
+    const int npw,
+    const int npwx,
+    const int nhm,
+    const int tab_2,
+    const int tab_3,
+    const int * atom_na,
+    const int * atom_nb,
+    const int * atom_nh,
+    const int atom_start,
+    const int atom_end,
+    const FPTYPE DQ,
+    const FPTYPE tpiba,
+    const thrust::complex<FPTYPE> NEG_IMAG_UNIT,
+    const FPTYPE *gk,         // Pre-computed (cached)
+    const FPTYPE *ylm,        // Pre-computed (cached)
+    const FPTYPE *indv,
+    const FPTYPE *nhtol,
+    const FPTYPE *nhtolm,
+    const FPTYPE *tab,
+    FPTYPE *vkb1,
+    const thrust::complex<FPTYPE> *sk_all,  // All-atom sk indexed by global iat
+    const int *iat2it,
+    thrust::complex<FPTYPE> *vkb_out)
+{
+    FPTYPE vq = 0.0;
+    int ig = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ig >= npw) {return;}
+
+    int jkb_out = 0;  // Output projector index (starts at 0)
+    int last_type = -1;
+
+    for (int iat = atom_start; iat < atom_end; iat++)
+    {
+        const int it = iat2it[iat];
+        const int nh = atom_nh[it];
+        const int nbeta = atom_nb[it];
+
+        // Compute vkb1 for this type if different from last
+        if (it != last_type)
+        {
+            for (int nb = 0; nb < nbeta; nb++)
+            {
+                // gk is pre-computed (cached)
+                const FPTYPE gnorm = sqrt(gk[ig * 3 + 0] * gk[ig * 3 + 0]
+                                        + gk[ig * 3 + 1] * gk[ig * 3 + 1]
+                                        + gk[ig * 3 + 2] * gk[ig * 3 + 2]) * tpiba;
+
+                vq = _polynomial_interpolation(tab, it, nb, tab_2, tab_3, DQ, gnorm);
+
+                // add spherical harmonic part (ylm is pre-computed/cached)
+                for (int ih = 0; ih < nh; ih++)
+                {
+                    if (nb == indv[it * nhm + ih])
+                    {
+                        const int lm = static_cast<int>(nhtolm[it * nhm + ih]);
+                        vkb1[ih * npw + ig] = ylm[lm * npw + ig] * vq;
+                    }
+                }
+            }
+            last_type = it;
+        }
+
+        // Add structure factor and (-i)^l factor for this atom
+        // Note: sk_all is indexed by global atom index (iat), not chunk-local
+        for (int ih = 0; ih < nh; ih++)
+        {
+            thrust::complex<FPTYPE> pref = pow(NEG_IMAG_UNIT, nhtol[it * nhm + ih]);
+            thrust::complex<FPTYPE> *pvkb = vkb_out + jkb_out * npwx;
+            pvkb[ig] = vkb1[ih * npw + ig] * sk_all[iat * npw + ig] * pref;
+            ++jkb_out;
+        }
+    }
+}
+
+template <typename FPTYPE>
+void cal_vnl_atoms_cached_op<FPTYPE, base_device::DEVICE_GPU>::operator() (
+    const base_device::DEVICE_GPU *ctx,
+    const int &ntype,
+    const int &npw,
+    const int &npwx,
+    const int &nhm,
+    const int &tab_2,
+    const int &tab_3,
+    const int * atom_na,
+    const int * atom_nb,
+    const int * atom_nh,
+    const int &atom_start,
+    const int &atom_end,
+    const FPTYPE &DQ,
+    const FPTYPE &tpiba,
+    const std::complex<FPTYPE> &NEG_IMAG_UNIT,
+    const FPTYPE *gk,         // Pre-computed (cached)
+    const FPTYPE *ylm,        // Pre-computed (cached)
+    const FPTYPE *indv,
+    const FPTYPE *nhtol,
+    const FPTYPE *nhtolm,
+    const FPTYPE *tab,
+    FPTYPE *vkb1,
+    const std::complex<FPTYPE> *sk_all,  // All-atom sk indexed by global iat
+    const int *iat2it,
+    std::complex<FPTYPE> *vkb_out)
+{
+    int block = (npw + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    cal_vnl_atoms_cached<FPTYPE><<<block, THREADS_PER_BLOCK>>>(
+            ntype, npw, npwx, nhm, tab_2, tab_3,
+            atom_na, atom_nb, atom_nh,
+            atom_start, atom_end,
+            DQ, tpiba,
+            static_cast<thrust::complex<FPTYPE>>(NEG_IMAG_UNIT),
+            gk, ylm, indv, nhtol, nhtolm, tab, vkb1,
+            reinterpret_cast<const thrust::complex<FPTYPE>*>(sk_all),
+            iat2it,
+            reinterpret_cast<thrust::complex<FPTYPE>*>(vkb_out));
+
+    cudaCheckOnDebug();
+}
+
+template struct cal_vnl_atoms_cached_op<float, base_device::DEVICE_GPU>;
+template struct cal_vnl_atoms_cached_op<double, base_device::DEVICE_GPU>;
+
 }  // namespace hamilt
