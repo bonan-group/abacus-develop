@@ -31,6 +31,7 @@ struct cal_vnl_op<FPTYPE, base_device::DEVICE_CPU>
                     const std::complex<FPTYPE>* sk,
                     std::complex<FPTYPE>* vkb_in)
     {
+        ModuleBase::timer::tick("Operator", "cal_vnl_op");
         const int imag_pow_period = 4;
         // result table of pow(0-1i, int)
         static const std::complex<FPTYPE> pref_tab[imag_pow_period] = {{1, 0}, {0, -1}, {-1, 0}, {0, 1}};
@@ -95,7 +96,7 @@ struct cal_vnl_op<FPTYPE, base_device::DEVICE_CPU>
 #ifdef _OPENMP
         }
 #endif
-    }
+        ModuleBase::timer::tick("Operator", "cal_vnl_op");
 };
 
 template struct cal_vnl_op<float, base_device::DEVICE_CPU>;

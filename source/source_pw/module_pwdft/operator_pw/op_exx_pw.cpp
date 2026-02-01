@@ -15,7 +15,6 @@
 #include "source_pw/module_pwdft/kernels/exx_cal_energy_op.h"
 #include "source_pw/module_pwdft/kernels/mul_potential_op.h"
 #include "source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.h"
-#include "source_pw/module_pwdft/kernels/axpy_batch_op.h"
 #include "source_base/module_device/nvtx_helper.h"
 
 #include <cmath>
@@ -1340,6 +1339,27 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::rho_recip2real
     rhopw_dev->recip2real(rho_recip, rho_real, add, factor);
 }
 
+// ============================================================================
+// Batch FFT size accessor - CPU stub (not supported)
+// ============================================================================
+template <>
+int OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::get_batch_fft_size() const
+{
+    ModuleBase::WARNING_QUIT("OperatorEXXPW::get_batch_fft_size",
+                             "Batch FFT is only supported on GPU (CUDA/ROCm). "
+                             "Please compile with -DUSE_CUDA=ON or -DUSE_ROCM=ON.");
+    return 0; // Never reached, but needed for compilation
+}
+
+template <>
+int OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>::get_batch_fft_size() const
+{
+    ModuleBase::WARNING_QUIT("OperatorEXXPW::get_batch_fft_size",
+                             "Batch FFT is only supported on GPU (CUDA/ROCm). "
+                             "Please compile with -DUSE_CUDA=ON or -DUSE_ROCM=ON.");
+    return 0; // Never reached, but needed for compilation
+}
+
 template class OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>;
 template class OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>;
 #if ((defined __CUDA) || (defined __ROCM))
@@ -1460,22 +1480,19 @@ void OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::cal_density_re
 }
 
 // ============================================================================
-// Batch FFT size accessor
+// Batch FFT size accessor - GPU implementation
 // ============================================================================
-
-template <typename T, typename Device>
-int OperatorEXXPW<T, Device>::get_batch_fft_size() const
+template <>
+int OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::get_batch_fft_size() const
 {
-    return this->wfcpw->fft_bundle.get_batch_size<typename GetTypeReal<T>::type>();
+    return this->wfcpw->fft_bundle.get_batch_size<float>();
 }
 
-// Explicit template instantiations
-template int OperatorEXXPW<std::complex<float>, base_device::DEVICE_CPU>::get_batch_fft_size() const;
-template int OperatorEXXPW<std::complex<double>, base_device::DEVICE_CPU>::get_batch_fft_size() const;
-#if defined(__CUDA) || defined(__ROCM)
-template int OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>::get_batch_fft_size() const;
-template int OperatorEXXPW<std::complex<double>, base_device::DEVICE_GPU>::get_batch_fft_size() const;
-#endif
+template <>
+int OperatorEXXPW<std::complex<double>, base_device::DEVICE_GPU>::get_batch_fft_size() const
+{
+    return this->wfcpw->fft_bundle.get_batch_size<double>();
+}
 
 #endif
 
