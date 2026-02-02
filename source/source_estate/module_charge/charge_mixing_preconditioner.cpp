@@ -2,12 +2,15 @@
 
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
+#include "source_base/module_device/types.h"
+#include "source_base/module_device/memory_op.h"
+#include "kernels/charge_mixing_op.h"
 
 void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
 {
     ModuleBase::TITLE("Charge_Mixing", "Kerker_screen_recip");
 
-	if (this->mixing_gg0 <= 0.0 || this->mixing_beta <= 0.1) 
+	if (this->mixing_gg0 <= 0.0 || this->mixing_beta <= 0.1)
 	{
 		return;
 	}
@@ -22,11 +25,60 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
 
     /// consider a resize for mixing_angle
 	int resize_tmp = 1;
-    if (nspin == 4 && this->mixing_angle > 0) 
-    { 
+    if (nspin == 4 && this->mixing_angle > 0)
+    {
     	resize_tmp = 2;
     }
 
+#if __CUDA || __ROCM
+    // GPU path for simple case: nspin=1 or when all spins use same parameters
+    // For nspin=2/4 with different mag parameters, fall back to CPU for correct handling
+    if (device_ == "gpu" && this->rhopw->get_gg_d() != nullptr && resize_tmp == 1)
+    {
+        // Check if we can use uniform parameters for all spins (simple case)
+        bool use_gpu_simple = (nspin == 1) ||
+            (nspin >= 2 && (this->mixing_gg0_mag <= 0.0001 || this->mixing_beta_mag <= 0.1));
+
+        if (use_gpu_simple)
+        {
+            // For nspin=1 or when magnetization doesn't need Kerker, process spin 0 only
+            const int npw = this->rhopw->npw;
+            const int nspins_to_process = (nspin == 1) ? 1 : 1; // Only density component
+
+            fac = this->mixing_gg0;
+            amin = this->mixing_beta;
+            gg0 = std::pow(fac * ModuleBase::BOHR_TO_A / *this->tpiba, 2);
+            const double gg0_amin = this->mixing_gg0_min / amin;
+
+            // Allocate temporary GPU buffer
+            std::complex<double>* drhog_d = nullptr;
+            const int total_size = nspins_to_process * npw;
+
+            base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+                drhog_d, total_size, "Kerker_drhog_d");
+            base_device::memory::synchronize_memory_op<std::complex<double>,
+                base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(drhog_d, drhog, total_size);
+
+            elecstate::kerker_screen_recip_op<double, base_device::DEVICE_GPU>()(
+                nullptr,  // ctx
+                drhog_d,
+                this->rhopw->get_gg_d(),
+                gg0,
+                gg0_amin,
+                npw,
+                nspins_to_process);
+
+            base_device::memory::synchronize_memory_op<std::complex<double>,
+                base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(drhog, drhog_d, total_size);
+            base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(drhog_d);
+
+            ModuleBase::timer::tick("Charge_Mixing", "Kerker_screen_recip");
+            return;
+        }
+    }
+#endif
+
+    // CPU path (original implementation)
     /// implement Kerker for density and magnetization separately
     for (int is = 0; is < nspin / resize_tmp; ++is)
     {

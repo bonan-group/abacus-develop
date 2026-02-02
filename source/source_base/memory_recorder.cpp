@@ -342,8 +342,12 @@ void Memory::record_gpu
 
 void Memory::print(const std::string& mem_name, double size_mb)
 {
-	GlobalV::ofs_running <<"\n *** Memory Allocation Warning *** "
-	<<" "<< mem_name <<" "<< size_mb <<" MB" << std::endl;
+	// Check if output stream is open before writing (may not be initialized during early setup)
+	if (GlobalV::ofs_running.is_open())
+	{
+		GlobalV::ofs_running <<"\n *** Memory Allocation Warning *** "
+		<<" "<< mem_name <<" "<< size_mb <<" MB" << std::endl;
+	}
 	return;
 }
 

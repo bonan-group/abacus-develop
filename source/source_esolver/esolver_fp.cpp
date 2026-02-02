@@ -91,6 +91,8 @@ void ESolver_FP::before_all_runners(UnitCell& ucell, const Input_para& inp)
     const bool kin_den = this->chr.kin_density(); // mohan add 20251202
 	this->chr.allocate(inp.nspin, kin_den); // mohan move this from setup_estate_pw, 20251128
 
+    // Enable GPU memory for charge density when device="gpu"
+    this->chr.set_device(inp.device);
 
     return;
 }

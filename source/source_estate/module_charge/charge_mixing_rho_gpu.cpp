@@ -1,0 +1,200 @@
+#include "charge_mixing.h"
+
+#if __CUDA || __ROCM
+
+#include "source_io/module_parameter/parameter.h"
+#include "source_base/timer.h"
+#include "source_base/module_device/nvtx_helper.h"
+#include "source_base/module_device/memory_op.h"
+#include "source_base/parallel_reduce.h"
+#include "kernels/charge_mixing_op.h"
+
+void Charge_Mixing::init_mixing_gpu()
+{
+    // Initialize GPU mixing data if not already done
+    if (rho_mdata_gpu == nullptr)
+    {
+        const int nspin = PARAM.inp.nspin;
+        // For nspin=4 with mixing_angle > 0, use 2 instead of 4
+        int resize_tmp = 1;
+        if (nspin == 4 && this->mixing_angle > 0)
+        {
+            resize_tmp = 2;
+        }
+        const std::size_t length = this->rhopw->npw * nspin / resize_tmp;
+
+        // Pulay uses mixing_ndim, Broyden uses mixing_ndim+1
+        int data_ndim = (mixing_mode == "pulay") ? this->mixing_ndim : this->mixing_ndim + 1;
+        rho_mdata_gpu = new Base_Mixing::Mixing_Data_GPU<std::complex<double>>(
+            data_ndim, length);
+    }
+
+    // Initialize GPU Broyden mixing if not already done
+    if (mixing_gpu == nullptr && mixing_mode == "broyden")
+    {
+        mixing_gpu = new Base_Mixing::Broyden_Mixing_GPU<std::complex<double>>(
+            this->mixing_ndim, this->mixing_beta);
+        mixing_gpu->init(rho_mdata_gpu->length);
+    }
+
+    // Initialize GPU Pulay mixing if not already done
+    if (mixing_pulay_gpu == nullptr && mixing_mode == "pulay")
+    {
+        mixing_pulay_gpu = new Base_Mixing::Pulay_Mixing_GPU<std::complex<double>>(
+            this->mixing_ndim, this->mixing_beta);
+        mixing_pulay_gpu->init(rho_mdata_gpu->length);
+    }
+
+    // Initialize GPU workspace for inner products
+    if (gpu_workspace_d == nullptr)
+    {
+        const int max_blocks = (this->rhopw->npw + 255) / 256;
+        base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(
+            gpu_workspace_d, max_blocks, "charge_mixing_workspace");
+    }
+}
+
+void Charge_Mixing::free_mixing_gpu()
+{
+    if (rho_mdata_gpu != nullptr)
+    {
+        delete rho_mdata_gpu;
+        rho_mdata_gpu = nullptr;
+    }
+    if (mixing_gpu != nullptr)
+    {
+        delete mixing_gpu;
+        mixing_gpu = nullptr;
+    }
+    if (mixing_pulay_gpu != nullptr)
+    {
+        delete mixing_pulay_gpu;
+        mixing_pulay_gpu = nullptr;
+    }
+    if (gpu_workspace_d != nullptr)
+    {
+        base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(gpu_workspace_d);
+        gpu_workspace_d = nullptr;
+    }
+}
+
+double Charge_Mixing::inner_product_recip_hartree_gpu(
+    const std::complex<double>* rhog1_d,
+    const std::complex<double>* rhog2_d)
+{
+    // Use GPU kernel for inner product with 1/G^2 weighting
+    static const double fac = ModuleBase::e2 * ModuleBase::FOUR_PI / ((*this->tpiba) * (*this->tpiba));
+    const int npw = this->rhopw->npw;
+    const int ig_gge0 = this->rhopw->ig_gge0;
+
+    // Call GPU inner product kernel
+    double result = elecstate::inner_product_recip_hartree_op<double, base_device::DEVICE_GPU>()(
+        nullptr,  // ctx
+        rhog1_d,
+        rhog2_d,
+        this->rhopw->get_gg_d(),
+        npw,
+        ig_gge0,
+        fac,  // tpiba2 factor already included
+        gpu_workspace_d);
+
+#ifdef __MPI
+    Parallel_Reduce::reduce_pool(result);
+#endif
+
+    result *= *this->omega * 0.5;
+    return result;
+}
+
+void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
+{
+    ModuleBase::TITLE("Charge_Mixing", "mix_rho_recip_gpu");
+    ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip_gpu");
+    NVTX_RANGE_PUSH("mix_rho_recip_gpu");
+
+    const int nspin = PARAM.inp.nspin;
+
+    // Currently only support nspin=1 for full GPU path
+    // Fall back to CPU path for nspin=2,4 or unsupported mixing modes
+    if (nspin != 1 || (mixing_mode != "broyden" && mixing_mode != "pulay"))
+    {
+        // Fall back to CPU mixing
+        ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip_gpu");
+        NVTX_RANGE_POP();
+        mix_rho_recip(chr);
+        return;
+    }
+
+    // Initialize GPU mixing resources
+    init_mixing_gpu();
+
+    const int npw = this->rhopw->npw;
+
+    // Step 1: Ensure rho is on GPU and perform FFT to get rhog
+    // (This should already be done in get_drho, but we ensure it here)
+    chr->sync_rho_to_device<base_device::DEVICE_GPU>();
+    chr->sync_rho_save_to_device<base_device::DEVICE_GPU>();
+
+    // FFT: rho_d -> rhog_d and rho_save_d -> rhog_save_d
+    chr->rhopw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
+        chr->get_rho_d(0), chr->get_rhog_d(0));
+    chr->rhopw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
+        chr->get_rho_save_d(0), chr->get_rhog_save_d(0));
+
+    std::complex<double>* rhog_in_d = chr->get_rhog_save_d(0);
+    std::complex<double>* rhog_out_d = chr->get_rhog_d(0);
+
+    // Step 2: GPU Kerker screening function
+    const double gg0 = std::pow(this->mixing_gg0 * ModuleBase::BOHR_TO_A / *this->tpiba, 2);
+    const double gg0_min = this->mixing_gg0_min / this->mixing_beta;
+
+    auto screen_gpu = [this, npw, gg0, gg0_min](std::complex<double>* drhog_d) {
+        if (this->mixing_gg0 <= 0.0 || this->mixing_beta <= 0.1)
+        {
+            return;
+        }
+        elecstate::kerker_screen_recip_op<double, base_device::DEVICE_GPU>()(
+            nullptr,  // ctx
+            drhog_d,
+            this->rhopw->get_gg_d(),
+            gg0,
+            gg0_min,
+            npw,
+            1);  // nspin=1
+    };
+
+    // Step 3: GPU inner product function (returns double)
+    auto inner_product_gpu = [this](const std::complex<double>* rhog1_d,
+                                     const std::complex<double>* rhog2_d) -> double {
+        return this->inner_product_recip_hartree_gpu(rhog1_d, rhog2_d);
+    };
+
+    // Step 4-6: Mixing mode specific operations
+    if (mixing_mode == "broyden")
+    {
+        // Broyden mixing path
+        mixing_gpu->push_data(*rho_mdata_gpu, rhog_in_d, rhog_out_d, screen_gpu, true);
+        mixing_gpu->cal_coef(*rho_mdata_gpu, inner_product_gpu);
+        mixing_gpu->mix_data(*rho_mdata_gpu, rhog_out_d);
+    }
+    else if (mixing_mode == "pulay")
+    {
+        // Pulay mixing path
+        mixing_pulay_gpu->push_data(*rho_mdata_gpu, rhog_in_d, rhog_out_d, screen_gpu, true);
+        mixing_pulay_gpu->cal_coef(*rho_mdata_gpu, inner_product_gpu);
+        mixing_pulay_gpu->mix_data(*rho_mdata_gpu, rhog_out_d);
+    }
+
+    // Step 7: GPU FFT: rhog_d -> rho_d
+    this->rhodpw->recip_to_real<std::complex<double>, double, base_device::DEVICE_GPU>(
+        rhog_out_d, chr->get_rho_d(0));
+
+    // Step 8: Sync final result to CPU
+    chr->sync_rho_to_host<base_device::DEVICE_GPU>();
+    chr->sync_rhog_to_host<base_device::DEVICE_GPU>();
+
+    ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip_gpu");
+    NVTX_RANGE_POP();
+}
+
+#endif // __CUDA || __ROCM

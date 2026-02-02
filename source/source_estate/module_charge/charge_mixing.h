@@ -4,6 +4,14 @@
 #include "source_estate/module_dm/density_matrix.h"
 #include "source_base/module_mixing/mixing.h"
 #include "source_base/module_mixing/plain_mixing.h"
+#include "source_base/module_device/types.h"
+#include <string>
+
+#if __CUDA || __ROCM
+#include "source_base/module_mixing/mixing_data_gpu.h"
+#include "source_base/module_mixing/broyden_mixing_gpu.h"
+#include "source_base/module_mixing/pulay_mixing_gpu.h"
+#endif
 
 class Charge_Mixing
 {
@@ -123,6 +131,17 @@ class Charge_Mixing
 
     // to calculate the slope of drho curve during SCF, which is used to determine if SCF oscillate
     bool if_scf_oscillate(const int iteration, const double drho, const int iternum_used, const double threshold);
+
+    //==========================================================
+    // Device support (hybrid pattern like PW_Basis)
+    //==========================================================
+
+    /// @brief Set device type for mixing operations
+    /// @param device_in "cpu" or "gpu"
+    void set_device(const std::string& device_in) { device_ = device_in; }
+
+    /// @brief Get current device type
+    std::string get_device() const { return device_; }
     
   private:
   
@@ -157,6 +176,40 @@ class Charge_Mixing
 
     ModulePW::PW_Basis* rhopw = nullptr;  ///< smooth grid
     ModulePW::PW_Basis* rhodpw = nullptr; ///< dense grid, same as rhopw for ncpp.
+
+    /// Runtime device selection: "cpu" or "gpu"
+    std::string device_ = "cpu";
+
+#if __CUDA || __ROCM
+    //==========================================================
+    // GPU Mixing (Full GPU-Resident Path)
+    //==========================================================
+
+    /// GPU-resident mixing data for charge density
+    Base_Mixing::Mixing_Data_GPU<std::complex<double>>* rho_mdata_gpu = nullptr;
+
+    /// GPU Broyden mixing instance
+    Base_Mixing::Broyden_Mixing_GPU<std::complex<double>>* mixing_gpu = nullptr;
+
+    /// GPU Pulay mixing instance
+    Base_Mixing::Pulay_Mixing_GPU<std::complex<double>>* mixing_pulay_gpu = nullptr;
+
+    /// GPU workspace for inner products
+    double* gpu_workspace_d = nullptr;
+
+    /// Initialize GPU mixing resources
+    void init_mixing_gpu();
+
+    /// Release GPU mixing resources
+    void free_mixing_gpu();
+
+    /// Full GPU-resident charge mixing path
+    void mix_rho_recip_gpu(Charge* chr);
+
+    /// GPU inner product with Hartree-like weighting
+    double inner_product_recip_hartree_gpu(const std::complex<double>* rhog1_d,
+                                            const std::complex<double>* rhog2_d);
+#endif
 
     /**
      * @brief charge mixing for reciprocal space

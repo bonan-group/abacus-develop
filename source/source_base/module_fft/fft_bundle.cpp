@@ -107,6 +107,22 @@ void FFT_Bundle::initfft(int nx_in,
         fft_double = make_unique<FFT_CUDA<double>>();
         fft_double->initfft(nx_in, ny_in, nz_in);
 #endif
+
+        // Also initialize CPU FFT for fallback operations
+        // Non-templated code paths (get_auxg_data, get_auxr_data, fftxyfor/bac, etc.)
+        // require CPU FFT even when primary device is GPU
+        if (float_flag)
+        {
+            fft_float_cpu = make_unique<FFT_CPU<float>>(this->fft_mode);
+            fft_float_cpu
+                ->initfft(nx_in, ny_in, nz_in, lixy_in, rixy_in, ns_in, nplane_in, nproc_in, gamma_only_in, xprime_in);
+        }
+        if (double_flag)
+        {
+            fft_double_cpu = make_unique<FFT_CPU<double>>(this->fft_mode);
+            fft_double_cpu
+                ->initfft(nx_in, ny_in, nz_in, lixy_in, rixy_in, ns_in, nplane_in, nproc_in, gamma_only_in, xprime_in);
+        }
     }else{
         ModuleBase::WARNING_QUIT("FFT_Bundle", "Please set the device to cpu or gpu or dsp");
     }
@@ -117,10 +133,18 @@ void FFT_Bundle::setupFFT()
     if (double_flag)
     {
         fft_double->setupFFT();
+        if (fft_double_cpu != nullptr)
+        {
+            fft_double_cpu->setupFFT();
+        }
     }
     if (float_flag)
     {
         fft_float->setupFFT();
+        if (fft_float_cpu != nullptr)
+        {
+            fft_float_cpu->setupFFT();
+        }
     }
 }
 
@@ -129,10 +153,18 @@ void FFT_Bundle::clearFFT()
     if (double_flag)
     {
         fft_double->cleanFFT();
+        if (fft_double_cpu != nullptr)
+        {
+            fft_double_cpu->cleanFFT();
+        }
     }
     if (float_flag)
     {
         fft_float->cleanFFT();
+        if (fft_float_cpu != nullptr)
+        {
+            fft_float_cpu->cleanFFT();
+        }
     }
 }
 void FFT_Bundle::clear()
@@ -141,10 +173,18 @@ void FFT_Bundle::clear()
     if (double_flag)
     {
         fft_double->clear();
+        if (fft_double_cpu != nullptr)
+        {
+            fft_double_cpu->clear();
+        }
     }
     if (float_flag)
     {
         fft_float->clear();
+        if (fft_float_cpu != nullptr)
+        {
+            fft_float_cpu->clear();
+        }
     }
 }
 
@@ -165,67 +205,152 @@ void FFT_Bundle::resource_handler(const int flag) const
 template <>
 void FFT_Bundle::fftxyfor(std::complex<float>* in, std::complex<float>* out) const
 {
-    fft_float->fftxyfor(in, out);
+    // Use CPU FFT for xy operations (required for non-templated CPU code paths)
+    if (fft_float_cpu != nullptr)
+    {
+        fft_float_cpu->fftxyfor(in, out);
+    }
+    else
+    {
+        fft_float->fftxyfor(in, out);
+    }
 }
 template <>
 void FFT_Bundle::fftxyfor(std::complex<double>* in, std::complex<double>* out) const
 {
-    fft_double->fftxyfor(in, out);
+    if (fft_double_cpu != nullptr)
+    {
+        fft_double_cpu->fftxyfor(in, out);
+    }
+    else
+    {
+        fft_double->fftxyfor(in, out);
+    }
 }
 
 template <>
 void FFT_Bundle::fftzfor(std::complex<float>* in, std::complex<float>* out) const
 {
-    fft_float->fftzfor(in, out);
+    if (fft_float_cpu != nullptr)
+    {
+        fft_float_cpu->fftzfor(in, out);
+    }
+    else
+    {
+        fft_float->fftzfor(in, out);
+    }
 }
 template <>
 void FFT_Bundle::fftzfor(std::complex<double>* in, std::complex<double>* out) const
 {
-    fft_double->fftzfor(in, out);
+    if (fft_double_cpu != nullptr)
+    {
+        fft_double_cpu->fftzfor(in, out);
+    }
+    else
+    {
+        fft_double->fftzfor(in, out);
+    }
 }
 
 template <>
 void FFT_Bundle::fftxybac(std::complex<float>* in, std::complex<float>* out) const
 {
-    fft_float->fftxybac(in, out);
+    if (fft_float_cpu != nullptr)
+    {
+        fft_float_cpu->fftxybac(in, out);
+    }
+    else
+    {
+        fft_float->fftxybac(in, out);
+    }
 }
 template <>
 void FFT_Bundle::fftxybac(std::complex<double>* in, std::complex<double>* out) const
 {
-    fft_double->fftxybac(in, out);
+    if (fft_double_cpu != nullptr)
+    {
+        fft_double_cpu->fftxybac(in, out);
+    }
+    else
+    {
+        fft_double->fftxybac(in, out);
+    }
 }
 
 template <>
 void FFT_Bundle::fftzbac(std::complex<float>* in, std::complex<float>* out) const
 {
-    fft_float->fftzbac(in, out);
+    if (fft_float_cpu != nullptr)
+    {
+        fft_float_cpu->fftzbac(in, out);
+    }
+    else
+    {
+        fft_float->fftzbac(in, out);
+    }
 }
 template <>
 void FFT_Bundle::fftzbac(std::complex<double>* in, std::complex<double>* out) const
 {
-    fft_double->fftzbac(in, out);
+    if (fft_double_cpu != nullptr)
+    {
+        fft_double_cpu->fftzbac(in, out);
+    }
+    else
+    {
+        fft_double->fftzbac(in, out);
+    }
 }
 
 template <>
 void FFT_Bundle::fftxyr2c(float* in, std::complex<float>* out) const
 {
-    fft_float->fftxyr2c(in, out);
+    if (fft_float_cpu != nullptr)
+    {
+        fft_float_cpu->fftxyr2c(in, out);
+    }
+    else
+    {
+        fft_float->fftxyr2c(in, out);
+    }
 }
 template <>
 void FFT_Bundle::fftxyr2c(double* in, std::complex<double>* out) const
 {
-    fft_double->fftxyr2c(in, out);
+    if (fft_double_cpu != nullptr)
+    {
+        fft_double_cpu->fftxyr2c(in, out);
+    }
+    else
+    {
+        fft_double->fftxyr2c(in, out);
+    }
 }
 
 template <>
 void FFT_Bundle::fftxyc2r(std::complex<float>* in, float* out) const
 {
-    fft_float->fftxyc2r(in, out);
+    if (fft_float_cpu != nullptr)
+    {
+        fft_float_cpu->fftxyc2r(in, out);
+    }
+    else
+    {
+        fft_float->fftxyc2r(in, out);
+    }
 }
 template <>
 void FFT_Bundle::fftxyc2r(std::complex<double>* in, double* out) const
 {
-    fft_double->fftxyc2r(in, out);
+    if (fft_double_cpu != nullptr)
+    {
+        fft_double_cpu->fftxyc2r(in, out);
+    }
+    else
+    {
+        fft_double->fftxyc2r(in, out);
+    }
 }
 
 template <>
@@ -254,40 +379,65 @@ void FFT_Bundle::fft3D_backward(std::complex<double>* in,
     fft_double->fft3D_backward(in, out);
 }
 
-// access the real space data
+// access the real space data - always use CPU FFT for non-templated code paths
 template <>
 float* FFT_Bundle::get_rspace_data() const
 {
+    if (fft_float_cpu != nullptr)
+    {
+        return fft_float_cpu->get_rspace_data();
+    }
     return fft_float->get_rspace_data();
 }
 template <>
 double* FFT_Bundle::get_rspace_data() const
 {
+    if (fft_double_cpu != nullptr)
+    {
+        return fft_double_cpu->get_rspace_data();
+    }
     return fft_double->get_rspace_data();
 }
 
 template <>
 std::complex<float>* FFT_Bundle::get_auxr_data() const
 {
+    if (fft_float_cpu != nullptr)
+    {
+        return fft_float_cpu->get_auxr_data();
+    }
     return fft_float->get_auxr_data();
 }
 template <>
 std::complex<double>* FFT_Bundle::get_auxr_data() const
 {
+    if (fft_double_cpu != nullptr)
+    {
+        return fft_double_cpu->get_auxr_data();
+    }
     return fft_double->get_auxr_data();
 }
 
 template <>
 std::complex<float>* FFT_Bundle::get_auxg_data() const
 {
+    if (fft_float_cpu != nullptr)
+    {
+        return fft_float_cpu->get_auxg_data();
+    }
     return fft_float->get_auxg_data();
 }
 template <>
 std::complex<double>* FFT_Bundle::get_auxg_data() const
 {
+    if (fft_double_cpu != nullptr)
+    {
+        return fft_double_cpu->get_auxg_data();
+    }
     return fft_double->get_auxg_data();
 }
 
+// get_auxr_3d_data - uses primary (GPU) FFT for GPU operations
 template <>
 std::complex<float>* FFT_Bundle::get_auxr_3d_data() const
 {

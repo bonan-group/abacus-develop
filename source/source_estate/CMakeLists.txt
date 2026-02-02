@@ -24,6 +24,7 @@ list(APPEND objects
     module_charge/chgmixing.cpp
     module_charge/gint_precision_controller.cpp
     module_charge/charge.cpp
+    module_charge/charge_device.cpp
     module_charge/charge_init.cpp
     module_charge/charge_mpi.cpp
     module_charge/charge_extra.cpp
@@ -32,6 +33,7 @@ list(APPEND objects
     module_charge/charge_mixing_residual.cpp
     module_charge/charge_mixing_preconditioner.cpp
     module_charge/charge_mixing_rho.cpp
+    module_charge/charge_mixing_rho_gpu.cpp
     module_charge/charge_mixing_uspp.cpp
     module_charge/symmetry_rho.cpp
     module_charge/symmetry_rhog.cpp

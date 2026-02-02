@@ -2,6 +2,8 @@
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
 #include "source_hamilt/module_xc/xc_functional.h"
+#include "source_base/module_device/nvtx_helper.h"
+#include "source_base/module_device/types.h"
 
 void Charge_Mixing::mix_rho_recip(Charge* chr)
 {
@@ -10,6 +12,31 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 
     const int nspin = PARAM.inp.nspin;
     assert(nspin==1 || nspin==2 || nspin==4);
+
+// Full GPU-resident mixing path
+// Re-enabled after fixing the complex vector_axpy_op aliasing bug
+#if __CUDA || __ROCM
+    // Full GPU-resident mixing path for nspin=1 with Broyden or Pulay mixing
+    // This path keeps all mixing history and operations on GPU
+    if (device_ == "gpu" && chr->get_device() == "gpu" &&
+        nspin == 1 && (mixing_mode == "broyden" || mixing_mode == "pulay") && !PARAM.globalv.double_grid)
+    {
+        // Debug output to verify GPU mixing path is used
+        static bool first_call = true;
+        if (first_call)
+        {
+            GlobalV::ofs_running << " DEBUG: Using full GPU-resident " << mixing_mode << " mixing path" << std::endl;
+            first_call = false;
+        }
+
+        // Restore timer context for GPU path
+        ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip");
+        NVTX_RANGE_POP();
+
+        mix_rho_recip_gpu(chr);
+        return;
+    }
+#endif
 
     std::complex<double>* rhog_in = nullptr;
     std::complex<double>* rhog_out = nullptr;
@@ -253,11 +280,33 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
     }
     else
     {
-        for (int is = 0; is < nspin; is++)
+#if __CUDA || __ROCM
+        // GPU path: use GPU FFT when device="gpu"
+        if (device_ == "gpu" && chr->get_device() == "gpu")
         {
-            // use rhodpw for double_grid
-            // rhodpw is the same as rhopw for ! PARAM.globalv.double_grid
-            this->rhodpw->recip_to_real<std::complex<double>,double,base_device::DEVICE_CPU>(chr->rhog[is], chr->rho[is]);
+            // Sync rhog to GPU (mixing was done on CPU, result in chr->rhog[is])
+            chr->sync_rhog_to_device<base_device::DEVICE_GPU>();
+
+            for (int is = 0; is < nspin; is++)
+            {
+                // GPU FFT: rhog -> rho
+                // use rhodpw for double_grid (rhodpw is same as rhopw for ! PARAM.globalv.double_grid)
+                this->rhodpw->recip_to_real<std::complex<double>, double, base_device::DEVICE_GPU>(
+                    chr->get_rhog_d(is), chr->get_rho_d(is));
+            }
+            // Sync rho back to CPU for subsequent operations
+            chr->sync_rho_to_host<base_device::DEVICE_GPU>();
+        }
+        else
+#endif
+        {
+            // CPU path (existing code)
+            for (int is = 0; is < nspin; is++)
+            {
+                // use rhodpw for double_grid
+                // rhodpw is the same as rhopw for ! PARAM.globalv.double_grid
+                this->rhodpw->recip_to_real<std::complex<double>,double,base_device::DEVICE_CPU>(chr->rhog[is], chr->rho[is]);
+            }
         }
     }
     // For kinetic energy density
