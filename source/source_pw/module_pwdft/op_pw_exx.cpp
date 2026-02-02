@@ -252,7 +252,7 @@ void OperatorEXXPW<T, Device>::act(const int nbands,
     else
     {
         // Try batch FFT first, fallback to sequential if unavailable or disabled
-        if (PARAM.inp.exx_batch_fft && wfcpw->fft_bundle.is_batch_fft_available<Real>())
+        if (PARAM.inp.exx_batch_fft_size > 1 && wfcpw->fft_bundle.is_batch_fft_available<Real>())
         {
             act_op_batch(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
         }
@@ -915,7 +915,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy(psi::Psi<T, Device> *psi_) const
     else
     {
         // Try batch FFT version if both enabled in INPUT and available at compile time
-        if (PARAM.inp.exx_batch_fft && wfcpw->fft_bundle.is_batch_fft_available<Real>())
+        if (PARAM.inp.exx_batch_fft_size > 1 && wfcpw->fft_bundle.is_batch_fft_available<Real>())
         {
             return cal_exx_energy_batch(psi_);
         }

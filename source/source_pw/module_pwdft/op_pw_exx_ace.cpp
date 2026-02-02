@@ -213,7 +213,7 @@ void OperatorEXXPW<T, Device>::construct_ace() const
             else
             {
                 *ik_ = ik;
-                if (PARAM.inp.exx_batch_fft && wfcpw->fft_bundle.is_batch_fft_available<Real>())
+                if (PARAM.inp.exx_batch_fft_size > 1 && wfcpw->fft_bundle.is_batch_fft_available<Real>())
                 {
                     act_op_batch(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false);
                 }

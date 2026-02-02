@@ -237,7 +237,7 @@ void PW_Basis_K::setuptransform()
     this->fft_bundle.setupFFT();
 
     // Initialize batch FFT size from input parameters
-    this->fft_bundle.init_batch_size(PARAM.inp.batch_fft_size);
+    this->fft_bundle.init_batch_size(PARAM.inp.exx_batch_fft_size);
 
     // Setup batch FFT for GPU acceleration (automatically skipped if not GPU or not available)
     this->fft_bundle.setupBatchFFT();

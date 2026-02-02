@@ -546,21 +546,9 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
-        Input_Item item("exx_batch_fft");
-        item.annotation = "whether to use batch FFT for EXX operator (GPU only, automatic fallback on CPU)";
-        read_sync_bool(input.exx_batch_fft);
-        this->add_item(item);
-    }
-    {
-        Input_Item item("batch_fft_size");
-        item.annotation = "batch size for batch FFT (1-128, default: 8)";
-        read_sync_int(input.batch_fft_size);
-        item.check_value = [](const Input_Item& item, const Parameter& param) {
-            if (param.input.batch_fft_size < 1 || param.input.batch_fft_size > 128)
-            {
-                ModuleBase::WARNING_QUIT("ReadInput", "batch_fft_size must be in range [1, 128]");
-            }
-        };
+        Input_Item item("exx_batch_fft_size");
+        item.annotation = "batch size for batch FFT (typically 8-256, default: 1)";
+        read_sync_int(input.exx_batch_fft_size);
         this->add_item(item);
     }
     {

@@ -80,6 +80,7 @@ void PW_Basis::setuptransform()
         this->fft_bundle.initfft(this->nx,this->ny,this->nz,this->liy,this->riy,this->nst,this->nplane,this->poolnproc,this->gamma_only, this->xprime);
     }
     this->fft_bundle.setupFFT();
+    this->fft_bundle.setupBatchFFT();
 
     // Note: Batch FFT setup is NOT called here for PW_Basis (charge density).
     // Batch FFT is only useful for wavefunction operations (PW_Basis_K) where

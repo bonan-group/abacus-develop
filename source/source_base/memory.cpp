@@ -344,11 +344,13 @@ void Memory::record_gpu
 void Memory::print(const int find)
 {
 	// Check if output stream is open before writing (may not be initialized during early setup)
-	if (GlobalV::ofs_running.is_open())
-	{
-		GlobalV::ofs_running <<"\n Warning_Memory_Consuming allocated: "
-		<<" "<<name[find]<<" "<<consume[find]<<" MB" << std::endl;
-	}
+	// 2026-02-02 seems to be giving problem during initialization as writing to ofs_running gives an segmentation fault
+	// , disable for now Bonan Zhu
+	// if (GlobalV::ofs_running.is_open() && GlobalV::ofs_running.good())
+	// {
+	// 	GlobalV::ofs_running <<"\n Warning_Memory_Consuming allocated: "
+	// 	<<" "<<name[find]<<" "<<consume[find]<<" MB" << std::endl;
+	// }
 	return;
 }
 

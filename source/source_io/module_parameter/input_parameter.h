@@ -659,8 +659,7 @@ struct Input_para
     // EXX for planewave basis, rhx0820 2025-03-10
     bool exxace = true; // exxace, exact exchange for planewave basis, https://doi.org/10.1021/acs.jctc.6b00092
     bool exx_gamma_extrapolation = true; // gamma point extrapolation for exx, https://doi.org/10.1103/PhysRevB.79.205114
-    bool exx_batch_fft = true; // use batch FFT for EXX operator (GPU only, automatic fallback to sequential on CPU)
-    int batch_fft_size = 8; // batch size for batch FFT (1-128, default: 8)
+    int  exx_batch_fft_size = 1; // batch size for batch FFT (1-128, default: 8)
     std::string exx_thr_type = "density"; // threshold type for exx outer loop, energy or density
     double exx_ene_thr = 1e-5; // threshold for exx outer loop when exx_thr_type = energy
     double ecutexx = 0.0; // energy cutoff for exx calculation, Ry
