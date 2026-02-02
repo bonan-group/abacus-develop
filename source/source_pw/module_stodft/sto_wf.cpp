@@ -1,4 +1,5 @@
 #include "sto_wf.h"
+#include "source_base/parallel_comm.h" // use POOL_WORLD
 
 #include "source_base/memory.h"
 #include "source_io/module_parameter/parameter.h"
@@ -6,10 +7,7 @@
 #include <cassert>
 #include <ctime>
 
-//---------Temporary------------------------------------
 #include "source_base/global_function.h"
-#include "source_pw/module_pwdft/global.h"
-//------------------------------------------------------
 
 template <typename T, typename Device>
 Stochastic_WF<T, Device>::Stochastic_WF()
@@ -168,7 +166,7 @@ void Stochastic_WF<T, Device>::init_com_orbitals()
     const bool firstrankmore = false;
     const int npwx = this->npwx;
     const int nks = this->nks;
-    int igroup;
+    int igroup = 0;
     // former processor calculate more bands
     if (firstrankmore)
     {
@@ -221,7 +219,7 @@ void Stochastic_WF<T, Device>::init_com_orbitals()
         // give value to orbitals in one parallel group one by one.
         for (int ichi = 0; ichi < nchipk; ++ichi)
         {
-            int ig;
+            int ig = 0;
             if (igroup < re)
             {
                 // It has more nchip.

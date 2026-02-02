@@ -245,7 +245,7 @@ void kvec_mpi_k(K_Vectors& kv)
     ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "Number of k-points in this process", kv.nks);
     int nks_minimum = kv.nks;
 
-    Parallel_Reduce::gather_min_int_all(GlobalV::NPROC, nks_minimum);
+    Parallel_Reduce::reduce_min(nks_minimum);
 
     if (nks_minimum == 0)
     {
@@ -312,7 +312,7 @@ void kvec_mpi_k(K_Vectors& kv)
         {
             int starsize = kv.kstars[ikibz].size();
             Parallel_Common::bcast_int(starsize);
-            GlobalV::ofs_running << "starsize: " << starsize << std::endl;
+            //GlobalV::ofs_running << "starsize: " << starsize << std::endl;
             auto ks = kv.kstars[ikibz].begin();
             for (int ik = 0; ik < starsize; ++ik)
             {
@@ -328,8 +328,8 @@ void kvec_mpi_k(K_Vectors& kv)
                 Parallel_Common::bcast_double(ks_vec.x);
                 Parallel_Common::bcast_double(ks_vec.y);
                 Parallel_Common::bcast_double(ks_vec.z);
-                GlobalV::ofs_running << "isym: " << isym << " ks_vec: " << ks_vec.x << " " << ks_vec.y << " "
-                                     << ks_vec.z << std::endl;
+                //GlobalV::ofs_running << "isym: " << isym << " ks_vec: " << ks_vec.x << " " << ks_vec.y << " "
+                //                     << ks_vec.z << std::endl;
                 if (GlobalV::MY_RANK != 0)
                 {
                     kv.kstars[ikibz].insert(std::make_pair(isym, ks_vec));
@@ -572,7 +572,7 @@ void kvec_ibz_kpoint(K_Vectors& kv,
     std::vector<int> ibz2bz(kv.get_nkstot());
 
     // nkstot is the total input k-points number.
-    const double weight = 1.0 / static_cast<double>(kv.get_nkstot());
+    double weight = 1.0 / static_cast<double>(kv.get_nkstot());
 
     ModuleBase::Vector3<double> kvec_rot;
     ModuleBase::Vector3<double> kvec_rot_k;
@@ -609,6 +609,8 @@ void kvec_ibz_kpoint(K_Vectors& kv,
     // search in all k-poins.
     for (int i = 0; i < kv.get_nkstot(); ++i)
     {
+        if (!kv.get_is_mp()) { weight = kv.wk[i]; } // use the input weight, instead of 1/nkstot
+
         // restrict to [0, 1)
         restrict_kpt(kv.kvec_d[i]);
 

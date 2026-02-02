@@ -6,7 +6,6 @@
 #include "source_cell/unitcell.h"
 #include "source_estate/occupy.h"
 #include "source_hamilt/module_surchem/surchem.h"
-#include "source_pw/module_pwdft/global.h"
 #include "source_io/berryphase.h"
 #include "source_io/module_parameter/parameter.h"
 #include "source_relax/ions_move_basic.h"
@@ -14,6 +13,8 @@
 
 #include <algorithm>
 
+#include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
+#include "source_hamilt/module_xc/xc_functional.h" // use XC_Functional
 #ifdef __EXX
 #include "source_lcao/module_ri/exx_abfs-jle.h"
 #endif
@@ -44,6 +45,10 @@
 #include "source_md/md_func.h"
 
 #include "source_lcao/module_dftu/dftu.h" // mohan add 20251107
+
+#include "source_io/restart.h"
+#include "source_relax/bfgs_basic.h"
+#include "source_relax/ions_move_cg.h"
 
 #ifdef __LCAO
 std::vector<double> Input_Conv::convert_units(std::string params, double c) {

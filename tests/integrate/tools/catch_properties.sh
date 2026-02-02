@@ -3,6 +3,7 @@
 # mohan add 2025-05-03
 # this compare script is used in different integrate tests
 COMPARE_SCRIPT="../../integrate/tools/CompareFile.py"
+#COMPARE_SCRIPT="../../integrate/tools/compare_file.py"
 SUM_CUBE_EXE="../../integrate/tools/sum_cube"
 
 
@@ -77,6 +78,7 @@ out_pband=$(get_input_key_value "out_proj_band" "INPUT")
 toW90=$(get_input_key_value "towannier90" "INPUT")
 has_mat_r=$(get_input_key_value "out_mat_r" "INPUT")
 has_mat_t=$(get_input_key_value "out_mat_t" "INPUT") 
+has_mat_syns=$(get_input_key_value "cal_syns" "INPUT")
 has_mat_dh=$(get_input_key_value "out_mat_dh" "INPUT")
 has_scan=$(get_input_key_value "dft_functional" "INPUT")
 out_chg=$(get_input_key_value "out_chg" "INPUT") 
@@ -256,27 +258,83 @@ if ! test -z "$has_band"  && [  $has_band == 1 ]; then
 fi
 
 
+
 #--------------------------------
 # Hamiltonian and overlap matrix
 # echo $has_hs
 #--------------------------------
-if ! test -z "$has_hs"  && [  $has_hs == 1 ]; then
-	if ! test -z "$gamma_only"  && [ $gamma_only == 1 ]; then
-                href=hk_nao.txt.ref
-                hcal=OUT.autotest/hk_nao.txt
-                sref=sk_nao.txt.ref
-                scal=OUT.autotest/sk_nao.txt
-        else # multiple k-points
-                href=hk2_nao.txt.ref
-                hcal=OUT.autotest/hk2_nao.txt
-                sref=sk2_nao.txt.ref
-                scal=OUT.autotest/sk2_nao.txt
+if ! test -z "$has_hs"  && [ $has_hs == 1 ]; then
+    if ! test -z "$gamma_only"  && [ $gamma_only == 1 ]; then
+        # ========== Γ-point (single k-point) calculation ==========
+        if ! test -z "$nspin" && [ $nspin == 2 ]; then
+            # nspin=2 (spin-polarized): compare hks1 + hks2 Hamiltonian + sk overlap matrix
+            h1ref=hks1_nao.txt.ref
+            h1cal=OUT.autotest/hks1_nao.txt
+            h2ref=hks2_nao.txt.ref
+            h2cal=OUT.autotest/hks2_nao.txt
+            sref=sk_nao.txt.ref
+            scal=OUT.autotest/sk_nao.txt
+            # Compare Hamiltonian matrix for spin 1
+            python3 $COMPARE_SCRIPT $h1ref $h1cal 6
+            echo "CompareH1_pass $?" >>$1
+            # Compare Hamiltonian matrix for spin 2
+            python3 $COMPARE_SCRIPT $h2ref $h2cal 6
+            echo "CompareH2_pass $?" >>$1
+            # Compare overlap matrix
+            python3 $COMPARE_SCRIPT $sref $scal 8
+            echo "CompareS_pass $?" >>$1
+        elif ! test -z "$nspin" && [ $nspin == 4 ]; then
+            # nspin=4 : do nothing, only matching condition without any operation
+            true
+        else
+            # nspin=1 (non-spin-polarized, default case): compare single hk + sk matrix set
+            href=hk_nao.txt.ref
+            hcal=OUT.autotest/hk_nao.txt
+            sref=sk_nao.txt.ref
+            scal=OUT.autotest/sk_nao.txt
+            # Compare Hamiltonian matrix
+            python3 $COMPARE_SCRIPT $href $hcal 6
+            echo "CompareH_pass $?" >>$1
+            # Compare overlap matrix
+            python3 $COMPARE_SCRIPT $sref $scal 8
+            echo "CompareS_pass $?" >>$1
         fi
-
-        python3 $COMPARE_SCRIPT $href $hcal 6
-    echo "CompareH_pass $?" >>$1
-    python3 $COMPARE_SCRIPT $sref $scal 8
-    echo "CompareS_pass $?" >>$1
+    else
+        # ========== Multiple k-points calculation ==========
+        if ! test -z "$nspin" && [ $nspin == 2 ]; then
+            # nspin=2 (spin-polarized): compare hks1_2 + hks2_2 Hamiltonian + sk2 overlap matrix
+            h1ref=hks1_2_nao.txt.ref
+            h1cal=OUT.autotest/hks1_2_nao.txt
+            h2ref=hks2_2_nao.txt.ref
+            h2cal=OUT.autotest/hks2_2_nao.txt
+            sref=sk2_nao.txt.ref
+            scal=OUT.autotest/sk2_nao.txt
+            # Compare Hamiltonian matrix for spin 1
+            python3 $COMPARE_SCRIPT $h1ref $h1cal 6
+            echo "CompareH1_pass $?" >>$1
+            # Compare Hamiltonian matrix for spin 2
+            python3 $COMPARE_SCRIPT $h2ref $h2cal 6
+            echo "CompareH2_pass $?" >>$1
+            # Compare overlap matrix
+            python3 $COMPARE_SCRIPT $sref $scal 8
+            echo "CompareS_pass $?" >>$1
+        elif ! test -z "$nspin" && [ $nspin == 4 ]; then
+            # nspin=4 : do nothing, only matching condition without any operation
+            true
+        else
+            # nspin=1 (non-spin-polarized, default case): compare single hk2 + sk2 matrix set
+            href=hk2_nao.txt.ref
+            hcal=OUT.autotest/hk2_nao.txt
+            sref=sk2_nao.txt.ref
+            scal=OUT.autotest/sk2_nao.txt
+            # Compare Hamiltonian matrix
+            python3 $COMPARE_SCRIPT $href $hcal 6
+            echo "CompareH_pass $?" >>$1
+            # Compare overlap matrix
+            python3 $COMPARE_SCRIPT $sref $scal 8
+            echo "CompareS_pass $?" >>$1
+        fi
+    fi
 fi
 
 #--------------------------------
@@ -360,6 +418,15 @@ if ! test -z "$has_mat_t"  && [  $has_mat_t == 1 ]; then
 fi
 
 #-----------------------------------
+#  Asynchronous overlap matrix for Hefei-NAMD
+#-----------------------------------
+#echo $has_mat_syns
+if ! test -z "$has_mat_syns"  && [  $has_mat_syns == 1 ]; then
+    python3 $COMPARE_SCRIPT syns_nao.csr.ref OUT.autotest/syns_nao.csr 8
+    echo "CompareSYNS_pass $?" >>$1
+fi
+
+#-----------------------------------
 #  <psi_i0 | dH | psi_jR> matrix
 #-----------------------------------
 #echo $has_mat_dh
@@ -396,7 +463,7 @@ fi
 # echo $has_ldos
 #---------------------------------------
 if ! test -z "$has_ldos"  && [  $has_ldos == 1 ]; then
-    stm_bias=$(get_input_key_value "stm_bias" "OUT.autotest/INPUT")
+    stm_bias=$(get_input_key_value "stm_bias" "OUT.autotest/INPUT.info")
     python3 $COMPARE_SCRIPT LDOS.cube.ref OUT.autotest/LDOS_"$stm_bias"eV.cube 8
     echo "LDOS.cube_pass $?" >> $1
 fi
@@ -598,8 +665,8 @@ fi
 # check currents in rt-TDDFT 
 #--------------------------------------------
 if ! test -z "$out_current" && [ $out_current ]; then
-	current1ref=refcurrent_total.txt
-	current1cal=OUT.autotest/current_total.txt
+	current1ref=current_tot.txt.ref
+	current1cal=OUT.autotest/current_tot.txt
 	python3 $COMPARE_SCRIPT $current1ref $current1cal 10
 	echo "CompareCurrent_pass $?" >>$1
 fi

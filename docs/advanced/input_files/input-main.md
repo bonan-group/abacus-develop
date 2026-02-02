@@ -557,6 +557,7 @@ These variables are used to control general system parameters.
     - If ([dft_fuctional](#dft_functional)==hse/hf/pbe0/scan0 or [rpa](#rpa)==True).
     - If [efield_flag](#efield_flag)==1
   - 1: else
+- **Note**: When symmetry is enabled (value 1), k-points are reduced to the irreducible Brillouin zone (IBZ). For explicit k-point lists with custom weights (see [KPT file](./kpt.md#k-point-weights-and-symmetry)), the custom weights are preserved during symmetry reduction. For Monkhorst-Pack grids, uniform weights are used.
 
 ### symmetry_prec
 
@@ -638,8 +639,10 @@ These variables are used to control general system parameters.
 - **Description**: This variable is used for both plane wave set and localized orbitals set. It indicates the type of starting density.
 
   - atomic: the density is starting from the summation of the atomic density of single atoms.
-  - file: the density will be read in from a binary file `charge-density.dat` first. If it does not exist, the charge density will be read in from cube files. Besides, when you do `nspin=1` calculation, you only need the density file chgs1.cube. However, if you do `nspin=2` calculation, you also need the density file chgs2.cube. The density file should be output with these names if you set out_chg = 1 in INPUT file.
+  - file: the density will be read in from a binary file `charge-density.dat` first. If it does not exist, the charge density will be read in from cube files. When you do `nspin=1` calculation, you only need the density file `chg.cube`. For `nspin=2 or 4` calculation, you need the density file `chgs1.cube` and `chgs2.cube` (and `chgs3.cube`, `chgs4.cube` if needed). The density file should be output with these names if you set out_chg = 1 in INPUT file.
   - wfc: the density will be calculated by wavefunctions and occupations. Wavefunctions are read in from binary files `wf*.dat` (see [out_wfc_pw](#out_wfc_pw)) while occupations are read in from file `eig.txt`.
+  - dm: the density will be calculated by real space density matrix(DMR) of LCAO base. DMR is read in from file `dmrs1_nao.csr` in directory [read_file_dir](#read_file_dir).
+  - hr: the real space Hamiltonian matrix(HR) will be read in from file `hrs1_nao.csr` in directory [read_file_dir](#read_file_dir), and DMR and charge density will be calculated from it.
   - auto: Abacus first attempts to read the density from a file; if not found, it defaults to using atomic density.
 - **Default**: atomic
 
@@ -1367,28 +1370,46 @@ Note: In new angle mixing, you should set `mixing_beta_mag >> mixing_beta`. The 
 ### lspinorb
 
 - **Type**: Boolean
-- **Description**: Whether to consider spin-orbital coupling effect in the calculation.
-  - True: Consider spin-orbital coupling effect, and `nspin` is also automatically set to 4.
-  - False: Do not consider spin-orbital coupling effect.
+- **Description**: Whether to consider spin-orbit coupling (SOC) effect in the calculation.
+  - **True**: Consider spin-orbit coupling effect. When enabled:
+    - `nspin` is automatically set to 4 (noncollinear spin representation)
+    - Symmetry is automatically disabled (SOC breaks inversion symmetry)
+    - **Requires** full-relativistic pseudopotentials with `has_so=true` in the UPF header
+  - **False**: Do not consider spin-orbit coupling effect.
+  - **Common Error**: "no soc upf used for lspinorb calculation" - ensure you are using full-relativistic pseudopotentials
+  - See [Spin-polarization and SOC](../scf/spin.md#soc-effects) for detailed usage and examples
 - **Default**: False
 
 ### noncolin
 
 - **Type**: Boolean
-- **Description**: Whether to allow non-collinear polarization, in which case the coupling between spin up and spin down will be taken into account.
-  - True: Allow non-collinear polarization, and `nspin` is also automatically set to 4.
-  - False: Do not allow non-collinear polarization.
+- **Description**: Whether to allow non-collinear magnetic moments, where magnetization can point in arbitrary directions (x, y, z components) rather than being constrained to the z-axis.
+  - **True**: Allow non-collinear polarization. When enabled:
+    - `nspin` is automatically set to 4
+    - Wave function dimension is doubled (`npol=2`), and the number of occupied states is doubled
+    - Charge density has 4 components (Pauli spin matrices: ρ_total, ρ_x, ρ_y, ρ_z)
+    - **Constraint**: Cannot be used with `gamma_only=true`
+    - Can be combined with `lspinorb=true` for SOC effects with non-collinear magnetism
+  - **False**: Do not allow non-collinear polarization (magnetization constrained to z-axis).
+  - **Relationship with lspinorb**:
+    - `noncolin=0, lspinorb=1`: SOC with z-axis magnetism only (for non-magnetic materials with SOC)
+    - `noncolin=1, lspinorb=0`: Non-collinear magnetism without SOC
+    - `noncolin=1, lspinorb=1`: Both non-collinear magnetism and SOC
+  - See [Noncollinear Spin Polarized Calculations](../scf/spin.md#noncollinear-spin-polarized-calculations) for usage examples
 - **Default**: False
 
 ### soc_lambda
 
 - **Type**: Real
-- **Availability**: Relevant for soc calculations.
-- **Description**: Sometimes, for some real materials, both scalar-relativistic and full-relativistic can not describe the exact spin-orbit coupling. Artificial modulation may help in such cases.
+- **Availability**: Only works when `lspinorb=true`
+- **Description**: Modulates the strength of spin-orbit coupling effect. Sometimes, for some real materials, both scalar-relativistic and full-relativistic pseudopotentials cannot describe the exact spin-orbit coupling. Artificial modulation may help in such cases.
 
-  `soc_lambda`, which has value range [0.0, 1.0] , is used for modulate SOC effect.
+  `soc_lambda`, which has value range [0.0, 1.0], is used to modulate SOC effect:
+  - `soc_lambda 0.0`: Scalar-relativistic case (no SOC)
+  - `soc_lambda 1.0`: Full-relativistic case (full SOC)
+  - Intermediate values: Partial-relativistic SOC (interpolation between scalar and full)
 
-  In particular, `soc_lambda 0.0` refers to scalar-relativistic case and `soc_lambda 1.0` refers to full-relativistic case.
+  **Use case**: When experimental or high-level theoretical results suggest that the SOC effect is weaker or stronger than what full-relativistic pseudopotentials predict, you can adjust this parameter to match the target behavior.
 - **Default**: 1.0
 
 ### dfthalf_type
@@ -1509,27 +1530,45 @@ These variables are used to control the geometry relaxation.
 ### relax_method
 
 - **Type**: Vector of string
-- **Description**: The methods to do geometry optimization.
-  the first element:
-  - cg: using the conjugate gradient (CG) algorithm. Note that there are two implementations of the conjugate gradient (CG) method, see [relax_new](#relax_new).
-  - bfgs : using the Broyden–Fletcher–Goldfarb–Shanno (BFGS) algorithm.
-  - lbfgs: using the Limited-memory Broyden–Fletcher–Goldfarb–Shanno (LBFGS) algorithm.
-  - cg_bfgs: using the CG method for the initial steps, and switching to BFGS method when the force convergence is smaller than [relax_cg_thr](#relax_cg_thr).
-  - sd: using the steepest descent (SD) algorithm.
-  - fire: the Fast Inertial Relaxation Engine method (FIRE), a kind of molecular-dynamics-based relaxation algorithm, is implemented in the molecular dynamics (MD) module. The algorithm can be used by setting [calculation](#calculation) to `md` and [md_type](#md_type) to `fire`. Also ionic velocities should be set in this case. See [fire](../md.md#fire) for more details.
+- **Description**: The methods to do geometry optimization. The available algorithms depend on the [relax_new](#relax_new) setting.
 
-  the second element:
-  when the first element is bfgs, if the second parameter is 1, it indicates the use of the new BFGS algorithm; if the second parameter is not 1, it indicates the use of the old BFGS algorithm.
-- **Default**: cg 1
-- **Note**:In the 3.10-LTS version, the type of this parameter is std::string. It can be set to "cg","bfgs","cg_bfgs","bfgs_trad","lbfgs","sd","fire".
+  **First element** (algorithm selection):
+  - `cg`: Conjugate gradient (CG) algorithm. Available for both `relax_new = True` (default, simultaneous optimization) and `relax_new = False` (nested optimization). See [relax_new](#relax_new) for implementation details.
+  - `bfgs`: Broyden–Fletcher–Goldfarb–Shanno (BFGS) quasi-Newton algorithm. **Only available when `relax_new = False`**.
+  - `lbfgs`: Limited-memory BFGS algorithm, suitable for large systems. **Only available when `relax_new = False`**.
+  - `cg_bfgs`: Mixed method starting with CG and switching to BFGS when force convergence reaches [relax_cg_thr](#relax_cg_thr). **Only available when `relax_new = False`**.
+  - `sd`: Steepest descent algorithm. **Only available when `relax_new = False`**. Not recommended for production use.
+  - `fire`: Fast Inertial Relaxation Engine method, a molecular-dynamics-based relaxation algorithm. Use by setting [calculation](#calculation) to `md` and [md_type](#md_type) to `fire`. Ionic velocities must be set in STRU file. See [fire](../md.md#fire) for details.
+
+  **Second element** (BFGS variant, only when first element is `bfgs`):
+  - `1`: Traditional BFGS that updates the Hessian matrix B and then inverts it.
+  - `2` or omitted: Default BFGS that directly updates the inverse Hessian (recommended).
+
+- **Default**: `cg 1`
+- **Note**: In the 3.10-LTS version, the type of this parameter is std::string. It can be set to "cg", "bfgs", "cg_bfgs", "bfgs_trad", "lbfgs", "sd", "fire".
 
 ### relax_new
 
 - **Type**: Boolean
-- **Description**: At around the end of 2022 we made a new implementation of the Conjugate Gradient (CG) method for `relax` and `cell-relax` calculations. But the old implementation was also kept.
-  - True: use the new implementation of CG method for `relax` and `cell-relax` calculations.
-  - False: use the old implementation of CG method for `relax` and `cell-relax` calculations.
+- **Description**: Controls which implementation of geometry relaxation to use. At the end of 2022, a new implementation of the Conjugate Gradient (CG) method was introduced for `relax` and `cell-relax` calculations, while the old implementation was kept for backward compatibility.
+
+  - **True** (default): Use the new CG implementation with the following features:
+    - Simultaneous optimization of ionic positions and cell parameters (for `cell-relax`)
+    - Line search algorithm for step size determination
+    - Only CG algorithm is available (`relax_method` must be `cg`)
+    - Supports advanced cell constraints: `fixed_axes = "shape"`, `"volume"`, `"a"`, `"b"`, `"c"`, etc.
+    - Supports `fixed_ibrav` to maintain lattice type
+    - More efficient for variable-cell relaxation
+    - Step size controlled by [relax_scale_force](#relax_scale_force)
+
+  - **False**: Use the old implementation with the following features:
+    - Nested optimization procedure: ionic positions optimized first, then cell parameters (for `cell-relax`)
+    - Multiple algorithms available: `cg`, `bfgs`, `lbfgs`, `sd`, `cg_bfgs`
+    - Limited cell constraints: only `fixed_axes = "volume"` is supported
+    - Traditional approach with separate ionic and cell optimization steps
+
 - **Default**: True
+- **Recommendation**: Use `relax_new = True` (default) for most cases, especially for `cell-relax` calculations. Use `relax_new = False` only if you need BFGS/LBFGS algorithms or for reproducing old results.
 
 ### relax_scale_force
 
@@ -1547,7 +1586,8 @@ These variables are used to control the geometry relaxation.
 ### relax_cg_thr
 
 - **Type**: Real
-- **Description**: When move-method is set to `cg_bfgs`, a mixed algorithm of conjugate gradient (CG) method and Broyden–Fletcher–Goldfarb–Shanno (BFGS) method is used. The ions first move according to CG method, then switched to BFGS method when the maximum of force on atoms is reduced below the CG force threshold, which is set by this parameter.
+- **Availability**: Only used when `relax_new = False` and `relax_method = cg_bfgs`
+- **Description**: When `relax_method` is set to `cg_bfgs`, a mixed algorithm of conjugate gradient (CG) and Broyden–Fletcher–Goldfarb–Shanno (BFGS) is used. The ions first move according to the CG method, then switch to the BFGS method when the maximum force on atoms is reduced below this threshold.
 - **Default**: 0.5
 - **Unit**: eV/Angstrom
 
@@ -1583,33 +1623,38 @@ These variables are used to control the geometry relaxation.
 ### relax_bfgs_w1
 
 - **Type**: Real
-- **Description**: Controls the Wolfe condition for Broyden–Fletcher–Goldfarb–Shanno (BFGS) algorithm used in geometry relaxation. You can look into the paper Phys.Chem.Chem.Phys.,2000,2,2177 for more information.
+- **Availability**: Only used when `relax_new = False` and `relax_method` is `bfgs` or `cg_bfgs`
+- **Description**: Controls the Wolfe condition for the Broyden–Fletcher–Goldfarb–Shanno (BFGS) algorithm used in geometry relaxation. This parameter sets the sufficient decrease condition (c1 in Wolfe conditions). For more information, see Phys. Chem. Chem. Phys., 2000, 2, 2177.
 - **Default**: 0.01
 
 ### relax_bfgs_w2
 
 - **Type**: Real
-- **Description**: Controls the Wolfe condition for Broyden–Fletcher–Goldfarb–Shanno (BFGS) algorithm used in geometry relaxation. You can look into the paper Phys.Chem.Chem.Phys.,2000,2,2177 for more information.
+- **Availability**: Only used when `relax_new = False` and `relax_method` is `bfgs` or `cg_bfgs`
+- **Description**: Controls the Wolfe condition for the Broyden–Fletcher–Goldfarb–Shanno (BFGS) algorithm used in geometry relaxation. This parameter sets the curvature condition (c2 in Wolfe conditions). For more information, see Phys. Chem. Chem. Phys., 2000, 2, 2177.
 - **Default**: 0.5
 
 ### relax_bfgs_rmax
 
 - **Type**: Real
-- **Description**: For geometry optimization. It stands for the maximal movement of all the atoms. The sum of the movements from all atoms can be increased during the optimization steps. However, it can not be larger than `relax_bfgs_rmax`. 
-- **Unit**: Bohr
+- **Availability**: Only used when `relax_new = False` and `relax_method` is `bfgs` or `cg_bfgs`
+- **Description**: Maximum allowed total displacement of all atoms during geometry optimization. The sum of atomic displacements can increase during optimization steps but cannot exceed this value.
 - **Default**: 0.8
+- **Unit**: Bohr
 
 ### relax_bfgs_rmin
 
 - **Type**: Real
-- **Description**: In old bfgs algorithm, it indicates the minimal movement of all the atoms. When the movement of all the atoms is smaller than relax_bfgs_rmin Bohr, and the force convergence is still not achieved, the calculation will break down. In the current default bfgs algorithm, this parameter is not used.
+- **Availability**: Only used when `relax_new = False` and `relax_method = bfgs 1` (traditional BFGS)
+- **Description**: Minimum allowed total displacement of all atoms. When the total atomic displacement falls below this value and force convergence is not achieved, the calculation will terminate. **Note**: This parameter is not used in the default BFGS algorithm (`relax_method = bfgs 2` or `bfgs`).
 - **Default**: 1e-5
 - **Unit**: Bohr
 
 ### relax_bfgs_init
 
 - **Type**: Real
-- **Description**: For geometry optimization. It stands for the sum of initial movements of all of the atoms.
+- **Availability**: Only used when `relax_new = False` and `relax_method` is `bfgs` or `cg_bfgs`
+- **Description**: Initial total displacement of all atoms in the first BFGS step. This sets the scale for the initial movement.
 - **Default**: 0.5
 - **Unit**: Bohr
 
@@ -1638,31 +1683,38 @@ These variables are used to control the geometry relaxation.
 ### fixed_axes
 
 - **Type**: String
-- **Availability**: Only used when `calculation` set to `cell-relax`
-- **Description**: Axes that are fixed during cell relaxation. Possible choices are:
-  - None**: default; all of the axes can relax
-  - volume**: relaxation with fixed volume
-  - shape**: fix shape but change volume (i.e. only lattice constant changes)
-  - a: fix a axis during relaxation
-  - b: fix b axis during relaxation
-  - c: fix c axis during relaxation
-  - ab: fix both a and b axes during relaxation
-  - ac: fix both a and c axes during relaxation
-  - bc: fix both b and c axes during relaxation
+- **Availability**: Only used when `calculation` is set to `cell-relax`
+- **Description**: Specifies which cell degrees of freedom are fixed during variable-cell relaxation. The available options depend on the [relax_new](#relax_new) setting:
 
-> Note : fixed_axes = "shape" and "volume" are only available for [relax_new](#relax_new) = True
+  **When `relax_new = True` (default)**, all options are available:
+  - `None`: Default; all cell parameters can relax freely
+  - `volume`: Relaxation with fixed volume (allows shape changes)
+  - `shape`: Fix shape but allow volume changes (hydrostatic pressure only)
+  - `a`: Fix the a-axis lattice vector during relaxation
+  - `b`: Fix the b-axis lattice vector during relaxation
+  - `c`: Fix the c-axis lattice vector during relaxation
+  - `ab`: Fix both a and b axes during relaxation
+  - `ac`: Fix both a and c axes during relaxation
+  - `bc`: Fix both b and c axes during relaxation
+
+  **When `relax_new = False`**, all options are now available:
+  - `None`: Default; all cell parameters can relax freely
+  - `volume`: Relaxation with fixed volume (allows shape changes). Volume is preserved by rescaling the lattice after each update.
+  - `shape`: Fix shape but allow volume changes (hydrostatic pressure only). Stress tensor is replaced with isotropic pressure.
+  - `a`, `b`, `c`, `ab`, `ac`, `bc`: Fix specific lattice vectors. Gradients for fixed vectors are set to zero.
 
 - **Default**: None
+- **Note**: For VASP users, see the [ISIF correspondence table](../opt.md#fixing-cell-parameters) in the geometry optimization documentation. Both implementations now support all constraint types.
 
 ### fixed_ibrav
 
 - **Type**: Boolean
-- **Availability**: Must be used along with [relax_new](#relax_new) set to True, and a specific [latname](#latname) must be provided
+- **Availability**: Can be used with both `relax_new = True` and `relax_new = False`. A specific [latname](#latname) must be provided.
 - **Description**:
-  - True: the lattice type will be preserved during relaxation
+  - True: the lattice type will be preserved during relaxation. The lattice vectors are reconstructed to match the specified Bravais lattice type after each update.
   - False: No restrictions are exerted during relaxation in terms of lattice type
 
-> Note: it is possible to use `fixed_ibrav` with `fixed_axes`, but please make sure you know what you are doing. For example, if we are doing relaxation of a simple cubic lattice (`latname` = "sc"), and we use `fixed_ibrav` along with `fixed_axes` = "volume", then the cell is never allowed to move and as a result, the relaxation never converges.
+> Note: it is possible to use `fixed_ibrav` with `fixed_axes`, but please make sure you know what you are doing. For example, if we are doing relaxation of a simple cubic lattice (`latname` = "sc"), and we use `fixed_ibrav` along with `fixed_axes` = "volume", then the cell is never allowed to move and as a result, the relaxation never converges. When both are used, `fixed_ibrav` is applied first, then `fixed_axes = "volume"` rescaling is applied.
 
 - **Default**: False
 
@@ -2081,10 +2133,12 @@ These variables are used to control the output of properties.
 - **Availability**: Only for Kohn-Sham DFT and Orbital Free DFT.
 - **Description**: Whether to output the electron localization function (ELF) in the folder `OUT.${suffix}`. The files are named as
     - nspin = 1:
-      - ELF.cube: ${\rm{ELF}} = \frac{1}{1+\chi^2}$, $\chi = \frac{\frac{1}{2}\sum_{i}{f_i |\nabla\psi_{i}|^2} - \frac{|\nabla\rho|^2}{8\rho}}{\frac{3}{10}(3\pi^2)^{2/3}\rho^{5/3}}$;
+      - elf.cube: ${\rm{ELF}} = \frac{1}{1+\chi^2}$, $\chi = \frac{\frac{1}{2}\sum_{i}{f_i |\nabla\psi_{i}|^2} - \frac{|\nabla\rho|^2}{8\rho}}{\frac{3}{10}(3\pi^2)^{2/3}\rho^{5/3}}$;
     - nspin = 2:
-      - ELF_SPIN1.cube, ELF_SPIN2.cube: ${\rm{ELF}}_\sigma = \frac{1}{1+\chi_\sigma^2}$, $\chi_\sigma = \frac{\frac{1}{2}\sum_{i}{f_i |\nabla\psi_{i,\sigma}|^2} - \frac{|\nabla\rho_\sigma|^2}{8\rho_\sigma}}{\frac{3}{10}(6\pi^2)^{2/3}\rho_\sigma^{5/3}}$;
-      - ELF.cube: ${\rm{ELF}} = \frac{1}{1+\chi^2}$, $\chi = \frac{\frac{1}{2}\sum_{i,\sigma}{f_i |\nabla\psi_{i,\sigma}|^2} - \sum_{\sigma}{\frac{|\nabla\rho_\sigma|^2}{8\rho_\sigma}}}{\sum_{\sigma}{\frac{3}{10}(6\pi^2)^{2/3}\rho_\sigma^{5/3}}}$;
+      - elf1.cube, elf2.cube: ${\rm{ELF}}_\sigma = \frac{1}{1+\chi_\sigma^2}$, $\chi_\sigma = \frac{\frac{1}{2}\sum_{i}{f_i |\nabla\psi_{i,\sigma}|^2} - \frac{|\nabla\rho_\sigma|^2}{8\rho_\sigma}}{\frac{3}{10}(6\pi^2)^{2/3}\rho_\sigma^{5/3}}$;
+      - elf.cube: ${\rm{ELF}} = \frac{1}{1+\chi^2}$, $\chi = \frac{\frac{1}{2}\sum_{i,\sigma}{f_i |\nabla\psi_{i,\sigma}|^2} - \sum_{\sigma}{\frac{|\nabla\rho_\sigma|^2}{8\rho_\sigma}}}{\sum_{\sigma}{\frac{3}{10}(6\pi^2)^{2/3}\rho_\sigma^{5/3}}}$;
+    - nspin = 4 (noncollinear):
+      - elf.cube: ELF for total charge density, ${\rm{ELF}} = \frac{1}{1+\chi^2}$, $\chi = \frac{\frac{1}{2}\sum_{i}{f_i |\nabla\psi_{i}|^2} - \frac{|\nabla\rho|^2}{8\rho}}{\frac{3}{10}(3\pi^2)^{2/3}\rho^{5/3}}$
 
   The second integer controls the precision of the kinetic energy density output, if not given, will use `3` as default. For purpose restarting from this file and other high-precision involved calculation, recommend to use `10`.
 
@@ -3030,7 +3084,7 @@ These variables are relevant when using hybrid functionals with *[basis_type](#b
 ### exx_ccp_rmesh_times
 
 - **Type**: Real
-- **Description**: This parameter determines how many times larger the radial mesh required for calculating Columb potential is to that of atomic orbitals. The value should be at least 1. Reducing this value can effectively increase the speed of self-consistent calculations using hybrid functionals.
+- **Description**: This parameter determines how many times larger the radial mesh required for calculating Columb potential is to that of atomic orbitals. The value should be larger than 0. Reducing this value can effectively increase the speed of self-consistent calculations using hybrid functionals.
 - **Default**:
   - 5: if *[dft_functional](#dft_functional)==hf/pbe0/scan0/muller/power/wp22*
   - 1.5: if *[dft_functional](#dft_functional)==hse/cwp22*
@@ -3451,8 +3505,9 @@ These variables are used to control molecular dynamics calculations. For more in
 ### cal_syns
 
 - **Type**: Boolean
-- **Description**: Whether the asynchronous overlap matrix is calculated for Hefei-NAMD.
+- **Description**: Whether to calculate and output asynchronous overlap matrix for Hefei-NAMD interface. When enabled, calculates `<phi(t-1)|phi(t)>` by computing overlap between basis functions at atomic positions from previous time step and current time step. The overlap is calculated by shifting atom positions backward by `velocity × md_dt`. Output file: `OUT.*/syns_nao.csr` in CSR format.
 - **Default**: False
+- **Note**: Only works with LCAO basis and molecular dynamics calculations. Requires atomic velocities. Output starts from the second MD step (istep > 0).
 
 ### dmax
 
@@ -4112,11 +4167,12 @@ These variables are used to control berry phase and wannier90 interface paramete
 
 ### out_current
 
-- **Type**: Boolean
+- **Type**: Integer
 - **Description**:
-  - True: Output current.
-  - False: Do not output current.
-- **Default**: False
+  - 0: Do not output current.
+  - 1: Output current using the two-center integral, faster.
+  - 2: Output current using the matrix commutation, more precise.
+- **Default**: 0
 
 ### out_current_k
 

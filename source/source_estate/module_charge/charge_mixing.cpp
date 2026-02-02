@@ -6,6 +6,7 @@
 #include "source_base/timer.h"
 #include "source_base/module_device/nvtx_helper.h"
 #include "source_pw/module_pwdft/global.h"
+#include "source_hamilt/module_xc/xc_functional.h"
 
 Charge_Mixing::Charge_Mixing()
 {

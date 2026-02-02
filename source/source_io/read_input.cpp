@@ -15,6 +15,10 @@
 #include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 #include "source_base/module_device/device.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <cerrno>
 
 namespace ModuleIO
 {
@@ -91,34 +95,40 @@ bool ReadInput::check_mode = false;
 bool filter_nonascii_and_comment(std::ifstream& ifs,
                        std::stringstream& out_ascii_stream)
 {
-    // 
-    if (!ifs.is_open()) {
-        if (!ifs) return false;
+	if (!ifs.is_open()) 
+	{
+		if (!ifs) return false;
     }
 
     std::streampos old_pos = ifs.tellg();
     ifs.clear();
     ifs.seekg(0, std::ios::beg);
 
-    char c;
-    while (ifs.get(c)) {
-        // If comment start, skip until end of line (but keep the newline)
-        if (c == '#') {
-            char d;
-            bool newline_found = false;
-            while (ifs.get(d)) {
-                if (d == '\n' || d == '\r') {
-                    // preserve line break in output
-                    out_ascii_stream.put('\n');
-                    // If CRLF, consume the LF after CR (already wrote a single '\n')
-                    if (d == '\r' && ifs.peek() == '\n') {
-                        ifs.get(d); // consume '\n'
-                    }
-                    newline_found = true;
-                    break;
-                }
+	char c = '\0';
+	while (ifs.get(c)) 
+	{
+		// If comment start, skip until end of line (but keep the newline)
+		if (c == '#') 
+		{
+			char d = '\0';
+			bool newline_found = false;
+			while (ifs.get(d)) 
+			{
+				if (d == '\n' || d == '\r') 
+				{
+					// preserve line break in output
+					out_ascii_stream.put('\n');
+					// If CRLF, consume the LF after CR (already wrote a single '\n')
+					if (d == '\r' && ifs.peek() == '\n') 
+					{
+						ifs.get(d); // consume '\n'
+					}
+					newline_found = true;
+					break;
+				}
             }
-            if (!newline_found) {
+			if (!newline_found) 
+			{
                 // reached EOF while skipping comment
                 break;
             }
@@ -126,13 +136,15 @@ bool filter_nonascii_and_comment(std::ifstream& ifs,
         }
 
         unsigned char uc = static_cast<unsigned char>(c);
-        if (uc <= 0x7F) {
-            // ASCII character
+		if (uc <= 0x7F) 
+		{
+			// ASCII character
             out_ascii_stream.put(c);
         }
-        else {
-            // replace non-ASCII with space character
-            out_ascii_stream.put(' ');
+		else 
+		{
+			// replace non-ASCII with space character
+			out_ascii_stream.put(' ');
         }
     }
 
@@ -147,7 +159,7 @@ bool filter_nonascii_and_comment(std::ifstream& ifs,
 ReadInput::ReadInput(const int& rank)
 {
     this->rank = rank;
-    
+
     // add items
     this->item_system();
     this->item_elec_stru();
@@ -170,6 +182,7 @@ ReadInput::ReadInput(const int& rank)
 void ReadInput::read_parameters(Parameter& param, const std::string& filename_in)
 {
     ModuleBase::TITLE("ReadInput", "read_parameters");
+
     // 1. only rank 0 read the input file
     if (this->rank == 0)
     {
@@ -218,9 +231,6 @@ void ReadInput::read_parameters(Parameter& param, const std::string& filename_in
         param.input.kpar = base_device::information::get_device_kpar(param.inp.kpar, param.inp.bndpar);
     }
 
-
-    
-
     if (this->check_mode)
     {
         std::cout << "----------------------------------------------------------" << std::endl;
@@ -253,7 +263,6 @@ void ReadInput::create_directory(const Parameter& param)
     }
     // NOTE: "make_dir_out" must be called by all processes!!!
     //       Maybe it is not good, because only rank 0 can create the directory.
-    #ifndef __SW
     ModuleBase::Global_File::make_dir_out(param.input.suffix,
                                           param.input.calculation,
                                           out_dir,
@@ -261,14 +270,12 @@ void ReadInput::create_directory(const Parameter& param)
                                           this->rank,
                                           param.input.mdp.md_restart,
                                           param.input.out_alllog); // xiaohui add 2013-09-01
-    #endif
-    const std::string ss = "test -d " + PARAM.inp.read_file_dir;
-    #ifndef __SW
-    if (system(ss.c_str()))
+    //const std::string ss = "test -d " + PARAM.inp.read_file_dir;
+    struct stat st;
+    if (stat(PARAM.inp.read_file_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
     {
         ModuleBase::WARNING_QUIT("ReadInput", "please set right files directory for reading in.");
     }
-    #endif
     return;
 }
 
@@ -286,24 +293,22 @@ void ReadInput::read_txt_input(Parameter& param, const std::string& filename)
 
     std::stringstream ascii_stream;
 
-    {
-        std::ifstream ifs(filename.c_str(), std::ios::in);
+	std::ifstream ifs(filename.c_str(), std::ios::in);
 
-        if (!ifs)
-        {
-            std::cout << " Can't find the INPUT file." << std::endl;
-            ModuleBase::WARNING_QUIT("Input::Init", "Error during readin parameters.", 1);
-        }
+	if (!ifs)
+	{
+		std::cout << " Can't find the INPUT file." << std::endl;
+		ModuleBase::WARNING_QUIT("Input::Init", "Error during readin parameters.", 1);
+	}
 
-        ifs.clear();
-        ifs.seekg(0);
+	ifs.clear();
+	ifs.seekg(0);
 
-        filter_nonascii_and_comment(ifs, ascii_stream);
-        ifs.clear();
+	filter_nonascii_and_comment(ifs, ascii_stream);
+	ifs.clear();
 
-        // file close after reading
-    }
-    
+	// file close after reading
+
     int ierr = 0;
     ascii_stream.rdstate();
     while (ascii_stream.good())
@@ -392,8 +397,9 @@ void ReadInput::read_txt_input(Parameter& param, const std::string& filename)
     for (auto& input_item: this->input_lists)
     {
         Input_Item* resetvalue_item = &(input_item.second);
-        if (resetvalue_item->reset_value != nullptr) {
-            resetvalue_item->reset_value(*resetvalue_item, param);
+        if (resetvalue_item->reset_value != nullptr) 
+		{
+			resetvalue_item->reset_value(*resetvalue_item, param);
         }
     }
 }
@@ -556,7 +562,7 @@ int ReadInput::current_md_step(const std::string& file_dir)
         ModuleBase::WARNING_QUIT("current_md_step", "no Restart_md.txt");
     }
 
-    int md_step;
+    int md_step = 0;
     file >> md_step;
     file.close();
 

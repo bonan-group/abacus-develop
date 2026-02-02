@@ -9,7 +9,7 @@
 #include "source_pw/module_pwdft/structure_factor.h"
 #include "source_basis/module_pw/pw_basis.h"
 #include "source_hamilt/module_surchem/surchem.h"
-#include "source_pw/module_pwdft/VL_in_pw.h"
+#include "source_pw/module_pwdft/vl_pw.h"
 #include "source_lcao/module_deepks/LCAO_deepks.h"
 #include "source_lcao/module_dftu/dftu.h"
 #include "source_lcao/setup_exx.h"
@@ -53,10 +53,23 @@ void set_pot(
         Setup_DeePKS<TK> &deepks,
         const Input_para &inp);
 
+/**
+ * @brief read in DMR from file, and save it into dmat
+ */
 template <typename TK>
 void init_dm_from_file(
 	const std::string dmfile,
 	LCAO_domain::Setup_DM<TK>& dmat,
+	const UnitCell& ucell,
+	const Parallel_Orbitals* pv);
+
+/**
+ * @brief read in HR from file, and save it into hmat
+ */
+template <typename TK>
+void init_hr_from_file(
+	const std::string hrfile,
+	hamilt::HContainer<TK>* hmat,
 	const UnitCell& ucell,
 	const Parallel_Orbitals* pv);
 } // end namespace

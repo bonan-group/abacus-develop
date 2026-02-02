@@ -8,8 +8,6 @@
 #include "source_base/timer.h"
 #include "source_base/mathzone.h"
 
-#include "source_pw/module_pwdft/global.h"
-
 namespace ModuleSymmetry
 {
     void Symmetry_rotation::set_Cs_rotation(const std::vector<std::vector<int>>& abfs_l_nchi)
@@ -205,7 +203,7 @@ namespace ModuleSymmetry
     TCdouble Symmetry_rotation::get_euler_angle(const ModuleBase::Matrix3& gmatc) const
     {
         double threshold = this->eps_;
-        double alpha, beta, gamma;
+        double alpha = 0.0, beta = 0.0, gamma = 0.0;
         if (std::fabs(gmatc.e32) > threshold || std::fabs(gmatc.e31) > threshold) // sin(beta) is not zero
         {
             // use the 2-angle elements to get alpha and gamma
@@ -417,24 +415,24 @@ namespace ModuleSymmetry
         if (TRS_conj)
         {
             // D^T* = M^T [M^T (D^T)^T]^\dagger
-            pzgemm_(&transpose, &transpose, &nbasis, &nbasis, &nbasis,
-                &alpha, this->Ms_[ik_ibz].at(isym).data(), &i1, &i1, pv.desc, DMkibz.data(), &i1, &i1, pv.desc,
-                &beta, DMkibz_M.data(), &i1, &i1, pv.desc);
+            ScalapackConnector::gemm(transpose, transpose, nbasis, nbasis, nbasis,
+                alpha, this->Ms_[ik_ibz].at(isym).data(), i1, i1, pv.desc, DMkibz.data(), i1, i1, pv.desc,
+                beta, DMkibz_M.data(), i1, i1, pv.desc);
             alpha.real(1.0 / static_cast<double>(kstar_size));
-            pzgemm_(&transpose, &dagger, &nbasis, &nbasis, &nbasis,
-                &alpha, this->Ms_[ik_ibz].at(isym).data(), &i1, &i1, pv.desc, DMkibz_M.data(), &i1, &i1, pv.desc,
-                &beta, DMk.data(), &i1, &i1, pv.desc);
+            ScalapackConnector::gemm(transpose, dagger, nbasis, nbasis, nbasis,
+                alpha, this->Ms_[ik_ibz].at(isym).data(), i1, i1, pv.desc, DMkibz_M.data(), i1, i1, pv.desc,
+                beta, DMk.data(), i1, i1, pv.desc);
         }
         else
         {
             // D^T = M^\daggger D^T M
-            pzgemm_(&dagger, &notrans, &nbasis, &nbasis, &nbasis,
-                &alpha, this->Ms_[ik_ibz].at(isym).data(), &i1, &i1, pv.desc, DMkibz.data(), &i1, &i1, pv.desc,
-                &beta, DMkibz_M.data(), &i1, &i1, pv.desc);
+            ScalapackConnector::gemm(dagger, notrans, nbasis, nbasis, nbasis,
+                alpha, this->Ms_[ik_ibz].at(isym).data(), i1, i1, pv.desc, DMkibz.data(), i1, i1, pv.desc,
+                beta, DMkibz_M.data(), i1, i1, pv.desc);
             alpha.real(1.0 / static_cast<double>(kstar_size));
-            pzgemm_(&notrans, &notrans, &nbasis, &nbasis, &nbasis,
-                &alpha, DMkibz_M.data(), &i1, &i1, pv.desc, this->Ms_[ik_ibz].at(isym).data(), &i1, &i1, pv.desc,
-                &beta, DMk.data(), &i1, &i1, pv.desc);
+            ScalapackConnector::gemm(notrans, notrans, nbasis, nbasis, nbasis,
+                alpha, DMkibz_M.data(), i1, i1, pv.desc, this->Ms_[ik_ibz].at(isym).data(), i1, i1, pv.desc,
+                beta, DMk.data(), i1, i1, pv.desc);
         }
         return DMk;
     }

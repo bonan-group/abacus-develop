@@ -4,6 +4,7 @@
 #include "source_base/module_device/nvtx_helper.h"
 #include "source_pw/module_pwdft/global.h"
 #include "source_base/module_device/types.h"
+#include "source_hamilt/module_xc/xc_functional.h"
 
 void Charge_Mixing::mix_rho_recip(Charge* chr)
 {

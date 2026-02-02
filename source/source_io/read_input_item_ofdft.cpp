@@ -14,7 +14,8 @@ void ReadInput::item_ofdft()
 #ifndef __MLALGO
             if (para.input.of_kinetic == "ml" || para.input.of_kinetic == "mpn" || para.input.of_kinetic == "cpn5")
             {
-                ModuleBase::WARNING_QUIT("ReadInput", "ML KEDF is not supported.");
+                ModuleBase::WARNING_QUIT("ReadInput", "Error: ML KEDF requires ENABLE_MLALGO option.\n "
+                                                      "Please enable ENABLE_MLALGO during compilation to use this feature.");
             }
 #endif
             if (para.input.of_kinetic != "tf" && para.input.of_kinetic != "vw" && para.input.of_kinetic != "wt"
@@ -471,6 +472,12 @@ void ReadInput::item_ofdft()
         Input_Item item("of_ml_local_test");
         item.annotation = "Test: read in the density, and output the F and Pauli potential";
         read_sync_bool(input.of_ml_local_test);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("ml_exx");
+        item.annotation = "Use ML EXX or not";
+        read_sync_bool(input.ml_exx);
         this->add_item(item);
     }
 }

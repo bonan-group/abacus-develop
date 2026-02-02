@@ -3,7 +3,6 @@
 #include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
 #include "source_cell/module_neighbor/sltk_grid_driver.h"
-#include "source_pw/module_pwdft/global.h"
 #include "source_io/module_parameter/parameter.h"
 #ifdef __MLALGO
 #include "source_lcao/module_deepks/LCAO_deepks.h" //caoyu add for deepks on 20210813
@@ -109,14 +108,6 @@ void Force_LCAO<double>::allocate(const UnitCell& ucell,
                               two_center_bundle,
                               &gd,
                               nullptr);
-
-    // calculate asynchronous S matrix to output for Hefei-NAMD
-    if (PARAM.inp.cal_syns)
-    {
-        cal_deri = false;
-        ModuleBase::timer::tick("Forces", "allocate");
-        ModuleBase::WARNING_QUIT("cal_syns", "this function has been broken and will be fixed later.");
-    }
 
     ModuleBase::timer::tick("Forces", "allocate");
     return;

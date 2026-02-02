@@ -2,7 +2,6 @@
 #include "dftu.h"
 #include "source_base/timer.h"
 #include "source_io/module_parameter/parameter.h"
-#include "source_pw/module_pwdft/global.h"
 #include "source_cell/module_neighbor/sltk_grid_driver.h"
 #include "source_lcao/hamilt_lcao.h"
 #include "source_lcao/module_hcontainer/hcontainer.h"
@@ -247,7 +246,7 @@ void Plus_U::folding_matrix_k(const UnitCell& ucell,
 								continue;
 							}
 
-                            int iic;
+                            int iic = 0;
                             if (ModuleBase::GlobalFunc::IS_COLUMN_MAJOR_KS_SOLVER(PARAM.inp.ks_solver))
                             {
                                 iic = mu + nu * pv.nrow;

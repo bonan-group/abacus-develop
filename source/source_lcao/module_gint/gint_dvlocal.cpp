@@ -33,9 +33,10 @@ void Gint_dvlocal::cal_hr_gint_()
         std::vector<double> dphi_y;
         std::vector<double> dphi_z;
 #pragma omp for schedule(dynamic)
-        for(const auto& biggrid: gint_info_->get_biggrids())
+        for (int i = 0; i < gint_info_->get_bgrids_num(); i++)
         {
-            if(biggrid->get_atoms().empty())
+            const auto& biggrid = gint_info_->get_biggrids()[i];
+            if(biggrid->get_atoms().size() == 0)
             {
                 continue;
             }
@@ -71,7 +72,7 @@ void Gint_dvlocal::cal_dvlocal_R_sparseMatrix(
     std::map<Abfs::Vector3_Order<int>, std::map<size_t, std::map<size_t, double>>> pvdpRy_sparseMatrix;
     std::map<Abfs::Vector3_Order<int>, std::map<size_t, std::map<size_t, double>>> pvdpRz_sparseMatrix;
     
-    double temp_value_double;
+    double temp_value_double = 0.0;
 
     Vec3d tau1, dtau;
     for (int iap = 0; iap < pvdpRx.size_atom_pairs(); iap++)

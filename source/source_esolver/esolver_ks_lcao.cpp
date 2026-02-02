@@ -12,10 +12,10 @@
 #include "../source_lcao/module_ri/exx_opt_orb.h"
 #endif
 #include "source_lcao/module_rdmft/rdmft.h"
-#include "source_estate/module_charge/chgmixing.h" // use charge mixing, mohan add 20251006 
+#include "source_estate/module_charge/chgmixing.h" // use charge mixing, mohan add 20251006
 #include "source_estate/module_dm/init_dm.h" // init dm from electronic wave functions
-#include "source_io/ctrl_runner_lcao.h" // use ctrl_runner_lcao() 
-#include "source_io/ctrl_iter_lcao.h" // use ctrl_iter_lcao() 
+#include "source_io/ctrl_runner_lcao.h" // use ctrl_runner_lcao()
+#include "source_io/ctrl_iter_lcao.h" // use ctrl_iter_lcao()
 #include "source_io/ctrl_scf_lcao.h" // use ctrl_scf_lcao()
 #include "source_io/print_info.h"
 #include "source_lcao/rho_tau_lcao.h" // mohan add 20251024
@@ -75,13 +75,6 @@ void ESolver_KS_LCAO<TK, TR>::before_all_runners(UnitCell& ucell, const Input_pa
 
     LCAO_domain::set_psi_occ_dm_chg<TK>(this->kv, this->psi, this->pv, this->pelec,
       this->dmat, this->chr, inp);
-    
-    if(inp.init_chg == "dm")
-    {
-        //! 4.1) init density matrix from file
-        std::string dmfile = PARAM.globalv.global_readin_dir + "/dmrs1_nao.csr";
-        LCAO_domain::init_dm_from_file<TK>(dmfile, this->dmat, ucell, &(this->pv));
-    }
 
     LCAO_domain::set_pot<TK>(ucell, this->kv, this->sf, *this->pw_rho, *this->pw_rhod,
       this->pelec, this->orb_, this->pv, this->locpp, this->dftu,
@@ -167,34 +160,60 @@ void ESolver_KS_LCAO<TK, TR>::before_scf(UnitCell& ucell, const int istep)
     // 11) set xc type before the first cal of xc in pelec->init_scf, Peize Lin add 2016-12-03
     this->exx_nao.before_scf(ucell, this->kv, orb_, this->p_chgmix, istep, PARAM.inp);
 
-    // 12.1) if init_chg = "dm", then calculate rho from readin DMR before init_scf
-    if(PARAM.inp.init_chg == "dm")
-    {
-        LCAO_domain::dm2rho(this->dmat.dm->get_DMR_vector(), PARAM.inp.nspin, this->pelec->charge, true);
-    }
-    // 12.2) init_scf, should be before_scf? mohan add 2025-03-10
-    this->pelec->init_scf(ucell, this->Pgrid, this->sf.strucFac, this->locpp.numeric, ucell.symm);
-
-    // 13) initalize DM(R), which has the same size with Hamiltonian(R)
+    // 12) initalize DM(R), which has the same size with Hamiltonian(R)
     auto* hamilt_lcao = dynamic_cast<hamilt::HamiltLCAO<TK, TR>*>(this->p_hamilt);
+
     if(!hamilt_lcao)
     {
         ModuleBase::WARNING_QUIT("ESolver_KS_LCAO::before_scf","p_hamilt does not exist");
     }
-    if(PARAM.inp.init_chg != "dm") this->dmat.dm->init_DMR(*hamilt_lcao->getHR());
+    this->dmat.dm->init_DMR(*hamilt_lcao->getHR());
+
+    // 13.1) decide the strategy for initializing DMR and HR
+    if(istep == 0)//if the first scf step, readin DMR from file, 
+    {
+        //calculate or readin the density matrix DMR
+        if(PARAM.inp.init_chg == "dm")
+        {
+            //! 13.1.1) init density matrix from file
+            std::string dmfile = PARAM.globalv.global_readin_dir + "/dmrs1_nao.csr";
+            LCAO_domain::init_dm_from_file<TK>(dmfile, this->dmat, ucell, &(this->pv));
+        }
+        if(PARAM.inp.init_chg == "hr")
+        {
+            //! 13.1.2) init HR from file
+            std::string hrfile = PARAM.globalv.global_readin_dir + "/hrs1_nao.csr";
+            LCAO_domain::init_hr_from_file<TR>(
+                hrfile, 
+                dynamic_cast<hamilt::HamiltLCAO<TK, TR>*>(this->p_hamilt)->getHR(), 
+                ucell, 
+                &(this->pv)
+            );
+            this->p_hamilt->refresh(false);
+            hsolver::HSolverLCAO<TK> hsolver_lcao_obj(&(this->pv), PARAM.inp.ks_solver);
+            hsolver_lcao_obj.solve(this->p_hamilt, this->psi[0], this->pelec, *this->dmat.dm, 
+                this->chr, PARAM.inp.nspin, 0);
+        }
+    }
+    else //if not, use the DMR calculated from last step
+    {
+        // 13.1.2) two cases are considered:
+        // 1. DMK in DensityMatrix is not empty (istep > 0), then DMR is initialized by DMK
+        // 2. DMK in DensityMatrix is empty (istep == 0), then DMR is initialized by zeros
+        this->dmat.dm->cal_DMR();
+    }
+    // 13.2 if init_chg = "dm", then calculate rho from readin DMR before init_scf
+    if(PARAM.inp.init_chg == "dm")
+    {
+        LCAO_domain::dm2rho(this->dmat.dm->get_DMR_vector(), PARAM.inp.nspin, this->pelec->charge, true);
+    }
+    // 13.2) init_scf, should be before_scf? mohan add 2025-03-10
+    this->pelec->init_scf(ucell, this->Pgrid, this->sf.strucFac, this->locpp.numeric, ucell.symm);
 
 #ifdef __MLALGO
     // 14) initialize DM2(R) of DeePKS, the DM2(R) is different from DM(R)
     this->deepks.ld.init_DMR(ucell, orb_, this->pv, this->gd);
 #endif
-
-    // 15) two cases are considered:
-    // 1. DMK in DensityMatrix is not empty (istep > 0), then DMR is initialized by DMK
-    // 2. DMK in DensityMatrix is empty (istep == 0), then DMR is initialized by zeros
-    if (istep > 0)
-    {
-        this->dmat.dm->cal_DMR();
-    }
 
     // 16) the electron charge density should be symmetrized,
     Symmetry_rho srho;
@@ -203,10 +222,7 @@ void ESolver_KS_LCAO<TK, TR>::before_scf(UnitCell& ucell, const int istep)
         srho.begin(is, this->chr, this->pw_rho, ucell.symm);
     }
 
-    // 17) why we need to set this sentence? mohan add 2025-03-10
-    this->p_hamilt->non_first_scf = istep;
-
-    // 18) update of RDMFT, added by jghan
+    // 17) update of RDMFT, added by jghan
     if (PARAM.inp.rdmft == true)
     {
         rdmft_solver.update_ion(ucell, *(this->pw_rho), this->locpp.vloc, this->sf.strucFac);
@@ -277,17 +293,25 @@ void ESolver_KS_LCAO<TK, TR>::after_all_runners(UnitCell& ucell)
     ESolver_KS<TK>::after_all_runners(ucell);
 
     auto* hamilt_lcao = dynamic_cast<hamilt::HamiltLCAO<TK, TR>*>(this->p_hamilt);
-	if(!hamilt_lcao)
-	{
-		ModuleBase::WARNING_QUIT("ESolver_KS_LCAO::after_all_runners","p_hamilt does not exist");
-	}
+    if(!hamilt_lcao)
+    {
+	    ModuleBase::WARNING_QUIT("ESolver_KS_LCAO::after_all_runners","p_hamilt does not exist");
+    }
 
-	ModuleIO::ctrl_runner_lcao<TK, TR>(ucell,
-		  PARAM.inp, this->kv, this->pelec, this->dmat, this->pv, this->Pgrid, 
-		  this->gd, this->psi, this->chr, hamilt_lcao,
-          this->two_center_bundle_,
-          this->orb_, this->pw_rho, this->pw_rhod,
-          this->sf, this->locpp.vloc, this->exx_nao, this->solvent);
+    ModuleIO::ctrl_runner_lcao<TK, TR>(ucell,
+		    PARAM.inp, this->kv, this->pelec, this->dmat, this->pv, this->Pgrid, 
+		    this->gd, this->psi, this->chr, hamilt_lcao,
+		    this->two_center_bundle_,
+		    this->orb_, this->pw_rho, this->pw_rhod,
+		    this->sf, this->locpp.vloc, this->exx_nao, this->solvent);
+
+
+#ifdef __MPI
+#ifdef __LCAO
+    // Exit BLACS environment for LCAO calculations
+    Cblacs_exit(1);
+#endif
+#endif
 
     ModuleBase::timer::tick("ESolver_KS_LCAO", "after_all_runners");
 }
@@ -530,7 +554,7 @@ void ESolver_KS_LCAO<TK, TR>::after_scf(UnitCell& ucell, const int istep, const 
             PARAM.inp, this->kv, this->pelec, this->dmat.dm, this->pv,
             this->gd, this->psi, hamilt_lcao, this->dftu, this->two_center_bundle_,
             this->orb_, this->pw_wfc, this->pw_rho, this->pw_big, this->sf,
-            this->rdmft_solver, this->deepks, this->exx_nao, 
+            this->rdmft_solver, this->deepks, this->exx_nao,
             this->conv_esolver, this->scf_nmax_flag, istep);
 
     //! 3) Clean up RA, which is used to serach for adjacent atoms
