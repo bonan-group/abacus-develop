@@ -2,7 +2,7 @@
 #include "source_estate/elecstate_pw.h" // init of pelec
 #include "source_estate/elecstate_pw_sdft.h" // init of pelec for sdft
 #include "source_estate/elecstate_tools.h" // occupations
-#include "source_pw/module_pwdft/operator_pw/nonlocal_pw.h" // use_chunked_vnl
+#include "source_pw/module_pwdft/op_pw_nl.h" // use_chunked_vnl
 
 template <typename T, typename Device>
 void elecstate::setup_estate_pw(UnitCell& ucell, // unitcell

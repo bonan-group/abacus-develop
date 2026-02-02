@@ -4,8 +4,6 @@
 #include "source_base/mymath.h"
 #include "source_base/timer.h"
 #include "source_base/global_function.h"
-#include "source_pw/module_pwdft/global.h"
-
 
 namespace ModulePW
 {
