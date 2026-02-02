@@ -1,6 +1,7 @@
 #include "source_pw/module_pwdft/kernels/vnl_op.h"
 
 #include "vnl_tools.hpp"
+#include "source_base/timer.h"
 
 namespace hamilt
 {
@@ -97,6 +98,7 @@ struct cal_vnl_op<FPTYPE, base_device::DEVICE_CPU>
         }
 #endif
         ModuleBase::timer::tick("Operator", "cal_vnl_op");
+    }
 };
 
 template struct cal_vnl_op<float, base_device::DEVICE_CPU>;

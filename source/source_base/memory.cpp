@@ -343,8 +343,12 @@ void Memory::record_gpu
 
 void Memory::print(const int find)
 {
-	GlobalV::ofs_running <<"\n Warning_Memory_Consuming allocated: "
-	<<" "<<name[find]<<" "<<consume[find]<<" MB" << std::endl;
+	// Check if output stream is open before writing (may not be initialized during early setup)
+	if (GlobalV::ofs_running.is_open())
+	{
+		GlobalV::ofs_running <<"\n Warning_Memory_Consuming allocated: "
+		<<" "<<name[find]<<" "<<consume[find]<<" MB" << std::endl;
+	}
 	return;
 }
 

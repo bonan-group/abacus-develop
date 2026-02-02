@@ -4,6 +4,7 @@
 #include "source_base/timer.h"
 #include "source_pw/module_pwdft/global.h"
 #include "source_base/parallel_reduce.h"
+#include "source_base/module_device/types.h"
 
 double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 {
@@ -15,13 +16,40 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 
     if (PARAM.inp.scf_thr_type == 1)
     {
-        for (int is = 0; is < nspin; ++is)
+        // Perform FFT on rho(r) to obtain rho(G)
+#if __CUDA || __ROCM
+        if (device_ == "gpu" && chr->get_device() == "gpu")
         {
-            ModuleBase::GlobalFunc::NOTE("Perform FFT on rho(r) to obtain rho(G).");
-            chr->rhopw->real2recip(chr->rho[is], chr->rhog[is]);
+            // GPU path: sync rho to GPU, then GPU FFT
+            chr->sync_rho_to_device<base_device::DEVICE_GPU>();
+            chr->sync_rho_save_to_device<base_device::DEVICE_GPU>();
 
-            ModuleBase::GlobalFunc::NOTE("Perform FFT on rho_save(r) to obtain rho_save(G).");
-            chr->rhopw->real2recip(chr->rho_save[is], chr->rhog_save[is]);
+            for (int is = 0; is < nspin; ++is)
+            {
+                ModuleBase::GlobalFunc::NOTE("Perform GPU FFT on rho(r) to obtain rho(G).");
+                chr->rhopw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
+                    chr->get_rho_d(is), chr->get_rhog_d(is));
+
+                ModuleBase::GlobalFunc::NOTE("Perform GPU FFT on rho_save(r) to obtain rho_save(G).");
+                chr->rhopw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
+                    chr->get_rho_save_d(is), chr->get_rhog_save_d(is));
+            }
+            // Sync rhog back to CPU for inner product calculation
+            chr->sync_rhog_to_host<base_device::DEVICE_GPU>();
+            chr->sync_rhog_save_to_host<base_device::DEVICE_GPU>();
+        }
+        else
+#endif
+        {
+            // CPU path
+            for (int is = 0; is < nspin; ++is)
+            {
+                ModuleBase::GlobalFunc::NOTE("Perform FFT on rho(r) to obtain rho(G).");
+                chr->rhopw->real2recip(chr->rho[is], chr->rhog[is]);
+
+                ModuleBase::GlobalFunc::NOTE("Perform FFT on rho_save(r) to obtain rho_save(G).");
+                chr->rhopw->real2recip(chr->rho_save[is], chr->rhog_save[is]);
+            }
         }
 
         ModuleBase::GlobalFunc::NOTE("Calculate the charge difference between rho(G) and rho_save(G)");

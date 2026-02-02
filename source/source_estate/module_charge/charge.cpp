@@ -68,6 +68,9 @@ bool Charge::kin_density()
 
 void Charge::destroy()
 {
+    // Free device memory first
+    free_device_memory();
+
     if (allocate_rho || allocate_rho_final_scf) // LiuXh add 20180619
     {
         delete[] rho;
@@ -178,6 +181,13 @@ void Charge::allocate(const int& nspin_in, const bool kin_den)
     ModuleBase::Memory::record("Chg::rhog_core", sizeof(double) * ngmc);
 
     this->allocate_rho = true;
+
+    // Allocate device memory if GPU mode is enabled
+    if (device_ == "gpu")
+    {
+        allocate_device_memory();
+    }
+
     return;
 }
 

@@ -71,6 +71,15 @@ void ESolver_KS<T, Device>::before_all_runners(UnitCell& ucell, const Input_para
       inp.mixing_gg0_min, inp.mixing_angle, inp.mixing_dmr, ucell.omega, ucell.tpiba);
     p_chgmix->init_mixing();
 
+    // Enable GPU charge mixing when device="gpu"
+    // This activates:
+    // - GPU FFT for rho <-> rhog transforms (PW_Basis now uses device for FFT)
+    // - GPU kernels for Kerker screening and inner products
+    // - GPU memory for charge density arrays
+    // Note: The mixing history (Broyden/Pulay) still runs on CPU, but FFT and
+    // Kerker/inner_product operations use GPU when available.
+    p_chgmix->set_device(inp.device);
+
     //! 4) setup plane wave for electronic wave functions
     pw::setup_pwwfc(inp, ucell, *this->pw_rho, this->kv, this->pw_wfc);
 

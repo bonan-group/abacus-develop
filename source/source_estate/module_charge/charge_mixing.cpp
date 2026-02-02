@@ -26,6 +26,10 @@ Charge_Mixing::~Charge_Mixing()
 		delete this->mixing_highf;
         this->mixing_highf = nullptr;
 	}
+
+#if __CUDA || __ROCM
+    free_mixing_gpu();
+#endif
 }
 
 void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,

@@ -274,8 +274,15 @@ class FFT_Bundle
     int batch_size = 8;  // Default batch size for batch FFT
     bool float_flag = false;
     bool double_flag = false;
+
+    // Primary FFT objects (CPU or GPU depending on device setting)
     std::shared_ptr<FFT_BASE<float>> fft_float = nullptr;
     std::shared_ptr<FFT_BASE<double>> fft_double = nullptr;
+
+    // CPU FFT objects for fallback when device="gpu"
+    // These are used by non-templated CPU-style FFT operations (get_auxg_data, fftxyfor, etc.)
+    std::shared_ptr<FFT_BASE<float>> fft_float_cpu = nullptr;
+    std::shared_ptr<FFT_BASE<double>> fft_double_cpu = nullptr;
 
     std::string device = "cpu";
     std::string precision = "double";
