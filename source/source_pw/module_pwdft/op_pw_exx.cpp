@@ -415,12 +415,14 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
     int local_band_index = 0;  // counter for the valid bands (non-negligible weight)
     int local_q_idx = 0;
     const T one{1, 0}; // Scalar one for gemv
-    const int inc{1}; // Increment for gemv 
+    const int inc{1}; // Increment for gemv
 
-    // Precompute the weighting factor array used for inner loop so 
+    // Precompute the weighting factor array used for inner loop so
     // blas GEMV can be used for fast operation
-    for (int iband = 0; iband < nbands; iband++)
-    {                
+    // Note: Use psi.get_nbands() to match the inner loop at line 472
+    const int psi_nbands = psi.get_nbands();
+    for (int iband = 0; iband < psi_nbands; iband++)
+    {
         local_q_idx = 0;
         double wg_mqb_real = (*wg)(this->ik, iband);
         if (wg_mqb_real < 1e-12)
@@ -431,11 +433,12 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
         for (int iq: q_points)
         {
             T wk_iq = kv->wk[iq];
-            alpha_all_host[local_q_idx * nbands + local_band_index] = static_cast<T>(wg_m) / wk_iq / static_cast<T>(nqs);
+            alpha_all_host[local_q_idx * psi_nbands + local_band_index] = static_cast<T>(wg_m) / wk_iq / static_cast<T>(nqs);
             local_q_idx++;
         }
-        local_band_index++; 
+        local_band_index++;
     }
+
 
     // Copy to device ONCE
     alpha_all_device = nullptr;
@@ -468,24 +471,25 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
             std::vector<T> wg_batch(batch_fft_size);                // Weights for each element (converted to T type)
             std::vector<int> batch_local_band_idx(batch_fft_size);  // Track which valid indices are in this batch
             std::vector<int> batch_actual_band_idx(batch_fft_size); // Track actual band indices for alpha retrieval
-            local_band_index =0; // reset valid band counter
+            local_band_index = 0; // reset valid band counter
             for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
             {
                 double wg_mqb_real = (*wg)(this->ik, m_iband);
-                if (wg_mqb_real < 1e-12)
+                bool is_last_band = (m_iband == psi.get_nbands() - 1);
+
+                if (wg_mqb_real > 1e-12)
                 {
-                    continue;  // Skip negligible weights
+                    // Add to batch
+                    psi_mq_ptrs[batch_idx] = get_pw(m_iband, iq);
+                    wg_batch[batch_idx] = wg_mqb_real;  // Implicit conversion to T
+                    batch_local_band_idx[batch_idx] = local_band_index;  // Track valid index
+                    batch_actual_band_idx[batch_idx] = m_iband;  // Track valid index
+                    batch_idx++;
+                    local_band_index++; // increment valid band counter
                 }
 
-                // Add to batch
-                psi_mq_ptrs[batch_idx] = get_pw(m_iband, iq);
-                wg_batch[batch_idx] = wg_mqb_real;  // Implicit conversion to T
-                batch_local_band_idx[batch_idx] = local_band_index;  // Track valid index
-                batch_actual_band_idx[batch_idx] = m_iband;  // Track valid index
-                batch_idx++;
-
-                // Flush batch when full OR at last m_iband
-                if (batch_idx == batch_fft_size || m_iband == psi.get_nbands() - 1)
+                // Flush batch when full OR at last m_iband (with pending data)
+                if (batch_idx == batch_fft_size || (is_last_band && batch_idx > 0))
                 {
                         NVTX_RANGE_PUSH("Flushing batch");
                     // Copy batch inputs to contiguous buffer
@@ -585,10 +589,9 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
 
                     // === STAGE 6: Batched accumulation with precomputed alpha values ===
                     // The axpy is replaced with GEMV call as new we are doing matrix vector product
-                    // alpha_all_device is a vector, density_real_batch is a matrix, and we accumulate into 
+                    // alpha_all_device is a vector, density_real_batch is a matrix, and we accumulate into
                     // a single vector h_psi_real
-                    // std::cout << "Before gemv accumulation, batch size: " << batch_idx << std::endl;
-                    // std::cout << local_q_idx << " " << nbands << " " << batch_local_band_idx[0] << std::endl;
+                    // Alpha layout: alpha[local_q_idx * psi_nbands + local_band_idx] - within each q-point, valid bands are consecutive
                     ModuleBase::timer::tick("act_op_batch", "accumulate");
                     ModuleBase::gemv_op<T, Device>()(
                         'N',
@@ -597,8 +600,8 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                         &one,            // alpha
                         density_real_batch,   // matrix (batch_idx, nrxx), memory layout as (nrxx, batch_idx) in column major
                         wfcpw->nrxx,         // lda
-                        alpha_all_device + (local_q_idx * nbands + batch_local_band_idx[0]),  // vector (batch_idx, )
-                        inc,                   // incx
+                        alpha_all_device + (local_q_idx * psi.get_nbands() + batch_local_band_idx[0]),  // vector (batch_idx, )
+                        inc,                 // incx - valid bands are consecutive within each q-point
                         &one,            // beta
                         h_psi_real,          // output vector (nrxx)
                         inc);                  // incy
@@ -608,7 +611,6 @@ void OperatorEXXPW<T, Device>::act_op_batch(const int nbands,
                     batch_idx = 0;
                     NVTX_RANGE_POP();
                 }
-                local_band_index++;  // Increment valid band counter
             } // end m_iband loop
 
             // Clear buffers for next iq
@@ -1105,20 +1107,21 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
             double wg_ikb_real = (*wg)(ik, n_iband);
             if (wg_ikb_real < 1e-12) continue;  // Skip negligible weights
 
-            // Precompute the weighting factor array used for inner iq, m_iband loop so 
+            // Precompute the weighting factor array used for inner iq, m_iband loop so
             // blas GEMV can be used for fast operation
             local_q_idx = 0;
             for (int iq: q_points)
-            {                
+            {
                 local_band_index = 0;
                 for (int m_iband = 0; m_iband < psi_.get_nbands(); m_iband++)
                 {
                     double wg_mqb_real = (*wg)(iq, m_iband);
                     if (wg_mqb_real < 1e-12) continue;  // Skip negligible
-                    weight_real_host[local_q_idx * nbands + local_band_index] = wg_mqb_real / nqs * wg_ikb_real / kv->wk[iq];
+                    // NOTE: Use kv->wk[ik] (not iq) to match cal_exx_energy_op formula
+                    weight_real_host[local_q_idx * nbands + local_band_index] = wg_mqb_real / nqs * wg_ikb_real / kv->wk[ik];
                     local_band_index++;
                 }
-                local_q_idx++; 
+                local_q_idx++;
             }
             // Copy to device
             syncmem_real_c2d_op()(weight_real_device, weight_real_host.data(), nqb);
@@ -1146,17 +1149,20 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                 for (int m_iband = 0; m_iband < psi_.get_nbands(); m_iband++)
                 {
                     double wg_iqb_real = (*wg)(iq, m_iband);
-                    if (wg_iqb_real < 1e-12) continue;  // Skip negligible
+                    bool is_last_band = (m_iband == psi_.get_nbands() - 1);
 
-                    // Accumulate into batch
-                    psi_.fix_kb(iq, m_iband);
-                    psi_mq_ptrs[batch_idx] = psi_.get_pointer();
-                    batch_actual_band_idx[batch_idx] = m_iband;
-                    batch_local_band_idx[batch_idx] = local_band_index;
-                    batch_idx++;
+                    if (wg_iqb_real > 1e-12) {
+                        // Accumulate into batch
+                        psi_.fix_kb(iq, m_iband);
+                        psi_mq_ptrs[batch_idx] = psi_.get_pointer();
+                        batch_actual_band_idx[batch_idx] = m_iband;
+                        batch_local_band_idx[batch_idx] = local_band_index;
+                        batch_idx++;
+                        local_band_index++;  // Increment valid band counter
+                    }
 
-                    // Flush when batch full OR last iteration
-                    if (batch_idx == batch_fft_size || m_iband == psi_.get_nbands() - 1)
+                    // Flush when batch full OR at last band (with pending data)
+                    if (batch_idx == batch_fft_size || (is_last_band && batch_idx > 0))
                     {
 
                         NVTX_RANGE_PUSH("Flushing batch calc_exx_energy");
@@ -1201,19 +1207,19 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                         //         density_ib, pot, scalar_batch[ib], rhopw_dev->npw);
                         //     Eexx_ik_real += E_ib;
                         // }
-                        // Compute the squared norms for the density, use the 
+                        // Compute the squared norms for the density, use the
                         // TODO this is not working ! We need to pre-compute scalar-batch outside
                         // the loop and pass it to the kernel as the final energy needs to be weighted!!
-                        Eexx_ik_real += static_cast<double>(
-                            exx_density_potential_mul_op<T, Device>()(
+                        Real e_batch = exx_density_potential_mul_op<T, Device>()(
                             density_recip_batch,
                             reinterpret_cast<Real*>(density_real_batch),
                             pot,
-                            energy_batch, 
+                            energy_batch,
                             weight_real_device + (local_q_idx * nbands + batch_local_band_idx[0]),
                             npw,
-                            batch_idx)
-                        );
+                            batch_idx);
+
+                        Eexx_ik_real += static_cast<double>(e_batch);
 
                         ModuleBase::timer::tick("cal_exx_energy_batch", "energy_reduction");
 
@@ -1223,11 +1229,12 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_batch(psi::Psi<T, Device> *ppsi_
                         batch_idx = 0;
                         NVTX_RANGE_POP();
                     }
-                    local_band_index++;  // Increment valid band counter
                 } // m_iband loop
             local_q_idx++;
             } // iq loop
+
         } // n_iband loop
+        delmem_real_op()(weight_real_device);
     } // ik loop
 
     // === FINALIZATION (same as cal_exx_energy_op) ===

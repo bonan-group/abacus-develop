@@ -598,7 +598,8 @@ int FFT_Bundle::get_batch_size<float>() const
     if (this->device == "gpu" && fft_float != nullptr)
     {
         auto fft_cuda_float = dynamic_cast<FFT_CUDA<float>*>(fft_float.get());
-        if (fft_cuda_float != nullptr)
+        // Only return batch_size if batch FFT is actually initialized
+        if (fft_cuda_float != nullptr && fft_cuda_float->is_batch_fft_ready())
         {
             return fft_cuda_float->get_batch_size();
         }
@@ -614,7 +615,8 @@ int FFT_Bundle::get_batch_size<double>() const
     if (this->device == "gpu" && fft_double != nullptr)
     {
         auto fft_cuda_double = dynamic_cast<FFT_CUDA<double>*>(fft_double.get());
-        if (fft_cuda_double != nullptr)
+        // Only return batch_size if batch FFT is actually initialized
+        if (fft_cuda_double != nullptr && fft_cuda_double->is_batch_fft_ready())
         {
             return fft_cuda_double->get_batch_size();
         }
