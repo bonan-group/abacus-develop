@@ -131,6 +131,19 @@ void Driver::reading()
     // (*temp*) copy the variables from INPUT to each class
     Input_Conv::Convert();
 
+    // (3.5) Initialize memory tracking stream if enabled
+    // Only rank 0 writes to the stream file to avoid conflicts
+    if (PARAM.globalv.myrank == 0)
+    {
+        ModuleBase::Memory::init_stream(PARAM.globalv.global_out_dir,
+                                        PARAM.inp.memory_allocation_tracking == 1);
+        if (PARAM.inp.memory_allocation_tracking == 1)
+        {
+            GlobalV::ofs_running << " Memory allocation tracking enabled, writing to: "
+                                << PARAM.globalv.global_out_dir << "memory_stream.jsonl" << std::endl;
+        }
+    }
+
     // (4) define the 'DIAGONALIZATION' world in MPI
     Parallel_Global::split_diag_world(PARAM.inp.diago_proc,
                                       GlobalV::NPROC,

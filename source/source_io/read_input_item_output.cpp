@@ -608,5 +608,17 @@ void ReadInput::item_output()
         read_sync_string(input.spillage_outdir);
         this->add_item(item);
     }
+    {
+        Input_Item item("memory_allocation_tracking");
+        item.annotation = "0: no streaming output; 1: enable streaming output to memory_stream.jsonl";
+        read_sync_int(input.memory_allocation_tracking);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.memory_allocation_tracking < 0 || para.input.memory_allocation_tracking > 1)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "memory_allocation_tracking should be 0 or 1");
+            }
+        };
+        this->add_item(item);
+    }
 }
 } // namespace ModuleIO

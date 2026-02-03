@@ -1,4 +1,5 @@
 #include "source_base/module_device/memory_op.h"
+#include "source_base/memory.h"
 
 #include <base/macros/macros.h>
 #include <hip/hip_runtime.h>
@@ -47,7 +48,32 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
     {
         delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(arr);
     }
-    hipErrcheck(hipMalloc((void**)&arr, sizeof(FPTYPE) * size));
+
+    const size_t alloc_bytes = sizeof(FPTYPE) * size;
+
+    // Record allocation BEFORE hipMalloc so it appears in logs even if OOM crash occurs
+    std::string record_string;
+    if (record_in != nullptr)
+    {
+        record_string = record_in;
+    }
+    else
+    {
+        record_string = "no_record";
+    }
+
+    if (record_string != "no_record")
+    {
+        ModuleBase::Memory::record_gpu(record_string, alloc_bytes, false);
+    }
+
+    hipErrcheck(hipMalloc((void**)&arr, alloc_bytes));
+
+    // Store pointer mapping for deallocation tracking (only after successful allocation)
+    if (record_string != "no_record")
+    {
+        ModuleBase::Memory::register_gpu_pointer(static_cast<void*>(arr), record_string, alloc_bytes);
+    }
 }
 
 template <typename FPTYPE>
@@ -150,6 +176,8 @@ struct cast_memory_op<FPTYPE_out, FPTYPE_in, base_device::DEVICE_CPU, base_devic
 template <typename FPTYPE>
 void delete_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE* arr)
 {
+    // Record deallocation for memory tracking (if this pointer was tracked)
+    ModuleBase::Memory::record_gpu_free(static_cast<void*>(arr));
     hipErrcheck(hipFree(arr));
 }
 

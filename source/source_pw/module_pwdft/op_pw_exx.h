@@ -173,8 +173,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     // Alpha value buffers for batched accumulation (Option 3 optimization)
     mutable T *alpha_all_device = nullptr;      // All precomputed alpha values (q_points × valid_bands)
-    mutable T *alpha_batch_device = nullptr;    // Subset for current batch (batch_size)
-    mutable int *m_iband_map = nullptr;         // Maps m_iband → valid index (CPU array)
 
     // EXX potential cache for current k-point only (memory-efficient)
     mutable std::map<int, Real*> pot_cache;  // Key: iq only (not (ik,iq))

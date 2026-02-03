@@ -453,8 +453,8 @@ std::complex<double>* FFT_Bundle::get_auxr_3d_data() const
 
 void FFT_Bundle::setupBatchFFT()
 {
-    // Only setup batch FFT for GPU devices
-    if (this->device != "gpu")
+    // Only setup batch FFT for GPU devices with batch_size > 1
+    if (this->device != "gpu" || this->batch_size <= 1)
     {
         return;
     }

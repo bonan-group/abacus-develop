@@ -161,9 +161,9 @@ std::complex<double>* FFT_CUDA<double>::get_auxr_3d_data() const
 template <>
 void FFT_CUDA<float>::setupBatchFFT(int batch_size_in)
 {
-    if (c_batch_handle != 0)
+    // Skip if already initialized or batch_size <= 1
+    if (c_batch_handle != 0 || batch_size_in <= 1)
     {
-        // Already initialized
         return;
     }
 
@@ -193,9 +193,9 @@ void FFT_CUDA<float>::setupBatchFFT(int batch_size_in)
 template <>
 void FFT_CUDA<double>::setupBatchFFT(int batch_size_in)
 {
-    if (z_batch_handle != 0)
+    // Skip if already initialized or batch_size <= 1
+    if (z_batch_handle != 0 || batch_size_in <= 1)
     {
-        // Already initialized
         return;
     }
 

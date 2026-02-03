@@ -626,6 +626,7 @@ struct Input_para
     double pexsi_zero_thr = 1e-10;
 
     // ==============   #Parameters (20.Test) ====================
+    int memory_allocation_tracking = 0; ///< 0: no streaming output; 1: enable streaming to memory_stream.jsonl
     bool out_alllog = false;        ///< output all logs.
     int nurse = 0;                  ///< used for debug.
     bool t_in_h = true;             ///< calculate the T or not.

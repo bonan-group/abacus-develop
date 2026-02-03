@@ -88,15 +88,14 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     // Query batch size from FFT infrastructure
     const int batch_fft_size = this->wfcpw->fft_bundle.get_batch_size<typename GetTypeReal<T>::type>();
 
-    // Allocate batch FFT buffers (for batch recip_to_real transform)
-    resmem_complex_op()(psi_mq_batch_real, batch_fft_size * wfcpw->nrxx);
-    resmem_complex_op()(density_real_batch, batch_fft_size * rhopw->nrxx);
-    resmem_complex_op()(density_recip_batch, batch_fft_size * rhopw->npw);
-    resmem_real_op()(energy_batch, batch_fft_size);
-
-    // Alpha buffers allocated lazily in act_op_batch (need psi.get_nbands())
-    // Just allocate the batch buffer here since batch_fft_size is known
-    resmem_complex_op()(alpha_batch_device, batch_fft_size);
+    // Allocate batch FFT buffers only if batch_fft_size > 1 (for batch recip_to_real transform)
+    if (batch_fft_size > 1)
+    {
+        resmem_complex_op()(psi_mq_batch_real, batch_fft_size * wfcpw->nrxx);
+        resmem_complex_op()(density_real_batch, batch_fft_size * rhopw->nrxx);
+        resmem_complex_op()(density_recip_batch, batch_fft_size * rhopw->npw);
+        resmem_real_op()(energy_batch, batch_fft_size);
+    }
 
     int nks = wfcpw->nks;
     int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
@@ -164,24 +163,28 @@ OperatorEXXPW<T, Device>::~OperatorEXXPW()
     delmem_complex_op()(density_recip);
     delmem_complex_op()(h_psi_recip);
 
-    // Free batch FFT buffers
-    delmem_complex_op()(psi_mq_batch_real);
-    delmem_complex_op()(density_real_batch);
-    delmem_complex_op()(density_recip_batch);
-    delmem_real_op()(energy_batch);
+    // Free batch FFT buffers (with null checks since they may not be allocated)
+    if (psi_mq_batch_real != nullptr)
+    {
+        delmem_complex_op()(psi_mq_batch_real);
+    }
+    if (density_real_batch != nullptr)
+    {
+        delmem_complex_op()(density_real_batch);
+    }
+    if (density_recip_batch != nullptr)
+    {
+        delmem_complex_op()(density_recip_batch);
+    }
+    if (energy_batch != nullptr)
+    {
+        delmem_real_op()(energy_batch);
+    }
 
     // Free alpha value buffers (with null checks for lazy allocation)
     if (alpha_all_device != nullptr)
     {
         delmem_complex_op()(alpha_all_device);
-    }
-    if (alpha_batch_device != nullptr)
-    {
-        delmem_complex_op()(alpha_batch_device);
-    }
-    if (m_iband_map != nullptr)
-    {
-        delete[] m_iband_map;
     }
 
     // Clean up EXX potential cache

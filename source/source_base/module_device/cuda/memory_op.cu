@@ -161,6 +161,25 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
     }
 #endif
 
+    // Record allocation BEFORE cudaMalloc so it appears in logs even if OOM crash occurs
+    std::string record_string;
+    if (record_in != nullptr)
+    {
+        record_string = record_in;
+    }
+    else
+    {
+        record_string = "no_record";
+    }
+
+    if (record_string != "no_record")
+    {
+        // Use record_gpu_alloc for pointer tracking (enables proper deallocation tracking)
+        // Note: We pass nullptr for ptr since allocation hasn't happened yet
+        // We'll update the pointer map after successful allocation
+        ModuleBase::Memory::record_gpu(record_string, alloc_bytes, false);
+    }
+
     cudaError_t err = cudaMalloc((void**)&arr, alloc_bytes);
 
 #if DEBUG_GPU_MEMORY_ALLOC
@@ -183,19 +202,10 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
 
     cudaErrcheck(err);
 
-    std::string record_string;
-    if (record_in != nullptr)
-    {
-        record_string = record_in;
-    }
-    else
-    {
-        record_string = "no_record";
-    }
-
+    // Store pointer mapping for deallocation tracking (only after successful allocation)
     if (record_string != "no_record")
     {
-        ModuleBase::Memory::record_gpu(record_string, alloc_bytes);
+        ModuleBase::Memory::register_gpu_pointer(static_cast<void*>(arr), record_string, alloc_bytes);
     }
 }
 
@@ -349,6 +359,8 @@ struct cast_memory_op<FPTYPE_out, FPTYPE_in, base_device::DEVICE_CPU, base_devic
 template <typename FPTYPE>
 void delete_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE* arr)
 {
+    // Record deallocation for memory tracking (if this pointer was tracked)
+    ModuleBase::Memory::record_gpu_free(static_cast<void*>(arr));
     cudaErrcheck(cudaFree(arr));
 }
 
