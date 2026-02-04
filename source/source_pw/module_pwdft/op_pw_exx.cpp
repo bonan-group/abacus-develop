@@ -122,7 +122,8 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     rhopw_dev->initgrids(rhopw->lat0, rhopw->latvec, ecut_exx);
     rhopw_dev->initgrids(rhopw->lat0, rhopw->latvec, rhopw->nx, rhopw->ny, rhopw->nz);
     rhopw_dev->initparameters(rhopw->gamma_only, ecut_exx, rhopw->distribution_type, rhopw->xprime);
-    rhopw_dev->setuptransform();
+    // Pass batch_fft_size for EXX calculations (from input parameter)
+    rhopw_dev->setuptransform(PARAM.inp.exx_batch_fft_size);
     rhopw_dev->collect_local_pw();
 
     auto param_fock = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock];

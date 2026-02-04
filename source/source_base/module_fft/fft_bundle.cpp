@@ -481,6 +481,13 @@ void FFT_Bundle::setupBatchFFT()
     // ROCm not supported yet - automatic fallback to sequential
 }
 
+void FFT_Bundle::setupBatchFFT(int batch_size)
+{
+    // Set batch size and setup batch FFT in one call
+    this->batch_size = batch_size;
+    setupBatchFFT();
+}
+
 template <>
 void FFT_Bundle::fft3D_forward_batch(std::complex<float>* in_batch,
                                      std::complex<float>* out_batch,

@@ -9,10 +9,11 @@ void pw::teardown_pwwfc(ModulePW::PW_Basis_K* &pw_wfc)
 }
 
 void pw::setup_pwwfc(const Input_para& inp,
-		const UnitCell& ucell, 
+		const UnitCell& ucell,
 		const ModulePW::PW_Basis& pw_rho,
 		K_Vectors& kv,
-		ModulePW::PW_Basis_K* &pw_wfc)
+		ModulePW::PW_Basis_K* &pw_wfc,
+		int batch_fft_size)
 {
     ModuleBase::TITLE("pw", "pw_setup");
 
@@ -62,7 +63,7 @@ void pw::setup_pwwfc(const Input_para& inp,
 #endif
 
     pw_wfc->fft_bundle.initfftmode(inp.fft_mode);
-    pw_wfc->setuptransform();
+    pw_wfc->setuptransform(batch_fft_size);
 
     //! initialize the number of plane waves for each k point
     for (int ik = 0; ik < kv.get_nks(); ++ik)

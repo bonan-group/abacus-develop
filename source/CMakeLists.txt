@@ -62,6 +62,7 @@ list(APPEND device_srcs
   source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.cpp
   source_pw/module_pwdft/kernels/exx_cal_energy_op.cpp
   source_pw/module_pwdft/kernels/structure_factor_op.cpp
+  source_hamilt/module_ewald/kernels/ewald_op.cpp
 )
 
 if(USE_CUDA)
@@ -96,6 +97,7 @@ if(USE_CUDA)
     source_pw/module_pwdft/kernels/cuda/vec_mul_vec_complex.cu
     source_pw/module_pwdft/kernels/cuda/exx_cal_energy_op.cu
     source_pw/module_pwdft/kernels/cuda/structure_factor_op.cu
+    source_hamilt/module_ewald/kernels/cuda/ewald_op.cu
   )
 endif()
 

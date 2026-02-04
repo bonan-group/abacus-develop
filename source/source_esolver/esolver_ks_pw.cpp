@@ -79,6 +79,17 @@ void ESolver_KS_PW<T, Device>::deallocate_hamilt()
 }
 
 template <typename T, typename Device>
+int ESolver_KS_PW<T, Device>::get_batch_fft_size() const
+{
+    // Return batch FFT size for EXX calculations if EXX is enabled
+    if (GlobalC::exx_info.info_global.cal_exx)
+    {
+        return PARAM.inp.exx_batch_fft_size;
+    }
+    return 1;  // Default: no batch FFT
+}
+
+template <typename T, typename Device>
 void ESolver_KS_PW<T, Device>::before_all_runners(UnitCell& ucell, const Input_para& inp)
 {
     //! Call before_all_runners() of ESolver_KS

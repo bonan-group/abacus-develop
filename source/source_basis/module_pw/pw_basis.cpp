@@ -56,7 +56,7 @@ PW_Basis:: ~PW_Basis()
 /// set up maps for fft and create arrays for MPI_Alltoall
 /// set up ffts
 ///
-void PW_Basis::setuptransform()
+void PW_Basis::setuptransform(int batch_fft_size)
 {
     ModuleBase::timer::tick(this->classname, "setuptransform");
     this->distribute_r();
@@ -80,15 +80,8 @@ void PW_Basis::setuptransform()
         this->fft_bundle.initfft(this->nx,this->ny,this->nz,this->liy,this->riy,this->nst,this->nplane,this->poolnproc,this->gamma_only, this->xprime);
     }
     this->fft_bundle.setupFFT();
-    this->fft_bundle.setupBatchFFT();
-
-    // Note: Batch FFT setup is NOT called here for PW_Basis (charge density).
-    // Batch FFT is only useful for wavefunction operations (PW_Basis_K) where
-    // many bands can be processed in parallel. Charge density only has 1-4 spins,
-    // so batch FFT provides no benefit. Additionally, calling setupBatchFFT() here
-    // would cause crashes because GPU memory allocation (Memory::record_gpu)
-    // happens before GlobalV::ofs_running is initialized during early setup_pwrho.
-    // PW_Basis_K::setuptransform() will call setupBatchFFT() for wavefunctions.
+    // Initialize batch FFT with specified batch size (default 1 = no batch FFT)
+    this->fft_bundle.setupBatchFFT(batch_fft_size);
 
     ModuleBase::timer::tick(this->classname, "setuptransform");
 }

@@ -1,5 +1,6 @@
 #include "source_pw/module_pwdft/setup_pot.h"
 
+#include "source_base/timer.h"
 #include "source_estate/module_charge/symmetry_rho.h"
 #include "source_lcao/module_deltaspin/spin_constrain.h"
 #include "source_pw/module_pwdft/onsite_projector.h"
@@ -30,16 +31,20 @@ void pw::setup_pot(const int istep,
     //! 0) DFT-1/2 calculations, sep potential need to generate
     // before effective potential calculation
     //----------------------------------------------------------
+    ModuleBase::timer::tick("setup_pot", "DFT_half_setup");
     if (PARAM.inp.dfthalf_type > 0)
     {
         vsep_cell->generate_vsep_r(pw_rhod[0], sf.strucFac, ucell.sep_cell);
     }
+    ModuleBase::timer::tick("setup_pot", "DFT_half_setup");
 
     //----------------------------------------------------------
     //! 1) Renew local pseudopotential
     //----------------------------------------------------------
+    ModuleBase::timer::tick("setup_pot", "init_scf");
     pelec->init_scf(ucell, para_grid, sf.strucFac,
             locpp.numeric, ucell.symm, (void*)pw_wfc);
+    ModuleBase::timer::tick("setup_pot", "init_scf");
 
 	//----------------------------------------------------------
 	//! 2) Symmetrize the charge density (rho)
@@ -48,11 +53,13 @@ void pw::setup_pot(const int istep,
 	//! Symmetry_rho should behind init_scf, because charge should be
 	//! initialized first. liuyu comment: Symmetry_rho should be
 	//! located between init_rho and v_of_rho?
+    ModuleBase::timer::tick("setup_pot", "symmetrize_rho");
 	Symmetry_rho srho;
 	for (int is = 0; is < inp.nspin; is++)
 	{
 		srho.begin(is, chr, pw_rhod, ucell.symm);
 	}
+    ModuleBase::timer::tick("setup_pot", "symmetrize_rho");
 
 	//----------------------------------------------------------
 	//! 3) Calculate the effective potential with rho
@@ -61,13 +68,16 @@ void pw::setup_pot(const int istep,
 	//! D in uspp need vloc, thus behind init_scf()
 	//! calculate the effective coefficient matrix
 	//! for non-local pseudopotential projectors
+    ModuleBase::timer::tick("setup_pot", "cal_effective_D");
 	ModuleBase::matrix veff = pelec->pot->get_eff_v();
 
 	ppcell.cal_effective_D(veff, pw_rhod, ucell);
+    ModuleBase::timer::tick("setup_pot", "cal_effective_D");
 
 	//----------------------------------------------------------
 	//! 4) Onsite projectors
 	//----------------------------------------------------------
+    ModuleBase::timer::tick("setup_pot", "onsite_proj");
 	if (PARAM.inp.onsite_radius > 0)
 	{
 		auto* onsite_p = projectors::OnsiteProjector<double, Device>::get_instance();
@@ -83,10 +93,12 @@ void pw::setup_pot(const int istep,
 				pelec->wg,
 				pelec->ekb);
 	}
+    ModuleBase::timer::tick("setup_pot", "onsite_proj");
 
     //----------------------------------------------------------
     //! 5) Spin-constrained algorithms
     //----------------------------------------------------------
+    ModuleBase::timer::tick("setup_pot", "spin_constrain");
     if (PARAM.inp.sc_mag_switch)
     {
         spinconstrain::SpinConstrain<std::complex<double>>& sc
@@ -109,17 +121,20 @@ void pw::setup_pot(const int istep,
                    pelec,
                    pw_wfc);
     }
+    ModuleBase::timer::tick("setup_pot", "spin_constrain");
 
     //----------------------------------------------------------
     //! 6) DFT+U algorithm
     // This should not called in before_scf (esolver), it should be
-    // called in before_all_runners (esolver), which should 
+    // called in before_all_runners (esolver), which should
     // be improved later. Mohan note 2025-11-06
     //----------------------------------------------------------
+    ModuleBase::timer::tick("setup_pot", "dftu_init");
     if (PARAM.inp.dft_plus_u)
     {
         dftu.init(ucell, nullptr, kv.get_nks());
     }
+    ModuleBase::timer::tick("setup_pot", "dftu_init");
 
     return;
 }

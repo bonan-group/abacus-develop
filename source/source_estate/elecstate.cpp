@@ -1,4 +1,5 @@
 #include "elecstate.h"
+#include "source_base/timer.h"
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/global_variable.h"
 #include "source_io/module_parameter/parameter.h"
@@ -29,19 +30,25 @@ void ElecState::init_nelec_spin()
 
 void ElecState::init_scf(const UnitCell& ucell,
                          const Parallel_Grid& pgrid,
-                         const ModuleBase::ComplexMatrix& strucfac, 
+                         const ModuleBase::ComplexMatrix& strucfac,
                          const bool* numeric,
-                         ModuleSymmetry::Symmetry& symm, 
+                         ModuleSymmetry::Symmetry& symm,
                          const void* wfcpw)
 {
     //! core correction potential.
+    ModuleBase::timer::tick("ElecState", "set_rho_core");
     this->charge->set_rho_core(ucell,strucfac, numeric);
+    ModuleBase::timer::tick("ElecState", "set_rho_core");
 
     //! renormalize the charge density
+    ModuleBase::timer::tick("ElecState", "renormalize_rho");
     this->charge->renormalize_rho();
+    ModuleBase::timer::tick("ElecState", "renormalize_rho");
 
     //! initialize the potential
+    ModuleBase::timer::tick("ElecState", "init_pot");
     this->pot->init_pot(this->charge);
+    ModuleBase::timer::tick("ElecState", "init_pot");
 }
 
 

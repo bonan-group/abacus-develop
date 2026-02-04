@@ -25,6 +25,9 @@ class ESolver_KS_PW : public ESolver_KS<T, Device>
 
     void before_all_runners(UnitCell& ucell, const Input_para& inp) override;
 
+    //! Return batch FFT size for EXX calculations (overrides base class)
+    int get_batch_fft_size() const override;
+
     double cal_energy() override;
 
     void cal_force(UnitCell& ucell, ModuleBase::matrix& force) override;

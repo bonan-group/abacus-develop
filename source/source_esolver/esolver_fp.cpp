@@ -1,5 +1,6 @@
 #include "esolver_fp.h"
 
+#include "source_base/timer.h"
 #include "source_estate/cal_ux.h"
 #include "source_estate/module_charge/symmetry_rho.h"
 #include "source_estate/read_pseudo.h"
@@ -162,20 +163,26 @@ void ESolver_FP::before_scf(UnitCell& ucell, const int istep)
     }
 
     //! calculate D2 or D3 vdW
+    ModuleBase::timer::tick("ESolver_FP", "vdW_energy");
     auto vdw_solver = vdw::make_vdw(ucell, PARAM.inp, &(GlobalV::ofs_running));
     if (vdw_solver != nullptr)
     {
         this->pelec->f_en.evdw = vdw_solver->get_energy();
     }
+    ModuleBase::timer::tick("ESolver_FP", "vdW_energy");
 
     //! calculate ewald energy
+    ModuleBase::timer::tick("ESolver_FP", "ewald_energy");
     if (!PARAM.inp.test_skip_ewald)
     {
-        this->pelec->f_en.ewald_energy = H_Ewald_pw::compute_ewald(ucell, this->pw_rhod, this->sf.strucFac);
+        this->pelec->f_en.ewald_energy = H_Ewald_pw::compute_ewald(ucell, this->pw_rhod, this->sf, PARAM.inp.device);
     }
+    ModuleBase::timer::tick("ESolver_FP", "ewald_energy");
 
-    //! set direction of magnetism, used in non-collinear case 
+    //! set direction of magnetism, used in non-collinear case
+    ModuleBase::timer::tick("ESolver_FP", "cal_ux");
     elecstate::cal_ux(ucell);
+    ModuleBase::timer::tick("ESolver_FP", "cal_ux");
 
     //! output the initial charge density and potential
     ModuleIO::write_chg_init(ucell, this->Pgrid, this->chr, this->pelec->eferm, istep, PARAM.inp);

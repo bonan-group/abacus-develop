@@ -7,17 +7,26 @@
 #include "source_basis/module_pw/pw_basis.h"
 #include "source_pw/module_pwdft/forces.h"
 #include "source_pw/module_pwdft/stress_func.h"
+#include "source_pw/module_pwdft/structure_factor.h"
 
-class H_Ewald_pw 
+class H_Ewald_pw
 {
   public:
     H_Ewald_pw();
     ~H_Ewald_pw();
 
     // compute the Ewald energy
+    // Original interface for backward compatibility
     static double compute_ewald(const UnitCell& cell,
                                 const ModulePW::PW_Basis* rho_basis,
                                 const ModuleBase::ComplexMatrix& strucFac);
+
+    // New interface with GPU support
+    // Pass Structure_Factor reference to access GPU data when available
+    static double compute_ewald(const UnitCell& cell,
+                                const ModulePW::PW_Basis* rho_basis,
+                                const Structure_Factor& sf,
+                                const std::string& device);
 
   public:
     static void rgen(
@@ -35,6 +44,13 @@ class H_Ewald_pw
 	static double alpha;
     static int mxr;
 
+  private:
+#if defined(__CUDA) || defined(__ROCM)
+    // GPU implementation of Ewald energy calculation
+    static double compute_ewald_gpu(const UnitCell& cell,
+                                     const ModulePW::PW_Basis* rho_basis,
+                                     const Structure_Factor& sf);
+#endif
 };
 
 #endif //ewald energy

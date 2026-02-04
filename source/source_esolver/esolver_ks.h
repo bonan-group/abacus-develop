@@ -24,6 +24,9 @@ class ESolver_KS : public ESolver_FP
 
     virtual void before_all_runners(UnitCell& ucell, const Input_para& inp) override;
 
+    //! Get batch FFT size for wavefunction initialization (default 1, overridden in EXX calculations)
+    virtual int get_batch_fft_size() const { return 1; }
+
     virtual void runner(UnitCell& ucell, const int istep) override;
 
     virtual void after_all_runners(UnitCell& ucell) override;

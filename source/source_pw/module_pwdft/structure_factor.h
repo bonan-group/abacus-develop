@@ -71,6 +71,9 @@ public:
                                   const ModulePW::PW_Basis_K* wfc_basis,
                                   ModuleBase::Vector3<double> q);
 
+    /// @brief Get GPU device pointer to structure factors (returns nullptr if on CPU)
+    std::complex<double>* get_strucFac_d() const { return strucFac_d; }
+
   private:
 
     const UnitCell* ucell=nullptr;

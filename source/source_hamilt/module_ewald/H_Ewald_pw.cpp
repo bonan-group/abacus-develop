@@ -6,6 +6,8 @@
 #include "source_base/parallel_reduce.h"
 #include "source_base/constants.h"
 #include "source_base/timer.h"
+#include "source_base/module_device/memory_op.h"
+#include "kernels/ewald_op.h"
 
 double H_Ewald_pw::alpha=0.0;
 int H_Ewald_pw::mxr = 200;
@@ -279,6 +281,262 @@ double H_Ewald_pw::compute_ewald(const UnitCell& cell,
     ModuleBase::timer::tick("H_Ewald_pw","compute_ewald");
     return ewalds;
 } // end function ewald
+
+
+// New interface with GPU support
+double H_Ewald_pw::compute_ewald(const UnitCell& cell,
+                                 const ModulePW::PW_Basis* rho_basis,
+                                 const Structure_Factor& sf,
+                                 const std::string& device)
+{
+    ModuleBase::TITLE("H_Ewald_pw","compute_ewald");
+    ModuleBase::timer::tick("H_Ewald_pw","compute_ewald");
+
+    // Use GPU path if device="gpu" and CUDA/ROCM is available
+#if defined(__CUDA) || defined(__ROCM)
+    if (device == "gpu")
+    {
+        return compute_ewald_gpu(cell, rho_basis, sf);
+    }
+#endif
+
+    // Fall back to CPU path (use original implementation via strucFac matrix)
+    ModuleBase::timer::tick("H_Ewald_pw","compute_ewald");
+    return compute_ewald(cell, rho_basis, sf.strucFac);
+}
+
+#if defined(__CUDA) || defined(__ROCM)
+// GPU implementation of Ewald energy calculation
+double H_Ewald_pw::compute_ewald_gpu(const UnitCell& cell,
+                                      const ModulePW::PW_Basis* rho_basis,
+                                      const Structure_Factor& sf)
+{
+    // Debug message to verify GPU path is being used
+    static bool first_call = true;
+    if (first_call)
+    {
+        GlobalV::ofs_running << " DEBUG: Using GPU-accelerated Ewald G-space sum" << std::endl;
+        first_call = false;
+    }
+
+    using syncmem_d2d_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using resmem_dd_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_dd_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+
+    int nr = 0;
+    int na = 0;
+    int nb = 0;
+    int nrm = 0;
+
+    double ewaldg = 0.0;
+    double ewaldr = 0.0;
+    double ewalds = 0.0;
+
+    ModuleBase::Vector3<double> dtau;
+    double rmax = 0.0;
+    double rr = 0.0;
+    double upperbound = 0.0;
+
+    if (PARAM.inp.test_energy)
+    {
+        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mxr", mxr);
+    }
+
+    std::vector<ModuleBase::Vector3<double>> vec_r(mxr);
+    std::vector<double> vec_r2(mxr);
+    std::vector<int> vec_irr(mxr);
+    int* irr = vec_irr.data();
+    ModuleBase::Vector3<double>* r = vec_r.data();
+    double* r2 = vec_r2.data();
+
+    // (1) calculate total ionic charge
+    double charge = 0.0;
+    for (int it = 0; it < cell.ntype; it++)
+    {
+        charge += cell.atoms[it].na * cell.atoms[it].ncpp.zv;
+    }
+    if (PARAM.inp.test_energy)
+    {
+        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "Total ionic charge", charge);
+    }
+
+    // (2) calculate the converged value: alpha
+    H_Ewald_pw::alpha = 2.90;
+    do
+    {
+        alpha -= 0.10;
+        if (alpha <= 0.0)
+        {
+            ModuleBase::WARNING_QUIT("ewald", "Can't find optimal alpha.");
+        }
+        upperbound = 2.0 * charge * charge * sqrt(2.0 * alpha / ModuleBase::TWO_PI)
+                     * erfc(sqrt(cell.tpiba2 * rho_basis->ggecut / 4.0 / alpha));
+    } while (upperbound > 1.0e-7);
+
+    if (PARAM.inp.test_energy)
+    {
+        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "alpha", alpha);
+        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "Upper bound", upperbound);
+    }
+
+    // Prepare zv array (ionic charges per atom type)
+    std::vector<double> zv_h(cell.ntype);
+    for (int it = 0; it < cell.ntype; it++)
+    {
+        zv_h[it] = cell.atoms[it].ncpp.zv;
+    }
+
+    // Upload zv to GPU
+    double* zv_d = nullptr;
+    resmem_dd_op()(zv_d, cell.ntype);
+    syncmem_d2d_h2d_op()(zv_d, zv_h.data(), cell.ntype);
+
+    // Get pointers to GPU data (already available from Structure_Factor)
+    // strucFac_d: structure factors [ntype * npw] on GPU
+    // gg_d: |G|² array [npw] on GPU (from pw_basis)
+    const std::complex<double>* strucFac_d = sf.get_strucFac_d();
+    const double* gg_d = rho_basis->get_gg_d();
+
+    // Call GPU kernel for G-space sum
+    ewald_op::compute_ewald_g_op<double, base_device::DEVICE_GPU>()(
+        nullptr,  // ctx
+        cell.ntype,
+        rho_basis->npw,
+        strucFac_d,
+        zv_d,
+        gg_d,
+        rho_basis->ig_gge0,
+        alpha,
+        cell.tpiba2,
+        cell.omega,
+        charge,
+        &ewaldg);
+
+    // Free temporary GPU memory
+    delmem_dd_op()(zv_d);
+
+    // Add the other constant term (type-dependent self-energy)
+    if (rho_basis->ig_gge0 >= 0)
+    {
+        for (int it = 0; it < cell.ntype; it++)
+        {
+            ewaldg -= cell.atoms[it].na * cell.atoms[it].ncpp.zv * cell.atoms[it].ncpp.zv
+                      * sqrt(8.0 / ModuleBase::TWO_PI * alpha);
+        }
+    }
+
+    // R-space sum (CPU, same as original implementation)
+    ewaldr = 0.0;
+#ifdef __MPI
+    rmax = 4.0 / sqrt(alpha) / cell.lat0;
+    if (PARAM.inp.test_energy)
+    {
+        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "rmax(unit lat0)", rmax);
+    }
+
+    int size = 0;
+    int my_rank = 0;
+    MPI_Comm_size(POOL_WORLD, &size);
+    MPI_Comm_rank(POOL_WORLD, &my_rank);
+
+    int ia_start = my_rank;
+    int ia_step = std::min(cell.nat, size);
+
+    int it1 = 0;
+    int ia1 = 0;
+    int it2 = 0;
+    int ia2 = 0;
+    for (int na1 = ia_start; na1 < cell.nat; na1 += ia_step)
+    {
+        it1 = cell.iat2it[na1];
+        ia1 = cell.iat2ia[na1];
+
+        for (int na2 = 0; na2 < cell.nat; na2++)
+        {
+            it2 = cell.iat2it[na2];
+            ia2 = cell.iat2ia[na2];
+
+            dtau = cell.atoms[it1].tau[ia1] - cell.atoms[it2].tau[ia2];
+            H_Ewald_pw::rgen(dtau, rmax, irr, cell.latvec, cell.G, r, r2, nrm);
+
+            if (PARAM.inp.test_energy > 1)
+            {
+                ModuleBase::GlobalFunc::OUT("dtau.x", dtau.x);
+                ModuleBase::GlobalFunc::OUT("dtau.y", dtau.y);
+                ModuleBase::GlobalFunc::OUT("dtau.z", dtau.z);
+                ModuleBase::GlobalFunc::OUT("nrm", nrm);
+            }
+            for (nr = 0; nr < nrm; nr++)
+            {
+                rr = sqrt(r2[nr]) * cell.lat0;
+                ewaldr += cell.atoms[it1].ncpp.zv * cell.atoms[it2].ncpp.zv
+                          * erfc(sqrt(alpha) * rr) / rr;
+            }
+            if (PARAM.inp.test_energy > 1)
+            {
+                ModuleBase::GlobalFunc::OUT("ewaldr", ewaldr);
+            }
+        }
+    }
+#else
+    if (rho_basis->ig_gge0 >= 0)
+    {
+        rmax = 4.0 / sqrt(alpha) / cell.lat0;
+        if (PARAM.inp.test_energy)
+        {
+            ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "rmax(unit lat0)", rmax);
+        }
+
+        for (int nt1 = 0; nt1 < cell.ntype; nt1++)
+        {
+            for (int nt2 = 0; nt2 < cell.ntype; nt2++)
+            {
+                for (na = 0; na < cell.atoms[nt1].na; na++)
+                {
+                    for (nb = 0; nb < cell.atoms[nt2].na; nb++)
+                    {
+                        dtau = cell.atoms[nt1].tau[na] - cell.atoms[nt2].tau[nb];
+                        H_Ewald_pw::rgen(dtau, rmax, irr, cell.latvec, cell.G, r, r2, nrm);
+
+                        if (PARAM.inp.test_energy > 1)
+                        {
+                            ModuleBase::GlobalFunc::OUT("dtau.x", dtau.x);
+                            ModuleBase::GlobalFunc::OUT("dtau.y", dtau.y);
+                            ModuleBase::GlobalFunc::OUT("dtau.z", dtau.z);
+                            ModuleBase::GlobalFunc::OUT("nrm", nrm);
+                        }
+                        for (nr = 0; nr < nrm; nr++)
+                        {
+                            rr = sqrt(r2[nr]) * cell.lat0;
+                            ewaldr += cell.atoms[nt1].ncpp.zv * cell.atoms[nt2].ncpp.zv
+                                      * erfc(sqrt(alpha) * rr) / rr;
+                        }
+                        if (PARAM.inp.test_energy > 1)
+                        {
+                            ModuleBase::GlobalFunc::OUT("ewaldr", ewaldr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
+
+    ewalds = 0.50 * ModuleBase::e2 * (ewaldg + ewaldr);
+
+    Parallel_Reduce::reduce_pool(ewalds);
+
+    if (PARAM.inp.test_energy > 1)
+    {
+        ModuleBase::GlobalFunc::OUT("ewaldg", ewaldg);
+        ModuleBase::GlobalFunc::OUT("ewaldr", ewaldr);
+        ModuleBase::GlobalFunc::OUT("ewalds", ewalds);
+    }
+
+    ModuleBase::timer::tick("H_Ewald_pw", "compute_ewald");
+    return ewalds;
+}
+#endif  // __CUDA || __ROCM
 
 
 void H_Ewald_pw::rgen(

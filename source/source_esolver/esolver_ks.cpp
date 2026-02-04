@@ -82,7 +82,7 @@ void ESolver_KS<T, Device>::before_all_runners(UnitCell& ucell, const Input_para
     p_chgmix->set_device(inp.device);
 
     //! 4) setup plane wave for electronic wave functions
-    pw::setup_pwwfc(inp, ucell, *this->pw_rho, this->kv, this->pw_wfc);
+    pw::setup_pwwfc(inp, ucell, *this->pw_rho, this->kv, this->pw_wfc, this->get_batch_fft_size());
 
     //! 5) read in charge density, mohan add 2025-11-28
     //! Inititlize the charge density.

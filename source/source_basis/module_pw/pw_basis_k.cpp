@@ -195,7 +195,7 @@ void PW_Basis_K::setupIndGk()
 /// set up maps for fft and create arrays for MPI_Alltoall
 /// set up ffts
 ///
-void PW_Basis_K::setuptransform()
+void PW_Basis_K::setuptransform(int batch_fft_size)
 {
     ModuleBase::timer::tick(this->classname, "setuptransform");
     this->distribute_r();
@@ -236,11 +236,9 @@ void PW_Basis_K::setuptransform()
     }
     this->fft_bundle.setupFFT();
 
-    // Initialize batch FFT size from input parameters
-    this->fft_bundle.init_batch_size(PARAM.inp.exx_batch_fft_size);
-
-    // Setup batch FFT for GPU acceleration (automatically skipped if not GPU or not available)
-    this->fft_bundle.setupBatchFFT();
+    // Initialize batch FFT with specified batch size (default 1 = no batch FFT)
+    // Automatically skipped if not GPU or batch_size <= 1
+    this->fft_bundle.setupBatchFFT(batch_fft_size);
 
     ModuleBase::timer::tick(this->classname, "setuptransform");
 }
