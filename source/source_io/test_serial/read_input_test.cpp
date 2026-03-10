@@ -143,6 +143,90 @@ TEST_F(InputTest, Selfconsistent_Read)
     }
 }
 
+TEST_F(InputTest, DftuMixingAutoSet)
+{
+    ModuleIO::ReadInput readinput(0);
+    readinput.check_ntype_flag = false;
+
+    {
+        std::ofstream input_file("input_dftu_auto_all_missing");
+        input_file << "INPUT_PARAMETERS\n";
+        input_file << "dft_plus_u 1\n";
+        input_file.close();
+
+        Parameter param;
+        testing::internal::CaptureStdout();
+        EXPECT_NO_THROW(readinput.read_parameters(param, "./input_dftu_auto_all_missing"));
+        std::string output = testing::internal::GetCapturedStdout();
+        EXPECT_DOUBLE_EQ(param.inp.mixing_restart, 0.0);
+        EXPECT_TRUE(param.inp.mixing_dmr);
+        EXPECT_EQ(param.inp.mixing_dmr_start, 10);
+        EXPECT_THAT(output, testing::HasSubstr("automatically set mixing_dmr = 1"));
+        EXPECT_THAT(output, testing::HasSubstr("automatically set mixing_dmr_start = 10"));
+        readinput.clear();
+        EXPECT_TRUE(std::remove("./input_dftu_auto_all_missing") == 0);
+    }
+
+    {
+        std::ofstream input_file("input_dftu_auto_partial_missing");
+        input_file << "INPUT_PARAMETERS\n";
+        input_file << "dft_plus_u 1\n";
+        input_file << "mixing_dmr_start 20\n";
+        input_file.close();
+
+        Parameter param;
+        testing::internal::CaptureStdout();
+        EXPECT_NO_THROW(readinput.read_parameters(param, "./input_dftu_auto_partial_missing"));
+        std::string output = testing::internal::GetCapturedStdout();
+        EXPECT_DOUBLE_EQ(param.inp.mixing_restart, 0.0);
+        EXPECT_TRUE(param.inp.mixing_dmr);
+        EXPECT_EQ(param.inp.mixing_dmr_start, 20);
+        EXPECT_THAT(output, testing::HasSubstr("automatically set mixing_dmr = 1"));
+        EXPECT_THAT(output, testing::Not(testing::HasSubstr("automatically set mixing_dmr_start = 10")));
+        readinput.clear();
+        EXPECT_TRUE(std::remove("./input_dftu_auto_partial_missing") == 0);
+    }
+
+    {
+        std::ofstream input_file("input_dftu_auto_disabled");
+        input_file << "INPUT_PARAMETERS\n";
+        input_file << "dft_plus_u 1\n";
+        input_file << "mixing_dmr 0\n";
+        input_file.close();
+
+        Parameter param;
+        testing::internal::CaptureStdout();
+        EXPECT_NO_THROW(readinput.read_parameters(param, "./input_dftu_auto_disabled"));
+        std::string output = testing::internal::GetCapturedStdout();
+        EXPECT_DOUBLE_EQ(param.inp.mixing_restart, 0.0);
+        EXPECT_FALSE(param.inp.mixing_dmr);
+        EXPECT_EQ(param.inp.mixing_dmr_start, 10);
+        EXPECT_THAT(output, testing::Not(testing::HasSubstr("automatically set mixing_dmr = 1")));
+        EXPECT_THAT(output, testing::HasSubstr("automatically set mixing_dmr_start = 10"));
+        readinput.clear();
+        EXPECT_TRUE(std::remove("./input_dftu_auto_disabled") == 0);
+    }
+
+    {
+        std::ofstream input_file("input_dftu_auto_off");
+        input_file << "INPUT_PARAMETERS\n";
+        input_file << "dft_plus_u 0\n";
+        input_file.close();
+
+        Parameter param;
+        testing::internal::CaptureStdout();
+        EXPECT_NO_THROW(readinput.read_parameters(param, "./input_dftu_auto_off"));
+        std::string output = testing::internal::GetCapturedStdout();
+        EXPECT_DOUBLE_EQ(param.inp.mixing_restart, 0.0);
+        EXPECT_FALSE(param.inp.mixing_dmr);
+        EXPECT_EQ(param.inp.mixing_dmr_start, 10);
+        EXPECT_THAT(output, testing::Not(testing::HasSubstr("automatically set mixing_dmr = 1")));
+        EXPECT_THAT(output, testing::Not(testing::HasSubstr("automatically set mixing_dmr_start = 10")));
+        readinput.clear();
+        EXPECT_TRUE(std::remove("./input_dftu_auto_off") == 0);
+    }
+}
+
 TEST_F(InputTest, Check)
 {
     ModuleIO::ReadInput readinput(0);

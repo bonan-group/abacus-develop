@@ -375,7 +375,7 @@ void ESolver_KS_LCAO<TK, TR>::iter_init(UnitCell& ucell, const int istep, const 
     }
 
     // save density matrix DMR for mixing
-    if (PARAM.inp.mixing_restart > 0 && PARAM.inp.mixing_dmr && this->p_chgmix->mixing_restart_count > 0)
+    if (PARAM.inp.mixing_dmr && iter >= PARAM.inp.mixing_dmr_start)
     {
         this->dmat.dm->save_DMR();
     }
@@ -498,11 +498,10 @@ void ESolver_KS_LCAO<TK, TR>::iter_finish(UnitCell& ucell, const int istep, int&
     // HF and kS energies are computed, meta-GGA, Jason and restart
     ESolver_KS<TK>::iter_finish(ucell, istep, iter, conv_esolver);
 
-    // mix density matrix if mixing_restart + mixing_dmr + not first
-    // mixing_restart at every iter except the last iter
+    // mix density matrix after delayed start and before SCF ends
     if(iter != PARAM.inp.scf_nmax && !conv_esolver)
     {
-        if (PARAM.inp.mixing_restart > 0 && this->p_chgmix->mixing_restart_count > 0 && PARAM.inp.mixing_dmr)
+        if (PARAM.inp.mixing_dmr && iter >= PARAM.inp.mixing_dmr_start)
         {
             this->p_chgmix->mix_dmr(this->dmat.dm);
         }

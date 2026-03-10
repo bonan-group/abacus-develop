@@ -180,6 +180,39 @@ ReadInput::ReadInput(const int& rank)
     this->item_others();
 }
 
+void ReadInput::apply_dftu_mixing_autoset(Parameter& param)
+{
+    auto find_item = [this](const std::string& label) -> Input_Item* {
+        auto it = std::find_if(this->input_lists.begin(),
+                               this->input_lists.end(),
+                               [&label](const std::pair<std::string, Input_Item>& item) { return item.first == label; });
+        return it == this->input_lists.end() ? nullptr : &(it->second);
+    };
+
+    if (param.input.dft_plus_u != 1)
+    {
+        return;
+    }
+
+    Input_Item* mixing_dmr_item = find_item("mixing_dmr");
+    if (mixing_dmr_item != nullptr && !mixing_dmr_item->is_read())
+    {
+        param.input.mixing_dmr = true;
+        const std::string msg = " INFO(ReadInput): dft_plus_u = 1 and mixing_dmr is not set in INPUT; "
+                                "automatically set mixing_dmr = 1.";
+        std::cout << msg << std::endl;
+    }
+
+    Input_Item* mixing_dmr_start_item = find_item("mixing_dmr_start");
+    if (mixing_dmr_start_item != nullptr && !mixing_dmr_start_item->is_read())
+    {
+        param.input.mixing_dmr_start = 10;
+        const std::string msg = " INFO(ReadInput): dft_plus_u = 1 and mixing_dmr_start is not set in INPUT; "
+                                "automatically set mixing_dmr_start = 10.";
+        std::cout << msg << std::endl;
+    }
+}
+
 void ReadInput::read_parameters(Parameter& param, const std::string& filename_in)
 {
     ModuleBase::TITLE("ReadInput", "read_parameters");
@@ -403,6 +436,7 @@ void ReadInput::read_txt_input(Parameter& param, const std::string& filename)
 			resetvalue_item->reset_value(*resetvalue_item, param);
         }
     }
+    this->apply_dftu_mixing_autoset(param);
 }
 
 void ReadInput::write_txt_input(const Parameter& param, const std::string& filename)

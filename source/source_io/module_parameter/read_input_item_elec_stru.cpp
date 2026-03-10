@@ -672,11 +672,29 @@ For systems that are difficult to converge, one could try increasing the value o
         item.annotation = "whether to mix real-space density matrix";
         item.category = "Electronic structure";
         item.type = "Boolean";
-        item.description = "At n-th iteration which is calculated by drho<mixing_restart, SCF will start a mixing for real-space density matrix by using the same coefficiences as the mixing of charge density.";
+        item.description = "Whether to mix real-space density matrix during SCF. The starting cycle is controlled by mixing_dmr_start.";
         item.default_value = "false";
         item.unit = "";
-        item.availability = "Only for mixing_restart >= 0.0";
+        item.availability = "Only for LCAO calculations.";
         read_sync_bool(input.mixing_dmr);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("mixing_dmr_start");
+        item.annotation = "scf cycle to start real-space density matrix mixing";
+        item.category = "Electronic structure";
+        item.type = "Integer";
+        item.description = "Starting SCF cycle (1-based) to enable mixing of real-space density matrix when mixing_dmr is true.";
+        item.default_value = "10";
+        item.unit = "";
+        item.availability = "Only for LCAO calculations with mixing_dmr = 1.";
+        read_sync_int(input.mixing_dmr_start);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.mixing_dmr_start < 1)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "mixing_dmr_start must be >= 1");
+            }
+        };
         this->add_item(item);
     }
     {

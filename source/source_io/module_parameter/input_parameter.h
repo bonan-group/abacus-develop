@@ -110,6 +110,7 @@ struct Input_para
     bool mixing_tau = false;  ///< whether to mix tau in mgga
     bool mixing_dftu = false; ///< whether to mix locale in DFT+U
     bool mixing_dmr = false;  ///< whether to mix real space density matrix
+    int mixing_dmr_start = 10; ///< scf cycle to start density matrix mixing
 
     bool gamma_only = false;   ///< for plane wave.
     int scf_nmax = 100;        ///< number of max elec iter

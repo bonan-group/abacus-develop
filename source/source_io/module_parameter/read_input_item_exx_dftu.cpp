@@ -750,7 +750,7 @@ void ReadInput::item_dftu()
         item.annotation = "increasing U values during SCF";
         item.category = "DFT+U correction";
         item.type = "Real";
-        item.description = "Once uramping > 0.15 eV. DFT+U calculations will start SCF with U = 0 eV, namely normal LDA/PBE calculations. Once SCF restarts when drho<mixing_restart, U value will increase by uramping eV. SCF will repeat above calcuations until U values reach target defined in hubbard_u. As for uramping=1.0 eV, the recommendations of mixing_restart is around 5e-4.";
+        item.description = "Once uramping > 0.15 eV. DFT+U calculations will start SCF with U = 0 eV, namely normal LDA/PBE calculations. Once SCF restarts when drho<mixing_restart, U value will increase by uramping eV. SCF will repeat above calcuations until U values reach target defined in hubbard_u. As for uramping=1.0 eV, the recommendations of mixing_restart is around 5e-4. The start cycle for density-matrix mixing is controlled separately by mixing_dmr_start.";
         item.default_value = "-1.0.";
         item.unit = "eV";
         item.availability = "DFT+U calculations with mixing_restart > 0.";

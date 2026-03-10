@@ -7,6 +7,7 @@
 #include <string>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 
 namespace ModuleIO
@@ -89,6 +90,8 @@ class ReadInput
      *
      */
     void check_ntype(const std::string& fn, int& param_ntype);
+    // auto-set mixing parameters for dft_plus_u=1 when they are not explicitly read
+    void apply_dftu_mixing_autoset(Parameter& param);
     /**
      * @brief add item to input list
      *

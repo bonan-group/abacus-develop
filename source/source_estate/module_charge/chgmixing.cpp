@@ -218,10 +218,10 @@ void module_charge::chgmixing_ks_lcao(const int iter, // scf iteration number
                 p_chgmix->mixing_restart_step = inp.scf_nmax + 1;
             }
         }
-        if (inp.mixing_dmr) // for mixing_dmr
-        {
-            // allocate memory for dmr_mdata
-            p_chgmix->allocate_mixing_dmr(nnr);
-        }
+    }
+
+    if (inp.mixing_dmr && iter == inp.mixing_dmr_start)
+    {
+        p_chgmix->allocate_mixing_dmr(nnr);
     }
 }
