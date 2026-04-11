@@ -251,6 +251,10 @@ struct Input_para
     // ML EXX, temporarily located here, sunliang
     bool ml_exx = false;            ///< Use ML EXX or not
 
+    // CIDER NLDF XC
+    std::string cider_model = "";   ///< Path to CIDER model file (.yaml or .joblib)
+    double cider_xmix = 0.25;       ///< Exchange mixing parameter for CIDER
+
     // ==============   #Parameters (7.stochastic DFT) ===========================
     int method_sto = 2;        ///< different methods for sdft, 1: slow, less memory 2:
                                ///< fast, more memory

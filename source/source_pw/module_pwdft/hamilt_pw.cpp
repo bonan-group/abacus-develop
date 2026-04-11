@@ -59,7 +59,18 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
             pot_register_in.push_back("hartree");
         }
         //no variable can choose xc, maybe it is necessary
+#if defined(ENABLE_CIDER) && defined(USE_LIBXC)
+        if (!PARAM.inp.cider_model.empty())
+        {
+            pot_register_in.push_back("cider");
+        }
+        else
+        {
+            pot_register_in.push_back("xc");
+        }
+#else
         pot_register_in.push_back("xc");
+#endif
         if (PARAM.inp.imp_sol)
         {
             pot_register_in.push_back("surchem");

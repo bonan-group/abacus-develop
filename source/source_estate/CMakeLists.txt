@@ -55,6 +55,12 @@ if(ENABLE_LCAO)
   )
 endif()
 
+if(ENABLE_CIDER AND ENABLE_LIBXC)
+  list(APPEND objects
+      module_pot/pot_cider_xc.cpp
+  )
+endif()
+
 add_library(
     elecstate
     OBJECT

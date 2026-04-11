@@ -19,6 +19,9 @@
 #ifdef __MLALGO
 #include "pot_ml_exx.h"
 #endif
+#if defined(ENABLE_CIDER) && defined(USE_LIBXC)
+#include "pot_cider_xc.h"
+#endif
 
 namespace elecstate
 {
@@ -68,6 +71,13 @@ PotBase* Potential::get_pot_type(const std::string& pot_type)
     else if (pot_type == "dfthalf") {
         return new PotSep(&(this->structure_factors_->strucFac), this->rho_basis_, this->vsep_cell);
     }
+#if defined(ENABLE_CIDER) && defined(USE_LIBXC)
+    else if (pot_type == "cider")
+    {
+        return new PotCiderXC(this->rho_basis_, this->ucell_,
+                              this->etxc_, this->vtxc_, &(this->vofk_eff));
+    }
+#endif
     else
     {
         ModuleBase::WARNING_QUIT("Potential::get_pot_type", "Please input correct component of potential!");

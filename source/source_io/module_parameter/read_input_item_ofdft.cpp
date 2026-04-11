@@ -805,5 +805,29 @@ Note: Even dimensions may cause slight errors in FFT. It should be ignorable in 
         read_sync_bool(input.ml_exx);
         this->add_item(item);
     }
+    {
+        Input_Item item("cider_model");
+        item.annotation = "Path to CIDER model file";
+        item.category = "CIDER NLDF XC";
+        item.type = "String";
+        item.description = "Path to a CIDER model file (.yaml or .joblib). If non-empty, CIDER NLDF XC is activated.";
+        item.default_value = "\"\"";
+        item.unit = "";
+        item.availability = "";
+        read_sync_string(input.cider_model);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("cider_xmix");
+        item.annotation = "Exchange mixing parameter for CIDER";
+        item.category = "CIDER NLDF XC";
+        item.type = "Double";
+        item.description = "Exchange mixing parameter. The baseline exchange is scaled by (1-xmix).";
+        item.default_value = "0.25";
+        item.unit = "";
+        item.availability = "";
+        read_sync_double(input.cider_xmix);
+        this->add_item(item);
+    }
 }
 } // namespace ModuleIO

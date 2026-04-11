@@ -27,6 +27,7 @@ option(ENABLE_FLOAT_FFTW "Enable using single-precision FFTW library." OFF)
 # option(ENABLE_MLKEDF "Enable the Machine-Learning-based KEDF for OFDFT" OFF)
 
 option(ENABLE_MLALGO "Enable the machine learning algorithms" OFF)
+option(ENABLE_CIDER "Enable CIDER NLDF XC (requires CiderPress and Python)" OFF)
 
 option(ENABLE_LCAO "Enable LCAO algorithm" ON)
 option(USE_ELPA "Enable ELPA for LCAO" ON)
@@ -581,6 +582,30 @@ if(ENABLE_MLALGO)
   include_directories(${libnpy_SOURCE_DIR}/include)
 
   add_compile_definitions(__MLALGO)
+endif()
+
+if(ENABLE_CIDER)
+  if(NOT ENABLE_LIBXC)
+    message(FATAL_ERROR "ENABLE_CIDER requires ENABLE_LIBXC")
+  endif()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter Development NumPy)
+  include_directories(${Python3_INCLUDE_DIRS})
+  # CiderPress bridge library (libciderbridge)
+  find_library(CIDERBRIDGE_LIBRARY ciderbridge
+    HINTS ${CIDERPRESS_DIR}/lib ${CIDERPRESS_DIR}/ciderpress/lib ${CIDERPRESS_LIB_DIR}
+    ENV CIDERPRESS_LIB_DIR
+  )
+  # Bridge header
+  find_path(CIDERBRIDGE_INCLUDE_DIR cider_bridge.h
+    HINTS ${CIDERPRESS_DIR}/bridge ${CIDERPRESS_LIB_DIR}/bridge ${CIDERPRESS_LIB_DIR}/../bridge
+  )
+  if(NOT CIDERBRIDGE_LIBRARY)
+    message(FATAL_ERROR "libciderbridge not found. Set CIDERPRESS_DIR or CIDERPRESS_LIB_DIR.")
+  endif()
+  include_directories(${CIDERBRIDGE_INCLUDE_DIR})
+  target_link_libraries(${ABACUS_BIN_NAME} ${CIDERBRIDGE_LIBRARY})
+  target_link_libraries(${ABACUS_BIN_NAME} ${Python3_LIBRARIES})
+  add_compile_definitions(ENABLE_CIDER)
 endif()
 
 # Torch uses outdated components to detect CUDA arch, causing failure on
