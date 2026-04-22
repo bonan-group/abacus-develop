@@ -810,7 +810,7 @@ Note: Even dimensions may cause slight errors in FFT. It should be ignorable in 
         item.annotation = "Path to CIDER model file";
         item.category = "CIDER NLDF XC";
         item.type = "String";
-        item.description = "Path to a CIDER model file (.yaml or .joblib). If non-empty, CIDER NLDF XC is activated.";
+        item.description = "Path to a CIDER model file (.yaml or .joblib). If non-empty, ABACUS uses the bridge-owned CIDER XC path instead of the normal XC evaluator.";
         item.default_value = "\"\"";
         item.unit = "";
         item.availability = "";
@@ -822,7 +822,7 @@ Note: Even dimensions may cause slight errors in FFT. It should be ignorable in 
         item.annotation = "Exchange mixing parameter for CIDER";
         item.category = "CIDER NLDF XC";
         item.type = "Double";
-        item.description = "Exchange mixing parameter. The baseline exchange is scaled by (1-xmix).";
+        item.description = "Exchange mixing parameter used inside the CIDER bridge-owned surrogate hybrid XC. The baseline exchange is scaled by (1-xmix).";
         item.default_value = "0.25";
         item.unit = "";
         item.availability = "";

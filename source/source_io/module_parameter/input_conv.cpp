@@ -432,6 +432,34 @@ void Input_Conv::Convert()
         GlobalC::exx_info.info_global.cal_exx = false;
     }
 
+    if (!PARAM.inp.cider_model.empty())
+    {
+        if (PARAM.inp.basis_type != "pw")
+        {
+            ModuleBase::WARNING_QUIT(
+                "Input_Conv",
+                "CIDER bridge currently supports only basis_type = pw");
+        }
+        if (PARAM.inp.nspin != 1 && PARAM.inp.nspin != 2)
+        {
+            ModuleBase::WARNING_QUIT(
+                "Input_Conv",
+                "CIDER bridge currently supports only nspin = 1 or 2");
+        }
+        if (PARAM.inp.cider_xmix < 0.0 || PARAM.inp.cider_xmix > 1.0)
+        {
+            ModuleBase::WARNING_QUIT(
+                "Input_Conv",
+                "cider_xmix must be between 0 and 1");
+        }
+        if (GlobalC::exx_info.info_global.cal_exx)
+        {
+            ModuleBase::WARNING_QUIT(
+                "Input_Conv",
+                "Do not combine cider_model with native hybrid/EXX dft_functional settings");
+        }
+    }
+
     // info_global.ccp_type will be removed in the future. these codes for pw and lcao_in_pw temporarily
     if (dft_functional_lower == "hf"
      || dft_functional_lower == "pbe0" || dft_functional_lower == "b3lyp"
