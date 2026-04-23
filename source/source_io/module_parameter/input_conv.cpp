@@ -167,6 +167,16 @@ void Input_Conv::read_td_efield()
 }
 #endif
 
+namespace
+{
+bool cider_model_requests_ked(const std::string& model_path)
+{
+    std::string upper = model_path;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    return upper.find("MGGA") != std::string::npos;
+}
+}
+
 void Input_Conv::Convert()
 {
     ModuleBase::TITLE("Input_Conv", "Convert");
@@ -457,6 +467,10 @@ void Input_Conv::Convert()
             ModuleBase::WARNING_QUIT(
                 "Input_Conv",
                 "Do not combine cider_model with native hybrid/EXX dft_functional settings");
+        }
+        if (cider_model_requests_ked(PARAM.inp.cider_model))
+        {
+            XC_Functional::set_ked_flag(true);
         }
     }
 

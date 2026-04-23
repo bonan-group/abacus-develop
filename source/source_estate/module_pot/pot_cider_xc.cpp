@@ -5,12 +5,17 @@
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
 #include "source_base/global_variable.h"
+#include "source_base/parallel_global.h"
+#include "source_base/parallel_reduce.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_hamilt/module_xc/xc_functional_libxc.h"
 #include "source_io/module_parameter/parameter.h"
 
 #include <algorithm>
 #include <cmath>
+#ifdef __MPI
+#include <mpi.h>
+#endif
 
 namespace
 {
@@ -20,7 +25,8 @@ void log_same_density_xc_comparison(
     const UnitCell* const ucell,
     const double bridge_etxc,
     const double bridge_vtxc,
-    const ModuleBase::matrix& bridge_v)
+    const ModuleBase::matrix& bridge_v,
+    const ModuleBase::matrix* bridge_vofk = nullptr)
 {
     const auto native_xc = XC_Functional_Libxc::v_xc_libxc(
         XC_Functional::get_func_id(),
@@ -68,6 +74,30 @@ void log_same_density_xc_comparison(
         << " native_v00=" << native_v(0, 0)
         << " delta_v00=" << (bridge_v(0, 0) - native_v(0, 0))
         << std::endl;
+
+    if (bridge_vofk != nullptr)
+    {
+        double max_abs_vofk = 0.0;
+        double rms_vofk = 0.0;
+        const double vofk_denom = static_cast<double>(bridge_vofk->nr * bridge_vofk->nc);
+        for (int is = 0; is < bridge_vofk->nr; ++is)
+        {
+            for (int ir = 0; ir < bridge_vofk->nc; ++ir)
+            {
+                const double value = (*bridge_vofk)(is, ir);
+                max_abs_vofk = std::max(max_abs_vofk, std::abs(value));
+                rms_vofk += value * value;
+            }
+        }
+        rms_vofk = std::sqrt(rms_vofk / std::max(vofk_denom, 1.0));
+
+        GlobalV::ofs_running
+            << "PotCiderXC: same-density vofk comparison"
+            << " max_abs_vofk_diff=" << max_abs_vofk
+            << " rms_vofk_diff=" << rms_vofk
+            << " bridge_vofk00=" << ((*bridge_vofk).nr > 0 && (*bridge_vofk).nc > 0 ? (*bridge_vofk)(0, 0) : 0.0)
+            << std::endl;
+    }
 }
 
 std::pair<double, ModuleBase::matrix> reconstruct_bridge_vxc_with_native_helper(
@@ -102,6 +132,84 @@ std::pair<double, ModuleBase::matrix> reconstruct_bridge_vxc_with_native_helper(
     return result;
 }
 
+std::vector<double> gather_spin_major_to_global(
+    const ModulePW::PW_Basis* const rho_basis,
+    const std::vector<double>& local,
+    const int nchannels)
+{
+    const int nrxx_local = rho_basis->nrxx;
+    const int nxyz = rho_basis->nxyz;
+    if (nchannels <= 0) {
+        return {};
+    }
+
+#ifdef __MPI
+    if (GlobalV::NPROC_IN_POOL > 1 && POOL_WORLD != MPI_COMM_NULL) {
+        const int ncxy = rho_basis->nx * rho_basis->ny;
+        std::vector<double> global(nchannels * nxyz, 0.0);
+        std::vector<double> gathered(nchannels * nxyz, 0.0);
+        std::vector<int> rec(GlobalV::NPROC_IN_POOL);
+        std::vector<int> dis(GlobalV::NPROC_IN_POOL);
+        for (int ip = 0; ip < GlobalV::NPROC_IN_POOL; ++ip) {
+            rec[ip] = rho_basis->numz[ip] * ncxy;
+            dis[ip] = rho_basis->startz[ip] * ncxy;
+        }
+
+        for (int ich = 0; ich < nchannels; ++ich) {
+            MPI_Allgatherv(local.data() + ich * nrxx_local,
+                           nrxx_local,
+                           MPI_DOUBLE,
+                           gathered.data() + ich * nxyz,
+                           rec.data(),
+                           dis.data(),
+                           MPI_DOUBLE,
+                           POOL_WORLD);
+
+            double* global_ch = global.data() + ich * nxyz;
+            const double* gathered_ch = gathered.data() + ich * nxyz;
+            for (int ip = 0; ip < GlobalV::NPROC_IN_POOL; ++ip) {
+                for (int ixy = 0; ixy < ncxy; ++ixy) {
+                    for (int iz = 0; iz < rho_basis->numz[ip]; ++iz) {
+                        global_ch[rho_basis->nz * ixy + rho_basis->startz[ip] + iz] =
+                            gathered_ch[rho_basis->numz[ip] * ixy
+                                        + rho_basis->startz[ip] * ncxy
+                                        + iz];
+                    }
+                }
+            }
+        }
+        return global;
+    }
+#endif
+
+    return local;
+}
+
+std::vector<double> scatter_spin_major_from_global(
+    const ModulePW::PW_Basis* const rho_basis,
+    const std::vector<double>& global,
+    const int nchannels)
+{
+    const int nrxx_local = rho_basis->nrxx;
+    std::vector<double> local(nchannels * nrxx_local, 0.0);
+    if (nchannels <= 0) {
+        return local;
+    }
+
+    const int ncxy = rho_basis->nx * rho_basis->ny;
+    for (int ich = 0; ich < nchannels; ++ich) {
+        const double* global_ch = global.data() + ich * rho_basis->nxyz;
+        double* local_ch = local.data() + ich * nrxx_local;
+        for (int ixy = 0; ixy < ncxy; ++ixy) {
+            for (int iz = 0; iz < rho_basis->nplane; ++iz) {
+                local_ch[ixy * rho_basis->nplane + iz] =
+                    global_ch[rho_basis->nz * ixy + rho_basis->startz_current + iz];
+            }
+        }
+    }
+    return local;
+}
+
 } // namespace
 
 namespace elecstate
@@ -122,12 +230,15 @@ PotCiderXC::PotCiderXC(
     // Grid dimensions
     const int N_c[3] = {rho_basis_in->nx, rho_basis_in->ny, rho_basis_in->nz};
 
-    // Lattice vectors in row-major order (Bohr units)
+    // Lattice vectors in row-major order (Bohr units). ABACUS stores
+    // latvec in units of lat0, so scale explicitly before passing to
+    // the bridge FFT/NLDF backend.
     const auto& lat = ucell_in->latvec;
+    const double lat0 = ucell_in->lat0;
     double cell_cv[9] = {
-        lat.e11, lat.e12, lat.e13,
-        lat.e21, lat.e22, lat.e23,
-        lat.e31, lat.e32, lat.e33
+        lat0 * lat.e11, lat0 * lat.e12, lat0 * lat.e13,
+        lat0 * lat.e21, lat0 * lat.e22, lat0 * lat.e23,
+        lat0 * lat.e31, lat0 * lat.e32, lat0 * lat.e33
     };
 
     const std::string& model_path = PARAM.inp.cider_model;
@@ -172,6 +283,7 @@ void PotCiderXC::cal_v_eff(
 
     const int nspin = chg->nspin;
     const std::size_t nrxx = chg->nrxx;
+    const std::size_t nxyz = chg->rhopw->nxyz;
     const double tpiba = ucell->tpiba;
 
     static int eval_count = 0;
@@ -208,7 +320,7 @@ void PotCiderXC::cal_v_eff(
 #endif
         for (int is = 0; is < nspin; ++is) {
             for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                tau_interleaved[ir * nspin + is] = chg->kin_r[is][ir];
+                tau_interleaved[ir * nspin + is] = chg->kin_r[is][ir] / 2.0;
             }
         }
     }
@@ -264,13 +376,38 @@ void PotCiderXC::cal_v_eff(
     }
 
     // === 6. Call CIDER bridge ===
+    const std::vector<double> rho_sm_global = gather_spin_major_to_global(this->rho_basis_, rho_sm, nspin);
+    const std::vector<double> sigma_sm_global = gather_spin_major_to_global(this->rho_basis_, sigma_sm, nsigma);
+    const std::vector<double> tau_sm_global = tau_sm.empty()
+                                                  ? std::vector<double>()
+                                                  : gather_spin_major_to_global(this->rho_basis_, tau_sm, nspin);
+
+    std::vector<double> exc_global(nxyz, 0.0);
+    std::vector<double> vrho_sm_global(nxyz * nspin, 0.0);
+    std::vector<double> vsigma_sm_global(nxyz * nsigma, 0.0);
+    std::vector<double> vtau_sm_global;
+    double* tau_sm_global_ptr = nullptr;
+    double* vtau_sm_global_ptr = nullptr;
+    if (!tau_sm_global.empty()) {
+        tau_sm_global_ptr = const_cast<double*>(tau_sm_global.data());
+        vtau_sm_global.resize(nxyz * nspin, 0.0);
+        vtau_sm_global_ptr = vtau_sm_global.data();
+    }
+
     int err = cider_bridge_evaluate(
-        ctx_, nspin, nrxx,
-        rho_sm.data(), sigma_sm.data(), tau_sm_ptr,
-        exc.data(), vrho_sm.data(), vsigma_sm.data(), vtau_sm_ptr);
+        ctx_, nspin, static_cast<int>(nxyz),
+        rho_sm_global.data(), sigma_sm_global.data(), tau_sm_global_ptr,
+        exc_global.data(), vrho_sm_global.data(), vsigma_sm_global.data(), vtau_sm_global_ptr);
 
     if (err != 0) {
         ModuleBase::WARNING_QUIT("PotCiderXC", "cider_bridge_evaluate failed");
+    }
+
+    exc = scatter_spin_major_from_global(this->rho_basis_, exc_global, 1);
+    vrho_sm = scatter_spin_major_from_global(this->rho_basis_, vrho_sm_global, nspin);
+    vsigma_sm = scatter_spin_major_from_global(this->rho_basis_, vsigma_sm_global, nsigma);
+    if (vtau_sm_global_ptr != nullptr) {
+        vtau_sm = scatter_spin_major_from_global(this->rho_basis_, vtau_sm_global, nspin);
     }
 
     GlobalV::ofs_running
@@ -326,12 +463,36 @@ void PotCiderXC::cal_v_eff(
     double vtxc_local = std::get<0>(vtxc_v_bridge);
     ModuleBase::matrix v_bridge = std::get<1>(vtxc_v_bridge);
 
+#ifdef __MPI
+    Parallel_Reduce::reduce_pool(etxc_local);
+    Parallel_Reduce::reduce_pool(vtxc_local);
+#endif
+
     const double grid_weight = ucell->omega / chg->rhopw->nxyz;
     *(this->etxc_) = etxc_local * grid_weight;
     *(this->vtxc_) = vtxc_local * grid_weight;
 
-    if (!is_mgga_ && std::abs(PARAM.inp.cider_xmix) < 1e-14) {
-        log_same_density_xc_comparison(chg, ucell, *(this->etxc_), *(this->vtxc_), v_bridge);
+    ModuleBase::matrix bridge_vofk;
+    if (is_mgga_ && vtau_sm_ptr != nullptr)
+    {
+        bridge_vofk.create(nspin, nrxx);
+        for (int is = 0; is < nspin; ++is)
+        {
+            for (std::size_t ir = 0; ir < nrxx; ++ir)
+            {
+                bridge_vofk(is, ir) = vtau_sm[is * nrxx + ir];
+            }
+        }
+    }
+
+    if (std::abs(PARAM.inp.cider_xmix) < 1e-14) {
+        log_same_density_xc_comparison(
+            chg,
+            ucell,
+            *(this->etxc_),
+            *(this->vtxc_),
+            v_bridge,
+            bridge_vofk.nc > 0 ? &bridge_vofk : nullptr);
     }
 
     v_eff += v_bridge;
@@ -350,7 +511,7 @@ void PotCiderXC::cal_v_eff(
 #endif
         for (int is = 0; is < nspin; ++is) {
             for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                (*vofk_)(is, ir) += ModuleBase::e2 * vtau_sm[is * nrxx + ir];
+                (*vofk_)(is, ir) += vtau_sm[is * nrxx + ir];
             }
         }
     }
