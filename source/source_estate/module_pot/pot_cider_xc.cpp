@@ -312,16 +312,51 @@ void PotCiderXC::cal_v_eff(
     auto sigma_interleaved = XC_Functional_Libxc::convert_sigma(gdr);
 
     // === 3. Build tau in interleaved layout ===
+    // CIDER functionals are trained on all-electron kinetic energy density,
+    // but ABACUS kin_r only contains the valence contribution. When
+    // cider_tf_tau is true, we approximate the frozen-core kinetic energy
+    // density via the Thomas-Fermi formula and add it to the
+    // wavefunction-derived valence tau.
     std::vector<double> tau_interleaved;
     if (is_mgga_ && chg->kin_r != nullptr) {
         tau_interleaved.resize(nrxx * nspin);
+        const bool use_tf_core = PARAM.inp.cider_tf_tau;
+        constexpr double TF_FACTOR = (3.0 / 10.0) * std::pow(3.0 * M_PI * M_PI, 2.0 / 3.0);
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static, 1024)
 #endif
         for (int is = 0; is < nspin; ++is) {
             for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                tau_interleaved[ir * nspin + is] = chg->kin_r[is][ir] / 2.0;
+                double tau = chg->kin_r[is][ir] / 2.0;
+                if (use_tf_core) {
+                    const double rho_cps = std::max(chg->rho_core[ir] / nspin, 0.0);
+                    tau += TF_FACTOR * std::pow(rho_cps, 5.0 / 3.0);
+                }
+                tau_interleaved[ir * nspin + is] = tau;
             }
+        }
+    }
+
+    // CIDER MGGA functionals need NLCC core density for rho, sigma, and tau.
+    // Print a one-time warning if no NLCC is present.
+    if (is_mgga_) {
+        static bool nlcc_warned = false;
+        if (!nlcc_warned) {
+            bool has_nlcc = false;
+            for (int it = 0; it < ucell->ntype; ++it) {
+                if (ucell->atoms[it].ncpp.nlcc) {
+                    has_nlcc = true;
+                    break;
+                }
+            }
+            if (!has_nlcc) {
+                GlobalV::ofs_running
+                    << "WARNING PotCiderXC: CIDER MGGA model requires NLCC pseudopotentials "
+                    << "for accurate core density contribution to rho, sigma, and tau.\n"
+                    << "No NLCC pseudopotential detected; core density will be zero."
+                    << std::endl;
+            }
+            nlcc_warned = true;
         }
     }
 
@@ -504,14 +539,14 @@ void PotCiderXC::cal_v_eff(
         << " grid_weight=" << grid_weight
         << std::endl;
 
-    // === 9. MGGA: convert vtau back to interleaved, add into vofk ===
+    // === 9. MGGA: convert vtau back to interleaved, assign into vofk ===
     if (is_mgga_ && vofk_ != nullptr && vtau_sm_ptr != nullptr) {
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static, 1024)
 #endif
         for (int is = 0; is < nspin; ++is) {
             for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                (*vofk_)(is, ir) += vtau_sm[is * nrxx + ir];
+                (*vofk_)(is, ir) = vtau_sm[is * nrxx + ir];
             }
         }
     }

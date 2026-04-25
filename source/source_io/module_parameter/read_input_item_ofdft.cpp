@@ -829,5 +829,17 @@ Note: Even dimensions may cause slight errors in FFT. It should be ignorable in 
         read_sync_double(input.cider_xmix);
         this->add_item(item);
     }
+    {
+        Input_Item item("cider_tf_tau");
+        item.annotation = "Use TF core tau for CIDER MGGA";
+        item.category = "CIDER NLDF XC";
+        item.type = "Bool";
+        item.description = "If true, add Thomas-Fermi core kinetic energy density (from NLCC) to the valence tau before passing to CIDER MGGA functionals.";
+        item.default_value = "false";
+        item.unit = "";
+        item.availability = "";
+        read_sync_bool(input.cider_tf_tau);
+        this->add_item(item);
+    }
 }
 } // namespace ModuleIO

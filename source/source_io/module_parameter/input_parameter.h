@@ -254,6 +254,7 @@ struct Input_para
     // CIDER NLDF XC
     std::string cider_model = "";   ///< Path to CIDER model file (.yaml or .joblib)
     double cider_xmix = 0.25;       ///< Exchange mixing parameter for CIDER
+    bool cider_tf_tau = false;      ///< Add TF core tau for CIDER MGGA functionals
 
     // ==============   #Parameters (7.stochastic DFT) ===========================
     int method_sto = 2;        ///< different methods for sdft, 1: slow, less memory 2:
