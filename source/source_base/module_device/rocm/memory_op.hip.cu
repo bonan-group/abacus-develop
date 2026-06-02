@@ -1,4 +1,5 @@
 #include "source_base/module_device/memory_op.h"
+#include "source_base/memory_recorder.h"
 
 #include <base/macros/macros.h>
 #include <hip/hip_runtime.h>
@@ -6,6 +7,7 @@
 
 #include <complex>
 #include <type_traits>
+#include <unordered_map>
 
 #define THREADS_PER_BLOCK 256
 
@@ -13,6 +15,10 @@ namespace base_device
 {
 namespace memory
 {
+namespace
+{
+std::unordered_map<const void*, size_t> gpu_allocation_sizes;
+}
 
 template <typename FPTYPE_out, typename FPTYPE_in>
 __global__ void cast_memory(FPTYPE_out* out, const FPTYPE_in* in, const int size)
@@ -47,7 +53,11 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
     {
         delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(arr);
     }
-    hipErrcheck(hipMalloc((void**)&arr, sizeof(FPTYPE) * size));
+    const size_t bytes = sizeof(FPTYPE) * size;
+    hipErrcheck(hipMalloc((void**)&arr, bytes));
+    gpu_allocation_sizes[arr] = bytes;
+    const std::string record_string = record_in == nullptr ? "no_record" : record_in;
+    ModuleBase::Memory::record_gpu_alloc(record_string, bytes);
 }
 
 template <typename FPTYPE>
@@ -148,9 +158,27 @@ struct cast_memory_op<FPTYPE_out, FPTYPE_in, base_device::DEVICE_CPU, base_devic
 };
 
 template <typename FPTYPE>
-void delete_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE* arr)
+void delete_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE* arr, const size_t bytes)
 {
+    if (arr == nullptr)
+    {
+        return;
+    }
+    size_t free_bytes = bytes;
+    if (free_bytes == 0)
+    {
+        const auto it = gpu_allocation_sizes.find(arr);
+        if (it != gpu_allocation_sizes.end())
+        {
+            free_bytes = it->second;
+        }
+    }
     hipErrcheck(hipFree(arr));
+    gpu_allocation_sizes.erase(arr);
+    if (free_bytes > 0)
+    {
+        ModuleBase::Memory::record_gpu_free(free_bytes);
+    }
 }
 
 template struct resize_memory_op<int, base_device::DEVICE_GPU>;

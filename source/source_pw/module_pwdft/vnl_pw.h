@@ -9,9 +9,49 @@
 #include "source_pw/module_pwdft/soc.h"
 #include "source_pw/module_pwdft/structure_factor.h"
 #include "source_psi/psi.h"
+#include <algorithm>
+#include <cstdlib>
+#include <string>
 #ifdef __LCAO
 #include "source_basis/module_ao/ORB_gaunt_table.h"
 #endif
+
+inline int get_chunked_vnl_override()
+{
+    const char* env = std::getenv("ABACUS_VNL_CHUNKED");
+    if (env == nullptr)
+    {
+        return -1;
+    }
+    return std::string(env) == "1" ? 1 : 0;
+}
+
+inline int get_vnl_chunk_size_override()
+{
+    const char* env = std::getenv("ABACUS_VNL_CHUNK_SIZE");
+    return env == nullptr ? 0 : std::max(0, std::atoi(env));
+}
+
+constexpr size_t VKB_SIZE_THRESHOLD_BYTES = 4ULL * 1024 * 1024 * 1024;
+
+inline bool vnl_chunking_enabled(const int nkb, const int npwx, const size_t element_size)
+{
+#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
+    return false;
+#else
+    const int override_val = get_chunked_vnl_override();
+    if (override_val == 1)
+    {
+        return true;
+    }
+    if (override_val == 0)
+    {
+        return false;
+    }
+    const size_t vkb_size = static_cast<size_t>(nkb) * static_cast<size_t>(npwx) * element_size;
+    return vkb_size > VKB_SIZE_THRESHOLD_BYTES;
+#endif
+}
 
 //==========================================================
 // Calculate the non-local pseudopotential in reciprocal
@@ -40,6 +80,17 @@ class pseudopot_cell_vnl
 
     template <typename FPTYPE, typename Device>
     void getvnl(Device* ctx, const UnitCell& ucell, const int& ik, std::complex<FPTYPE>* vkb_in) const;
+
+    template <typename FPTYPE, typename Device>
+    void getvnl_atoms_cached(Device* ctx,
+                             const UnitCell& ucell,
+                             const int& ik,
+                             int atom_start,
+                             int atom_end,
+                             const FPTYPE* gk,
+                             const FPTYPE* ylm,
+                             const std::complex<FPTYPE>* sk_all,
+                             std::complex<FPTYPE>* vkb_out) const;
 
     // void getvnl_alpha(const int &ik);
 
@@ -111,6 +162,8 @@ class pseudopot_cell_vnl
     // Column dimension of vkb matrix (= npwx), used as leading dimension in gemm/gemv.
     // On GPU path vkb ComplexMatrix is not allocated to save CPU memory; this stores the dimension.
     int vkbnc = 0;
+    bool has_full_float_vkb = false;
+    bool has_full_double_vkb = false;
 
     // other variables
     std::complex<double> Cal_C(int alpha, int lu, int mu, int L, int M);

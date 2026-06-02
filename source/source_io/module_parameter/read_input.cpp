@@ -17,6 +17,7 @@
 #include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 #include "source_base/module_device/device.h"
+#include "source_base/memory_recorder.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -281,6 +282,18 @@ void ReadInput::create_directory(const Parameter& param)
                                           param.globalv.log_file,
                                           param.input.of_ml_gene_data,
                                           param.input.deepks_out_freq_elec > 0); // xiaohui add 2013-09-01
+#if defined(__CUDA) || defined(__ROCM)
+    std::string mem_stream_path;
+    if (param.inp.mem_stream)
+    {
+        mem_stream_path = param.sys.global_out_dir + "memory_stream";
+#ifdef __MPI
+        mem_stream_path += ".rank" + std::to_string(this->rank);
+#endif
+        mem_stream_path += ".jsonl";
+    }
+    ModuleBase::Memory::set_stream_enabled(param.inp.mem_stream, mem_stream_path);
+#endif
     //const std::string ss = "test -d " + PARAM.inp.read_file_dir;
     struct stat st;
     if (stat(PARAM.inp.read_file_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))

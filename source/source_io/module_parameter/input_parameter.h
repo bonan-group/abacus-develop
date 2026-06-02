@@ -72,6 +72,7 @@ struct Input_para
     std::string precision = "double";
     std::string gint_precision = "double";
     bool timer_enable_nvtx = false;
+    bool mem_stream = false;
 
     // ==============   #Parameters (2.Electronic structure) ===========================
     std::string ks_solver = "default"; ///< xiaohui add 2013-09-01

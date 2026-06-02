@@ -80,6 +80,12 @@ class Memory
       const bool accumulate = false
     );
 
+    static void record_gpu_alloc(const std::string& name_in, const size_t n_in);
+    static void record_gpu_free(const size_t n_in);
+    static void set_stream_enabled(const bool enabled, const std::string& path = "");
+    static bool stream_enabled();
+    static double get_gpu_peak_mb();
+
 #endif
 
     static double &get_total(void)
@@ -119,11 +125,18 @@ class Memory
 
 #if defined(__CUDA) || defined(__ROCM)
     static double total_gpu;
+    static double current_gpu;
+    static double peak_gpu;
     static std::string *name_gpu;
     static std::string *class_name_gpu;
     static double *consume_gpu;
     static int n_now_gpu;
     static bool init_flag_gpu;
+    static bool mem_stream_enabled;
+    static std::string mem_stream_path;
+    static std::ofstream mem_stream;
+    static void init_gpu_records();
+    static void reset_gpu();
 #endif
 
     static int complex_matrix_memory; //(16 Byte)

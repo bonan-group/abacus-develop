@@ -1,4 +1,8 @@
 #include <cassert>
+#include <algorithm>
+#include <cctype>
+#include <iomanip>
+#include <ctime>
 #include "memory_recorder.h"
 #include "global_variable.h"
 #include "source_base/parallel_reduce.h"
@@ -26,9 +30,54 @@ bool Memory::init_flag = false;
 
 #if defined(__CUDA) || defined(__ROCM)
 
+namespace
+{
+std::string json_escape(const std::string& input)
+{
+    std::string output;
+    output.reserve(input.size());
+    for (const char ch : input)
+    {
+        switch (ch)
+        {
+        case '"':
+            output += "\\\"";
+            break;
+        case '\\':
+            output += "\\\\";
+            break;
+        case '\b':
+            output += "\\b";
+            break;
+        case '\f':
+            output += "\\f";
+            break;
+        case '\n':
+            output += "\\n";
+            break;
+        case '\r':
+            output += "\\r";
+            break;
+        case '\t':
+            output += "\\t";
+            break;
+        default:
+            output += std::iscntrl(static_cast<unsigned char>(ch)) ? '?' : ch;
+            break;
+        }
+    }
+    return output;
+}
+}
+
 double Memory::total_gpu = 0.0;
+double Memory::current_gpu = 0.0;
+double Memory::peak_gpu = 0.0;
 int Memory::n_now_gpu = 0;
 bool Memory::init_flag_gpu = false;
+bool Memory::mem_stream_enabled = false;
+std::string Memory::mem_stream_path;
+std::ofstream Memory::mem_stream;
 
 std::string *Memory::name_gpu;
 std::string *Memory::class_name_gpu;
@@ -233,14 +282,7 @@ double Memory::record_gpu
 {
 	if(!Memory::init_flag_gpu)
 	{
-		name_gpu = new std::string[n_memory];
-		class_name_gpu = new std::string[n_memory];
-		consume_gpu = new double[n_memory];
-		for(int i=0;i<n_memory;i++)
-		{
-			consume_gpu[i] = 0.0;
-		}
-		Memory::init_flag_gpu = true;
+		init_gpu_records();
 	}
 
 	int find = 0;
@@ -283,14 +325,7 @@ void Memory::record_gpu
 {
 	if(!Memory::init_flag_gpu)
 	{
-		name_gpu = new std::string[n_memory];
-		class_name_gpu = new std::string[n_memory];
-		consume_gpu = new double[n_memory];
-		for(int i=0;i<n_memory;i++)
-		{
-			consume_gpu[i] = 0.0;
-		}
-		Memory::init_flag_gpu = true;
+		init_gpu_records();
 	}
 
 	int find = 0;
@@ -338,6 +373,94 @@ void Memory::record_gpu
 	return;
 }
 
+void Memory::set_stream_enabled(const bool enabled, const std::string& path)
+{
+    mem_stream_enabled = enabled;
+    if (mem_stream.is_open())
+    {
+        mem_stream.close();
+    }
+    if (!enabled)
+    {
+        return;
+    }
+
+    mem_stream_path = path.empty() ? "memory_stream.jsonl" : path;
+    mem_stream.open(mem_stream_path, std::ios::out | std::ios::trunc);
+}
+
+bool Memory::stream_enabled()
+{
+    return mem_stream_enabled;
+}
+
+double Memory::get_gpu_peak_mb()
+{
+    return peak_gpu;
+}
+
+void Memory::init_gpu_records()
+{
+    if (Memory::init_flag_gpu)
+    {
+        return;
+    }
+    name_gpu = new std::string[n_memory];
+    class_name_gpu = new std::string[n_memory];
+    consume_gpu = new double[n_memory];
+    for (int i = 0; i < n_memory; ++i)
+    {
+        consume_gpu[i] = 0.0;
+    }
+    Memory::init_flag_gpu = true;
+}
+
+void Memory::record_gpu_alloc(const std::string& name_in, const size_t n_in)
+{
+    const double factor = 1.0 / 1024.0 / 1024.0;
+    const double size_mb = static_cast<double>(n_in) * factor;
+    current_gpu += size_mb;
+    peak_gpu = std::max(peak_gpu, current_gpu);
+    if (name_in != "no_record")
+    {
+        record_gpu(name_in, n_in);
+    }
+    else
+    {
+        total_gpu = std::max(total_gpu, peak_gpu);
+        init_gpu_records();
+    }
+
+    if (mem_stream_enabled && mem_stream.is_open())
+    {
+        mem_stream << "{\"event\":\"alloc\",\"name\":\"" << json_escape(name_in) << "\",\"bytes\":" << n_in
+                   << ",\"current_mb\":" << std::setprecision(12) << current_gpu
+                   << ",\"peak_mb\":" << peak_gpu << "}" << std::endl;
+    }
+}
+
+void Memory::reset_gpu()
+{
+    current_gpu = 0.0;
+    peak_gpu = 0.0;
+    total_gpu = 0.0;
+    n_now_gpu = 0;
+}
+
+void Memory::record_gpu_free(const size_t n_in)
+{
+    const double factor = 1.0 / 1024.0 / 1024.0;
+    const double size_mb = static_cast<double>(n_in) * factor;
+    current_gpu = std::max(0.0, current_gpu - size_mb);
+
+    if (mem_stream_enabled && mem_stream.is_open())
+    {
+        mem_stream << "{\"event\":\"free\",\"bytes\":" << n_in
+                   << ",\"current_mb\":" << std::setprecision(12) << current_gpu
+                   << ",\"peak_mb\":" << peak_gpu << "}" << std::endl;
+    }
+}
+
 #endif
 
 void Memory::print(const std::string& mem_name, double size_mb)
@@ -370,6 +493,11 @@ void Memory::finish(std::ofstream &ofs)
 		delete[] consume_gpu;
 		init_flag_gpu = false;
 	}
+		if(mem_stream.is_open())
+		{
+			mem_stream.close();
+		}
+		reset_gpu();
 #endif
 	return;
 }
@@ -378,7 +506,14 @@ void Memory::print_all(std::ofstream &ofs)
 {
 	if(!init_flag) 
 	{
+#if defined(__CUDA) || defined(__ROCM)
+		if(!init_flag_gpu)
+		{
+			return;
+		}
+#else
 		return;
+#endif
 	}
 
 	const double small = 1.0; // unit is MB 
@@ -388,27 +523,31 @@ void Memory::print_all(std::ofstream &ofs)
 	Parallel_Reduce::reduce_all(Memory::total_gpu);
 #endif
 #endif
-	ofs <<"\n NAME-------------------------|MEMORY(MB)------------------" << std::endl;
-    ofs << std::right;
-	ofs << std::setw(30)<< "total" << std::setw(15) <<std::setprecision(4)<< Memory::total << std::endl;
-    
-    assert(n_memory>0);
-
-	bool *print_flag = new bool[n_memory];
-
-	for(int i=0; i<n_memory; i++) 
+	bool *print_flag = nullptr;
+	if(init_flag)
 	{
-		print_flag[i] = false;
-	}	
+		ofs <<"\n NAME-------------------------|MEMORY(MB)------------------" << std::endl;
+		ofs << std::right;
+		ofs << std::setw(30)<< "total" << std::setw(15) <<std::setprecision(4)<< Memory::total << std::endl;
 
-	for (int i=0; i<n_memory; i++)
+		assert(n_memory>0);
+
+		print_flag = new bool[n_memory];
+
+		for(int i=0; i<n_memory; i++)
+		{
+			print_flag[i] = false;
+		}
+	}
+
+	for (int i=0; init_flag && i<n_memory; i++)
     {
 #ifdef __MPI
 		Parallel_Reduce::reduce_all(consume[i]);
 #endif
 	}
 
-	for (int i=0; i<n_memory; i++) // Xiaoyang fix memory record sum bug 2023/10/25
+	for (int i=0; init_flag && i<n_memory; i++) // Xiaoyang fix memory record sum bug 2023/10/25
 	{
 		int k = 0;
 		double tmp = -1.0;
@@ -446,6 +585,8 @@ void Memory::print_all(std::ofstream &ofs)
 
 	ofs <<"\n NAME-------------------------|GPU MEMORY(MB)--------------" << std::endl;
 	ofs <<std::setw(30)<< "total" << std::setw(15) <<std::setprecision(4)<< Memory::total_gpu << std::endl;
+	ofs <<std::setw(30)<< "current" << std::setw(15) <<std::setprecision(4)<< Memory::current_gpu << std::endl;
+	ofs <<std::setw(30)<< "peak" << std::setw(15) <<std::setprecision(4)<< Memory::peak_gpu << std::endl;
     
     assert(n_memory>0);
 

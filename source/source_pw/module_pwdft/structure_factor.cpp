@@ -7,7 +7,11 @@
 #include "source_base/memory_recorder.h"
 #include "source_base/timer.h"
 #include "source_base/libm/libm.h"
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+#include "source_pw/module_pwdft/kernels/structure_factor_op.h"
+#endif
 
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -24,6 +28,9 @@ Structure_Factor::Structure_Factor()
 
 Structure_Factor::~Structure_Factor()
 {
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    this->free_gpu_sf_memory();
+#endif
     if (device == "gpu")
     {
         delmem_cd_op()(this->c_eigts1);
@@ -58,7 +65,6 @@ void Structure_Factor::setup(const UnitCell* Ucell, const Parallel_Grid& pgrid, 
     ModuleBase::TITLE("Structure_Factor","setup");
     ModuleBase::timer::start("Structure_Factor","setup");
 
-    const std::complex<double> ci_tpi = ModuleBase::NEG_IMAG_UNIT * ModuleBase::TWO_PI;
     this->ucell = Ucell;
     this->strucFac.create(Ucell->ntype, rho_basis->npw);
     ModuleBase::Memory::record("SF::strucFac", sizeof(std::complex<double>) * Ucell->ntype*rho_basis->npw);
@@ -83,36 +89,20 @@ void Structure_Factor::setup(const UnitCell* Ucell, const Parallel_Grid& pgrid, 
     }
     else
     {
-        for (int it=0; it<Ucell->ntype; it++)
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+	    if (device == "gpu")
         {
-            const int na = Ucell->atoms[it].na;
-            const ModuleBase::Vector3<double> * const tau = Ucell->atoms[it].tau.data();
-            // Data race fix: cache shared data to local const variables before OpenMP parallel region
-            // TSan detected race condition when accessing rho_basis->npw and rho_basis->gcar directly
-            // in parallel loop, even though they are logically read-only
-            const int npw = rho_basis->npw;
-            const ModuleBase::Vector3<double> * const gcar = rho_basis->gcar;
-#ifdef _OPENMP
-            #pragma omp parallel for
+            this->compute_struc_fac_gpu(Ucell, rho_basis);
+        }
+        else
 #endif
-            for (int ig=0; ig<npw; ig++)
-            {
-                const ModuleBase::Vector3<double> gcar_ig = gcar[ig];
-                std::complex<double> sum_phase = ModuleBase::ZERO;
-                for (int ia=0; ia<na; ia++)
-                {
-                    sum_phase += ModuleBase::libm::exp( ci_tpi * (gcar_ig * tau[ia]) );
-                }
-                this->strucFac(it,ig) = sum_phase;
-            }
+        {
+            this->compute_struc_fac_cpu(Ucell, rho_basis);
         }
     }
 
 //	ofs.close();
 
-    int i=0;
-    int j=0;
- 
     this->eigts1.create(Ucell->nat, 2*rho_basis->nx + 1);
     this->eigts2.create(Ucell->nat, 2*rho_basis->ny + 1);
     this->eigts3.create(Ucell->nat, 2*rho_basis->nz + 1);
@@ -120,44 +110,15 @@ void Structure_Factor::setup(const UnitCell* Ucell, const Parallel_Grid& pgrid, 
     ModuleBase::Memory::record("SF::eigts123",sizeof(std::complex<double>) 
     * (Ucell->nat*2 * (rho_basis->nx + rho_basis->ny + rho_basis->nz) + 3));
 
-    ModuleBase::Vector3<double> gtau;
-    int inat = 0;
-    for (i = 0; i < Ucell->ntype; i++)
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    if (device == "gpu")
     {
-        for (j = 0; j < Ucell->atoms[i].na;j++)
-        {
-            gtau = Ucell->G * Ucell->atoms[i].tau[j];  //HLX: fixed on 10/13/2006
-#ifdef _OPENMP
-#pragma omp parallel
-{
-		    #pragma omp for schedule(static, 16)
+        this->compute_eigts_gpu(Ucell, rho_basis);
+    }
+    else
 #endif
-            for (int n1 = -rho_basis->nx; n1 <= rho_basis->nx;n1++)
-            {
-                double arg = n1 * gtau.x;
-                this->eigts1(inat, n1 + rho_basis->nx) = ModuleBase::libm::exp( ci_tpi*arg  );
-            }
-#ifdef _OPENMP
-		    #pragma omp for schedule(static, 16)
-#endif
-            for (int n2 = -rho_basis->ny; n2 <= rho_basis->ny;n2++)
-            {
-                double arg = n2 * gtau.y;
-                this->eigts2(inat, n2 + rho_basis->ny) = ModuleBase::libm::exp( ci_tpi*arg );
-            }
-#ifdef _OPENMP
-		    #pragma omp for schedule(static, 16)
-#endif
-            for (int n3 = -rho_basis->nz; n3 <= rho_basis->nz;n3++)
-            {
-                double arg = n3 * gtau.z;
-                this->eigts3(inat, n3 + rho_basis->nz) = ModuleBase::libm::exp( ci_tpi*arg );
-            }
-#ifdef _OPENMP
-}
-#endif
-            inat++;
-        }
+    {
+        this->compute_eigts_cpu(Ucell, rho_basis);
     }
     
     if (device == "gpu") {
@@ -169,12 +130,15 @@ void Structure_Factor::setup(const UnitCell* Ucell, const Parallel_Grid& pgrid, 
             castmem_z2c_h2d_op()(this->c_eigts2, this->eigts2.c, Ucell->nat * (2 * rho_basis->ny + 1));
             castmem_z2c_h2d_op()(this->c_eigts3, this->eigts3.c, Ucell->nat * (2 * rho_basis->nz + 1));
         }
-        resmem_zd_op()(this->z_eigts1, Ucell->nat * (2 * rho_basis->nx + 1));
-        resmem_zd_op()(this->z_eigts2, Ucell->nat * (2 * rho_basis->ny + 1));
-        resmem_zd_op()(this->z_eigts3, Ucell->nat * (2 * rho_basis->nz + 1));
-        syncmem_z2z_h2d_op()(this->z_eigts1, this->eigts1.c, Ucell->nat * (2 * rho_basis->nx + 1));
-        syncmem_z2z_h2d_op()(this->z_eigts2, this->eigts2.c, Ucell->nat * (2 * rho_basis->ny + 1));
-        syncmem_z2z_h2d_op()(this->z_eigts3, this->eigts3.c, Ucell->nat * (2 * rho_basis->nz + 1));
+        if (this->z_eigts1 == nullptr)
+        {
+            resmem_zd_op()(this->z_eigts1, Ucell->nat * (2 * rho_basis->nx + 1));
+            resmem_zd_op()(this->z_eigts2, Ucell->nat * (2 * rho_basis->ny + 1));
+            resmem_zd_op()(this->z_eigts3, Ucell->nat * (2 * rho_basis->nz + 1));
+            syncmem_z2z_h2d_op()(this->z_eigts1, this->eigts1.c, Ucell->nat * (2 * rho_basis->nx + 1));
+            syncmem_z2z_h2d_op()(this->z_eigts2, this->eigts2.c, Ucell->nat * (2 * rho_basis->ny + 1));
+            syncmem_z2z_h2d_op()(this->z_eigts3, this->eigts3.c, Ucell->nat * (2 * rho_basis->nz + 1));
+        }
     }
     else {
         if (PARAM.globalv.has_float_data) {
@@ -371,6 +335,190 @@ void Structure_Factor::bsplinecoef(std::complex<double> *b1, std::complex<double
 }
 #endif
 }
+
+void Structure_Factor::compute_struc_fac_cpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis)
+{
+    const std::complex<double> ci_tpi = ModuleBase::NEG_IMAG_UNIT * ModuleBase::TWO_PI;
+    for (int it = 0; it < Ucell->ntype; ++it)
+    {
+        const int na = Ucell->atoms[it].na;
+        const ModuleBase::Vector3<double>* const tau = Ucell->atoms[it].tau.data();
+        const int npw = rho_basis->npw;
+        const ModuleBase::Vector3<double>* const gcar = rho_basis->gcar;
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            const ModuleBase::Vector3<double> gcar_ig = gcar[ig];
+            std::complex<double> sum_phase = ModuleBase::ZERO;
+            for (int ia = 0; ia < na; ++ia)
+            {
+                sum_phase += ModuleBase::libm::exp(ci_tpi * (gcar_ig * tau[ia]));
+            }
+            this->strucFac(it, ig) = sum_phase;
+        }
+    }
+}
+
+void Structure_Factor::compute_eigts_cpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis)
+{
+    const std::complex<double> ci_tpi = ModuleBase::NEG_IMAG_UNIT * ModuleBase::TWO_PI;
+    int inat = 0;
+    for (int it = 0; it < Ucell->ntype; ++it)
+    {
+        for (int ia = 0; ia < Ucell->atoms[it].na; ++ia)
+        {
+            const ModuleBase::Vector3<double> gtau = Ucell->G * Ucell->atoms[it].tau[ia];
+#ifdef _OPENMP
+#pragma omp parallel
+            {
+#pragma omp for schedule(static, 16)
+#endif
+                for (int n1 = -rho_basis->nx; n1 <= rho_basis->nx; ++n1)
+                {
+                    this->eigts1(inat, n1 + rho_basis->nx) = ModuleBase::libm::exp(ci_tpi * (n1 * gtau.x));
+                }
+#ifdef _OPENMP
+#pragma omp for schedule(static, 16)
+#endif
+                for (int n2 = -rho_basis->ny; n2 <= rho_basis->ny; ++n2)
+                {
+                    this->eigts2(inat, n2 + rho_basis->ny) = ModuleBase::libm::exp(ci_tpi * (n2 * gtau.y));
+                }
+#ifdef _OPENMP
+#pragma omp for schedule(static, 16)
+#endif
+                for (int n3 = -rho_basis->nz; n3 <= rho_basis->nz; ++n3)
+                {
+                    this->eigts3(inat, n3 + rho_basis->nz) = ModuleBase::libm::exp(ci_tpi * (n3 * gtau.z));
+                }
+#ifdef _OPENMP
+            }
+#endif
+            ++inat;
+        }
+    }
+}
+
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+void Structure_Factor::allocate_gpu_sf_memory(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis)
+{
+    using resmem_int_op = base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>;
+    using syncmem_int_h2d_op
+        = base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+
+    if (this->tau_d != nullptr
+        && (this->gpu_nat != Ucell->nat || this->gpu_ntype != Ucell->ntype || this->gpu_npw != rho_basis->npw))
+    {
+        this->free_gpu_sf_memory();
+    }
+
+    std::vector<int> atom_index_h(Ucell->ntype + 1, 0);
+    for (int it = 0; it < Ucell->ntype; ++it)
+    {
+        atom_index_h[it + 1] = atom_index_h[it] + Ucell->atoms[it].na;
+    }
+
+    std::vector<double> tau_h(Ucell->nat * 3);
+    std::vector<double> gtau_h(Ucell->nat * 3);
+    int iat = 0;
+    for (int it = 0; it < Ucell->ntype; ++it)
+    {
+        for (int ia = 0; ia < Ucell->atoms[it].na; ++ia)
+        {
+            const ModuleBase::Vector3<double>& tau = Ucell->atoms[it].tau[ia];
+            tau_h[iat * 3 + 0] = tau.x;
+            tau_h[iat * 3 + 1] = tau.y;
+            tau_h[iat * 3 + 2] = tau.z;
+
+            const ModuleBase::Vector3<double> gtau = Ucell->G * tau;
+            gtau_h[iat * 3 + 0] = gtau.x;
+            gtau_h[iat * 3 + 1] = gtau.y;
+            gtau_h[iat * 3 + 2] = gtau.z;
+            ++iat;
+        }
+    }
+
+    std::vector<double> gcar_h(rho_basis->npw * 3);
+    for (int ig = 0; ig < rho_basis->npw; ++ig)
+    {
+        gcar_h[ig * 3 + 0] = rho_basis->gcar[ig].x;
+        gcar_h[ig * 3 + 1] = rho_basis->gcar[ig].y;
+        gcar_h[ig * 3 + 2] = rho_basis->gcar[ig].z;
+    }
+
+    if (this->tau_d == nullptr)
+    {
+        resmem_dd_op()(this->tau_d, Ucell->nat * 3, "SF::tau_d");
+        resmem_int_op()(this->atom_index_d, Ucell->ntype + 1, "SF::atom_index_d");
+        resmem_dd_op()(this->gcar_d, rho_basis->npw * 3, "SF::gcar_d");
+        resmem_dd_op()(this->gtau_d, Ucell->nat * 3, "SF::gtau_d");
+        resmem_zd_op()(this->strucFac_d, Ucell->ntype * rho_basis->npw, "SF::strucFac_d");
+        this->gpu_nat = Ucell->nat;
+        this->gpu_ntype = Ucell->ntype;
+        this->gpu_npw = rho_basis->npw;
+    }
+
+    syncmem_d2d_h2d_op()(this->tau_d, tau_h.data(), Ucell->nat * 3);
+    syncmem_int_h2d_op()(this->atom_index_d, atom_index_h.data(), Ucell->ntype + 1);
+    syncmem_d2d_h2d_op()(this->gcar_d, gcar_h.data(), rho_basis->npw * 3);
+    syncmem_d2d_h2d_op()(this->gtau_d, gtau_h.data(), Ucell->nat * 3);
+}
+
+void Structure_Factor::free_gpu_sf_memory()
+{
+    using delmem_int_op = base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>;
+    delmem_dd_op()(this->tau_d);
+    delmem_int_op()(this->atom_index_d);
+    delmem_dd_op()(this->gcar_d);
+    delmem_dd_op()(this->gtau_d);
+    delmem_zd_op()(this->strucFac_d);
+    this->tau_d = nullptr;
+    this->atom_index_d = nullptr;
+    this->gcar_d = nullptr;
+    this->gtau_d = nullptr;
+    this->strucFac_d = nullptr;
+    this->gpu_nat = 0;
+    this->gpu_ntype = 0;
+    this->gpu_npw = 0;
+}
+
+void Structure_Factor::compute_struc_fac_gpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis)
+{
+    this->allocate_gpu_sf_memory(Ucell, rho_basis);
+    structure_factor_op::compute_struc_fac_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                                 Ucell->ntype,
+                                                                                 this->tau_d,
+                                                                                 this->atom_index_d,
+                                                                                 rho_basis->npw,
+                                                                                 this->gcar_d,
+                                                                                 ModuleBase::TWO_PI,
+                                                                                 this->strucFac_d);
+    syncmem_z2z_d2h_op()(this->strucFac.c, this->strucFac_d, Ucell->ntype * rho_basis->npw);
+}
+
+void Structure_Factor::compute_eigts_gpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis)
+{
+    this->allocate_gpu_sf_memory(Ucell, rho_basis);
+    resmem_zd_op()(this->z_eigts1, Ucell->nat * (2 * rho_basis->nx + 1), "SF::z_eigts1");
+    resmem_zd_op()(this->z_eigts2, Ucell->nat * (2 * rho_basis->ny + 1), "SF::z_eigts2");
+    resmem_zd_op()(this->z_eigts3, Ucell->nat * (2 * rho_basis->nz + 1), "SF::z_eigts3");
+    structure_factor_op::compute_eigts_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                             Ucell->nat,
+                                                                             this->gtau_d,
+                                                                             rho_basis->nx,
+                                                                             rho_basis->ny,
+                                                                             rho_basis->nz,
+                                                                             ModuleBase::TWO_PI,
+                                                                             this->z_eigts1,
+                                                                             this->z_eigts2,
+                                                                             this->z_eigts3);
+    syncmem_z2z_d2h_op()(this->eigts1.c, this->z_eigts1, Ucell->nat * (2 * rho_basis->nx + 1));
+    syncmem_z2z_d2h_op()(this->eigts2.c, this->z_eigts2, Ucell->nat * (2 * rho_basis->ny + 1));
+    syncmem_z2z_d2h_op()(this->eigts3.c, this->z_eigts3, Ucell->nat * (2 * rho_basis->nz + 1));
+}
+#endif
 
 template <>
 std::complex<float> * Structure_Factor::get_eigts1_data() const

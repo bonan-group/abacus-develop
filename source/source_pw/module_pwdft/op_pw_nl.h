@@ -9,6 +9,8 @@
 
 #include "source_pw/module_pwdft/vnl_pw.h"
 
+#include <type_traits>
+
 namespace hamilt {
 
 #ifndef NONLOCALTEMPLATE_H
@@ -19,6 +21,16 @@ template<class T> class Nonlocal : public T {};
 // class Nonlocal : public OperatorPW<T, Device> {};
 
 #endif
+
+template<typename Device>
+inline bool use_chunked_vnl(const int nkb, const int npwx, const size_t element_size)
+{
+    if (!std::is_same<Device, base_device::DEVICE_GPU>::value)
+    {
+        return false;
+    }
+    return vnl_chunking_enabled(nkb, npwx, element_size);
+}
 
 template<typename T, typename Device>
 class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
@@ -61,6 +73,36 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
   private:
     void add_nonlocal_pp(T *hpsi_in, const T *becp, const int m) const;
 
+    void act_chunked(const int nbands,
+                     const int nbasis,
+                     const int npol,
+                     const T* tmpsi_in,
+                     T* tmhpsi,
+                     const int ngk_ik,
+                     const bool is_first_node) const;
+
+    int calculate_optimal_chunk_size(int npw, int nkb, int nbands) const;
+
+    void ensure_chunk_buffers(int chunk_nkb, int npw, int nbands) const;
+
+    void process_atom_chunk(const T* psi,
+                            T* hpsi,
+                            int nbands,
+                            int npw,
+                            int atom_start,
+                            int atom_end,
+                            int chunk_nkb) const;
+
+    void add_nonlocal_pp_chunk(T* hpsi_in,
+                               const T* becp_chunk,
+                               int atom_start,
+                               int atom_end,
+                               int chunk_nkb,
+                               int m) const;
+
+    void ensure_kpoint_caches(int ik, int npw) const;
+    void invalidate_kpoint_caches() const;
+
     mutable int max_npw = 0;
 
     mutable int npw = 0;
@@ -80,6 +122,20 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     mutable T *ps = nullptr;
     mutable T *vkb = nullptr;
     mutable T *becp = nullptr;
+    mutable T* vkb_chunk = nullptr;
+    mutable T* becp_chunk = nullptr;
+    mutable T* ps_chunk = nullptr;
+    mutable int chunk_buffer_capacity = 0;
+    mutable int chunk_npw_capacity = 0;
+    mutable int chunk_nbands_capacity = 0;
+
+    mutable Real* cached_gk = nullptr;
+    mutable Real* cached_ylm = nullptr;
+    mutable T* cached_sk = nullptr;
+    mutable int cached_ik = -1;
+    mutable int cached_npw = 0;
+    mutable int cached_ylm_size = 0;
+
     Device* ctx = {};
     base_device::DEVICE_CPU* cpu_ctx = {};
     Real * deeq = nullptr;
@@ -98,6 +154,8 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     using delmem_complex_op = base_device::memory::delete_memory_op<T, Device>;
 #endif
     using syncmem_complex_h2d_op = base_device::memory::synchronize_memory_op<T, Device, base_device::DEVICE_CPU>;
+    using resmem_real_op = base_device::memory::resize_memory_op<Real, Device>;
+    using delmem_real_op = base_device::memory::delete_memory_op<Real, Device>;
 
     T one{1, 0};
     T zero{0, 0};

@@ -62,6 +62,36 @@ struct cal_vnl_op
                     std::complex<FPTYPE>* vkb_in);
 };
 
+template <typename FPTYPE, typename Device>
+struct cal_vnl_atoms_cached_op
+{
+    void operator()(const Device* ctx,
+                    const int& ntype,
+                    const int& npw,
+                    const int& npwx,
+                    const int& nhm,
+                    const int& tab_2,
+                    const int& tab_3,
+                    const int* atom_na,
+                    const int* atom_nb,
+                    const int* atom_nh,
+                    const int& atom_start,
+                    const int& atom_end,
+                    const FPTYPE& DQ,
+                    const FPTYPE& tpiba,
+                    const std::complex<FPTYPE>& NEG_IMAG_UNIT,
+                    const FPTYPE* gk,
+                    const FPTYPE* ylm,
+                    const FPTYPE* indv,
+                    const FPTYPE* nhtol,
+                    const FPTYPE* nhtolm,
+                    const FPTYPE* tab,
+                    FPTYPE* vkb1,
+                    const std::complex<FPTYPE>* sk_all,
+                    const int* iat2it,
+                    std::complex<FPTYPE>* vkb_out);
+};
+
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
 template <typename FPTYPE>
 struct cal_vnl_op<FPTYPE, base_device::DEVICE_GPU>
@@ -89,6 +119,38 @@ struct cal_vnl_op<FPTYPE, base_device::DEVICE_GPU>
                     const std::complex<FPTYPE>* sk,
                     std::complex<FPTYPE>* vkb_in);
 };
+
+#if __CUDA || __UT_USE_CUDA
+template <typename FPTYPE>
+struct cal_vnl_atoms_cached_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    const int& ntype,
+                    const int& npw,
+                    const int& npwx,
+                    const int& nhm,
+                    const int& tab_2,
+                    const int& tab_3,
+                    const int* atom_na,
+                    const int* atom_nb,
+                    const int* atom_nh,
+                    const int& atom_start,
+                    const int& atom_end,
+                    const FPTYPE& DQ,
+                    const FPTYPE& tpiba,
+                    const std::complex<FPTYPE>& NEG_IMAG_UNIT,
+                    const FPTYPE* gk,
+                    const FPTYPE* ylm,
+                    const FPTYPE* indv,
+                    const FPTYPE* nhtol,
+                    const FPTYPE* nhtolm,
+                    const FPTYPE* tab,
+                    FPTYPE* vkb1,
+                    const std::complex<FPTYPE>* sk_all,
+                    const int* iat2it,
+                    std::complex<FPTYPE>* vkb_out);
+};
+#endif
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
 } // namespace hamilt
 #endif // W_ABACUS_DEVELOP_ABACUS_DEVELOP_SOURCE_source_pw_HAMILT_PWDFT_KERNELS_VNL_OP_H

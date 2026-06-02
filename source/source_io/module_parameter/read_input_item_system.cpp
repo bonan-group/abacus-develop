@@ -786,6 +786,19 @@ Available options are:
         this->add_item(item);
     }
     {
+        Input_Item item("mem_stream");
+        item.annotation = "enable JSONL memory allocation stream";
+        item.category = "System variables";
+        item.type = "Boolean";
+        item.description = R"(Controls whether memory allocation events are written to OUT.${suffix}/memory_stream.jsonl.
+
+* True: Enable JSONL memory stream output.
+* False: Disable memory stream output.)";
+        item.default_value = "False";
+        read_sync_bool(input.mem_stream);
+        this->add_item(item);
+    }
+    {
         Input_Item item("cell_factor");
         item.annotation = "used in the construction of the pseudopotential tables";
         item.category = "System variables";

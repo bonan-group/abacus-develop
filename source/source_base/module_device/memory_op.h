@@ -214,7 +214,7 @@ struct synchronize_memory_2d_op<FPTYPE, base_device::DEVICE_GPU, base_device::DE
 template <typename FPTYPE>
 struct delete_memory_op<FPTYPE, base_device::DEVICE_GPU>
 {
-    void operator()(FPTYPE* arr);
+    void operator()(FPTYPE* arr, const size_t bytes = 0);
 };
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
 

@@ -56,6 +56,7 @@ list(APPEND device_srcs
   source_pw/module_pwdft/kernels/onsite_op.cpp
   source_pw/module_pwdft/kernels/wf_op.cpp
   source_pw/module_pwdft/kernels/vnl_op.cpp
+  source_pw/module_pwdft/kernels/structure_factor_op.cpp
   source_base/kernels/math_ylm_op.cpp
   source_hamilt/module_xc/kernels/xc_functional_op.cpp
   source_pw/module_pwdft/kernels/cal_density_real_op.cpp
@@ -86,6 +87,7 @@ if(USE_CUDA)
     source_pw/module_pwdft/kernels/cuda/stress_op.cu
     source_pw/module_pwdft/kernels/cuda/wf_op.cu
     source_pw/module_pwdft/kernels/cuda/vnl_op.cu
+    source_pw/module_pwdft/kernels/cuda/structure_factor_op.cu
     source_base/module_device/cuda_compat.cpp
     source_base/kernels/cuda/math_ylm_op.cu
     source_base/kernels/cuda/math_kernel_op.cu

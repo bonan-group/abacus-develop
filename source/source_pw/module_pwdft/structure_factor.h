@@ -5,6 +5,7 @@
 #include "source_basis/module_pw/pw_basis_k.h"
 #include "source_cell/unitcell.h"
 #include "source_pw/module_pwdft/parallel_grid.h"
+#include "source_psi/psi.h"
 
 class Structure_Factor
 {
@@ -74,5 +75,23 @@ public:
 
     const ModulePW::PW_Basis* rho_basis = nullptr;
     std::string device = "cpu";
+
+    double* tau_d = nullptr;
+    int* atom_index_d = nullptr;
+    double* gcar_d = nullptr;
+    double* gtau_d = nullptr;
+    std::complex<double>* strucFac_d = nullptr;
+    int gpu_nat = 0;
+    int gpu_ntype = 0;
+    int gpu_npw = 0;
+
+    void compute_struc_fac_cpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void compute_eigts_cpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    void allocate_gpu_sf_memory(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void free_gpu_sf_memory();
+    void compute_struc_fac_gpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+    void compute_eigts_gpu(const UnitCell* Ucell, const ModulePW::PW_Basis* rho_basis);
+#endif
 };
 #endif //PlaneWave class
