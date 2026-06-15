@@ -2,6 +2,7 @@
 #include "source_base/tool_quit.h"
 #include "read_input.h"
 #include "read_input_tool.h"
+#include <algorithm>
 namespace ModuleIO
 {
 void ReadInput::item_output()
@@ -234,6 +235,56 @@ In molecular dynamics calculations, the output frequency is controlled by out_fr
         item.unit = "";
         item.availability = "Output electronic wave functions in plane wave basis, or transform the real-space electronic wave function into plane wave basis (see get_wf option in calculation with NAO basis)";
         read_sync_int(input.out_wfc_pw);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("out_training_data");
+        item.annotation = "output PW NLDX/CIDER training data";
+        item.category = "Output information";
+        item.type = "Boolean";
+        item.description = R"(Whether to output a PW training-data record for NLDX/CIDER model development. The record is written under OUT.${suffix}/training_dump and contains JSON metadata plus NumPy arrays for the real-space density ingredients, ABACUS/CIDER-compatible sigma, optional tau, eigenvalues, occupations, and k-point metadata. For PBE base-state training runs, ABACUS evaluates a one-shot PBE0 full-range EXX energy label on the converged PBE density and plane-wave wavefunctions; this does not require a fully self-consistent PBE0 run.)";
+        item.default_value = "False";
+        item.unit = "";
+        item.availability = "Plane wave basis with Libxc";
+        read_sync_bool(input.out_training_data);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.out_training_data)
+            {
+                if (para.input.basis_type != "pw")
+                {
+                    ModuleBase::WARNING_QUIT("ReadInput", "out_training_data is only available for basis_type pw");
+                }
+                std::string dft_functional_lower = para.input.dft_functional;
+                std::transform(dft_functional_lower.begin(),
+                               dft_functional_lower.end(),
+                               dft_functional_lower.begin(),
+                               ::tolower);
+                if (dft_functional_lower != "pbe")
+                {
+                    ModuleBase::WARNING_QUIT("ReadInput",
+                                             "out_training_data currently requires dft_functional = PBE for the PBE-base EXX label workflow");
+                }
+#ifndef USE_LIBXC
+                ModuleBase::WARNING_QUIT("ReadInput", "out_training_data requires Libxc");
+#endif
+                if (para.input.nspin != 1 && para.input.nspin != 2)
+                {
+                    ModuleBase::WARNING_QUIT("ReadInput", "out_training_data only supports nspin 1 or 2");
+                }
+                if (para.input.kpar != 1)
+                {
+                    ModuleBase::WARNING_QUIT("ReadInput", "out_training_data currently requires kpar = 1");
+                }
+                if (para.input.bndpar != 1)
+                {
+                    ModuleBase::WARNING_QUIT("ReadInput", "out_training_data currently requires bndpar = 1");
+                }
+                if (para.input.symmetry != "-1")
+                {
+                    ModuleBase::WARNING_QUIT("ReadInput", "out_training_data EXX labeling currently requires symmetry = -1");
+                }
+            }
+        };
         this->add_item(item);
     }
     {

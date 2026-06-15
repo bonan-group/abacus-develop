@@ -2,9 +2,11 @@
 
 #include "../module_output/cube_io.h"                                  // use write_vdata_palgrid
 #include "source_estate/module_charge/symmetry_rho.h" // use Symmetry_rho
+#include "source_base/tool_quit.h"
 #include "source_hamilt/module_xc/xc_functional.h"    // use XC_Functional
 #include "source_io/module_chgpot/write_elecstat_pot.h"             // use write_elecstat_pot
 #include "source_io/module_elf/write_elf.h"
+#include "source_io/module_training/training_dump.h"
 
 #ifdef USE_LIBXC
 #include "source_io/module_chgpot/write_libxc_r.h"
@@ -199,6 +201,15 @@ void ctrl_output_fp(UnitCell& ucell,
                                 *pw_rhod);
     }
 #endif
+
+    if (PARAM.inp.out_training_data)
+    {
+#ifdef USE_LIBXC
+        ModuleIO::write_training_dump(ucell, *pelec, *pw_rhod, chr, istep, global_out_dir);
+#else
+        ModuleBase::WARNING_QUIT("ctrl_output_fp", "out_training_data requires Libxc support");
+#endif
+    }
 
     ModuleBase::timer::tick("ModuleIO", "ctrl_output_fp");
 }

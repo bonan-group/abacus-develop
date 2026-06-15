@@ -33,6 +33,7 @@ list(APPEND objects
     module_output/write_cube.cpp
     module_chgpot/write_elecstat_pot.cpp
     module_elf/write_elf.cpp
+    module_training/training_dump.cpp
     module_dipole/write_dipole.cpp
     module_chgpot/write_init.cpp
     module_ml/write_mlkedf_descriptors.cpp

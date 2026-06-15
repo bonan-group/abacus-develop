@@ -1,0 +1,21 @@
+INPUT_PARAMETERS
+# Parameters (General)
+suffix            TRAIN_PRIM
+pseudo_dir        ../../../../../tests/PP_ORB
+calculation       scf
+symmetry          -1
+
+# Parameters (Accuracy)
+basis_type        pw
+dft_functional    PBE
+ecutwfc           30
+scf_thr           1e-6
+scf_nmax          80
+device            cpu
+ks_solver         dav_subspace
+precision         double
+
+# Training dump
+out_training_data 1
+out_wfc_pw        2
+out_band          1

@@ -552,6 +552,7 @@ OBJS_IO=module_parameter/input_conv.o\
     write_cube.o\
     write_elecstat_pot.o\
     write_elf.o\
+    module_training/training_dump.o\
     write_dipole.o\
     write_init.o\
     td_current_io.o\

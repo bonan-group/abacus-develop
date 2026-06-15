@@ -31,8 +31,92 @@
 
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 
+#include <cmath>
+
 namespace ModuleESolver
 {
+
+namespace
+{
+
+void setup_training_pbe0_exx_label()
+{
+    GlobalC::exx_info.info_global.coulomb_param.clear();
+    GlobalC::exx_info.info_global.cal_exx = true;
+    GlobalC::exx_info.info_global.hybrid_alpha = 0.25;
+    GlobalC::exx_info.info_global.hse_omega = 0.11;
+    GlobalC::exx_info.info_global.ccp_type = Conv_Coulomb_Pot_K::Ccp_Type::Hf;
+    GlobalC::exx_info.info_global.separate_loop = false;
+    GlobalC::exx_info.info_global.hybrid_step = 1;
+    GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock] = {
+        {{"alpha", "1"}}};
+}
+
+template <typename T, typename Device>
+double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
+                                         const int* isk,
+                                         const ModulePW::PW_Basis_K* wfcpw,
+                                         const ModulePW::PW_Basis* rhopw,
+                                         K_Vectors* kv,
+                                         const ModuleBase::matrix* wg,
+                                         psi::Psi<T, Device>* psi)
+{
+    const bool saved_cal_exx = GlobalC::exx_info.info_global.cal_exx;
+    const auto saved_coulomb_param = GlobalC::exx_info.info_global.coulomb_param;
+    const auto saved_ccp_type = GlobalC::exx_info.info_global.ccp_type;
+    const double saved_hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    const double saved_hse_omega = GlobalC::exx_info.info_global.hse_omega;
+    const bool saved_separate_loop = GlobalC::exx_info.info_global.separate_loop;
+    const size_t saved_hybrid_step = GlobalC::exx_info.info_global.hybrid_step;
+
+    using OperatorEXX = hamilt::OperatorEXXPW<T, Device>;
+    const auto saved_fock_div = OperatorEXX::fock_div;
+    const auto saved_erfc_div = OperatorEXX::erfc_div;
+    auto restore_exx_state = [&]() {
+        GlobalC::exx_info.info_global.cal_exx = saved_cal_exx;
+        GlobalC::exx_info.info_global.coulomb_param = saved_coulomb_param;
+        GlobalC::exx_info.info_global.ccp_type = saved_ccp_type;
+        GlobalC::exx_info.info_global.hybrid_alpha = saved_hybrid_alpha;
+        GlobalC::exx_info.info_global.hse_omega = saved_hse_omega;
+        GlobalC::exx_info.info_global.separate_loop = saved_separate_loop;
+        GlobalC::exx_info.info_global.hybrid_step = saved_hybrid_step;
+        OperatorEXX::fock_div = saved_fock_div;
+        OperatorEXX::erfc_div = saved_erfc_div;
+    };
+
+    try
+    {
+        setup_training_pbe0_exx_label();
+        OperatorEXX::fock_div.clear();
+        OperatorEXX::erfc_div.clear();
+
+        if (psi == nullptr || psi->get_pointer() == nullptr)
+        {
+            ModuleBase::WARNING_QUIT("evaluate_training_pbe0_exx_energy",
+                                     "missing PW wavefunction data for one-shot EXX label evaluation");
+        }
+
+        OperatorEXX op_exx(isk, wfcpw, rhopw, kv, &ucell);
+        op_exx.set_psi(*psi);
+        op_exx.set_wg(wg);
+        const double raw_exx = op_exx.cal_exx_energy(psi);
+        const double scaled_exx = GlobalC::exx_info.info_global.hybrid_alpha * raw_exx;
+        if (!std::isfinite(scaled_exx))
+        {
+            ModuleBase::WARNING_QUIT("evaluate_training_pbe0_exx_energy",
+                                     "one-shot EXX label evaluation produced a non-finite energy");
+        }
+        restore_exx_state();
+        return scaled_exx;
+    }
+    catch (...)
+    {
+        restore_exx_state();
+        throw;
+    }
+}
+
+} // namespace
 
 template <typename T, typename Device>
 ESolver_KS_PW<T, Device>::ESolver_KS_PW()
@@ -373,8 +457,30 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
         this->pelec->cal_tau(*(this->psi));
     }
 
+    const bool write_training_data = PARAM.inp.out_training_data;
+    const double saved_exx_energy = this->pelec->f_en.exx;
+    if (write_training_data)
+    {
+        ModuleBase::TITLE("ESolver_KS_PW", "training_pbe0_exx_label");
+        ModuleBase::timer::tick("ESolver_KS_PW", "training_pbe0_exx_label");
+        this->pelec->f_en.exx = evaluate_training_pbe0_exx_energy<T, Device>(ucell,
+                                                                              this->kv.isk.data(),
+                                                                              this->pw_wfc,
+                                                                              this->pw_rhod,
+                                                                              &this->kv,
+                                                                              &this->pelec->wg,
+                                                                              this->stp.psi_t);
+        GlobalV::ofs_running << "training_pbe0_exx_label: hybrid-scaled EXX energy = "
+                             << this->pelec->f_en.exx << " Ry" << std::endl;
+        ModuleBase::timer::tick("ESolver_KS_PW", "training_pbe0_exx_label");
+    }
+
     // Call 'after_scf' of ESolver_KS
     ESolver_KS<T, Device>::after_scf(ucell, istep, conv_esolver);
+    if (write_training_data)
+    {
+        this->pelec->f_en.exx = saved_exx_energy;
+    }
 
     // Output quantities
     ModuleIO::ctrl_scf_pw<T, Device>(istep, ucell, this->pelec, this->chr, this->kv, this->pw_wfc,
