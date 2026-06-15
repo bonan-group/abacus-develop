@@ -1,8 +1,8 @@
 #include "get_wf_lcao.h"
 
+#include "source_base/module_external/blacs_connector.h"
 #include "source_io/module_output/cube_io.h"
 #include "source_io/module_wf/write_wfc_pw.h"
-#include "source_base/memory.h"
 
 #include "source_lcao/module_gint/gint_env_gamma.h"
 #include "source_lcao/module_gint/gint_env_k.h"
@@ -83,7 +83,11 @@ void Get_wf_lcao::begin(const UnitCell& ucell,
                                               0,
                                               ss_out.str(),
                                               ef_tmp,
-                                              &(ucell));
+                                              &(ucell),
+                                              11, // default precision
+                                              1, // default out_fermi
+                                              PARAM.globalv.two_fermi,
+                                              false);
             }
         }
     }
@@ -126,12 +130,12 @@ void Get_wf_lcao::begin(const UnitCell& ucell,
                 // Output real part
                 std::stringstream ss_real;
                 ss_real << global_out_dir << "wfi" << ib + 1 << "s" << is + 1 << "re.cube";
-                ModuleIO::write_vdata_palgrid(pgrid, wfc_real.data(), is, nspin, 0, ss_real.str(), ef_tmp, &(ucell));
+                ModuleIO::write_vdata_palgrid(pgrid, wfc_real.data(), is, nspin, 0, ss_real.str(), ef_tmp, &(ucell), 11, 1, PARAM.globalv.two_fermi, false);
 
                 // Output imaginary part
                 std::stringstream ss_imag;
                 ss_imag << global_out_dir << "wfi" << ib + 1 << "s" << is + 1 << "im.cube";
-                ModuleIO::write_vdata_palgrid(pgrid, wfc_imag.data(), is, nspin, 0, ss_imag.str(), ef_tmp, &(ucell));
+                ModuleIO::write_vdata_palgrid(pgrid, wfc_imag.data(), is, nspin, 0, ss_imag.str(), ef_tmp, &(ucell), 11, 1, PARAM.globalv.two_fermi, false);
             }
         }
     }
@@ -245,7 +249,9 @@ void Get_wf_lcao::begin(const UnitCell& ucell,
                                               ef_tmp,
                                               &(ucell),
                                               3,
-                                              1);
+                                              1,
+                                              PARAM.globalv.two_fermi,
+                                              false);
 
                 // if (out_wfc_pw || out_wf_r)
                 psi_g.fix_k(ik);
@@ -316,12 +322,12 @@ void Get_wf_lcao::begin(const UnitCell& ucell,
                 ss_real << global_out_dir << "wfi" << ib + 1 << "s" << ispin + 1 << "k" << ik0 + 1 << "re.cube";
 
                 const double ef_tmp = this->pes_->eferm.get_efval(ispin);
-                ModuleIO::write_vdata_palgrid(pgrid, wfc_real.data(), ispin, nspin, 0, ss_real.str(), ef_tmp, &(ucell));
+                ModuleIO::write_vdata_palgrid(pgrid, wfc_real.data(), ispin, nspin, 0, ss_real.str(), ef_tmp, &(ucell), 11, 1, PARAM.globalv.two_fermi, false);
 
                 // Output imaginary part
                 std::stringstream ss_imag;
                 ss_imag << global_out_dir << "wfi" << ib + 1 << "s" << ispin + 1 << "k" << ik0 + 1 << "im.cube";
-                ModuleIO::write_vdata_palgrid(pgrid, wfc_imag.data(), ispin, nspin, 0, ss_imag.str(), ef_tmp, &(ucell));
+                ModuleIO::write_vdata_palgrid(pgrid, wfc_imag.data(), ispin, nspin, 0, ss_imag.str(), ef_tmp, &(ucell), 11, 1, PARAM.globalv.two_fermi, false);
             }
         }
     }
@@ -498,7 +504,7 @@ void Get_wf_lcao::wfc_2d_to_grid(const T* lowf_2d,
                                  const std::vector<int>& trace_lo)
 {
     ModuleBase::TITLE("Get_wf_lcao", "wfc_2d_to_grid");
-    ModuleBase::timer::tick("Get_wf_lcao", "wfc_2d_to_grid");
+    ModuleBase::timer::start("Get_wf_lcao", "wfc_2d_to_grid");
 
     // dimension related
     const int nlocal = pv.desc_wfc[2];
@@ -557,7 +563,7 @@ void Get_wf_lcao::wfc_2d_to_grid(const T* lowf_2d,
             // this operation will let all processors have the same wfc_grid
         }
     }
-    ModuleBase::timer::tick("Get_wf_lcao", "wfc_2d_to_grid");
+    ModuleBase::timer::end("Get_wf_lcao", "wfc_2d_to_grid");
 }
 
 template void Get_wf_lcao::wfc_2d_to_grid(const double* lowf_2d,
@@ -589,14 +595,14 @@ void Get_wf_lcao::prepare_get_wf(std::ofstream& ofs_running)
     ofs_running << std::setprecision(6);
 }
 
-int Get_wf_lcao::globalIndex(int localindex, int nblk, int nprocs, int myproc)
+int Get_wf_lcao::globalIndex(int localindex, int nblk, int nprocs, int myproc) const
 {
     const int iblock = localindex / nblk;
     const int gIndex = (iblock * nprocs + myproc) * nblk + localindex % nblk;
     return gIndex;
 }
 
-int Get_wf_lcao::localIndex(int globalindex, int nblk, int nprocs, int& myproc)
+int Get_wf_lcao::localIndex(int globalindex, int nblk, int nprocs, int& myproc) const
 {
     myproc = int((globalindex % (nblk * nprocs)) / nblk);
     return int(globalindex / (nblk * nprocs)) * nblk + globalindex % nblk;

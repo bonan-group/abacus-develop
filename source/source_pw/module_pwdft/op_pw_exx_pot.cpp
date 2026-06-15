@@ -1,20 +1,34 @@
 #include "op_pw_exx.h"
+#include "source_base/parallel_reduce.h"
 #include "source_io/module_parameter/parameter.h"
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 
 namespace hamilt
 {
+namespace
+{
+const K_Vectors::ExxFullQPoint& get_exx_qpoint(const K_Vectors* kv, int iq_full)
+{
+    if (iq_full < 0 || iq_full >= static_cast<int>(kv->exx_full_q_map.size()))
+    {
+        ModuleBase::WARNING_QUIT("get_exx_qpoint", "full q index is outside EXX full-q map");
+    }
+    return kv->exx_full_q_map[iq_full];
+}
+
 template <typename Real, typename Device>
-void get_exx_potential(const K_Vectors* kv,
-                       const ModulePW::PW_Basis_K* wfcpw,
-                       ModulePW::PW_Basis* rhopw_dev,
-                       Real* pot,
-                       double tpiba,
-                       bool gamma_extrapolation,
-                       double ucell_omega,
-                       int ik,
-                       int iq,
-                       bool is_stress)
+void fill_exx_potential_from_kq(const K_Vectors* kv,
+                                const ModulePW::PW_Basis_K* wfcpw,
+                                ModulePW::PW_Basis* rhopw_dev,
+                                Real* pot,
+                                double tpiba,
+                                bool gamma_extrapolation,
+                                double ucell_omega,
+                                const ModuleBase::Vector3<double>& k_c,
+                                const ModuleBase::Vector3<double>& k_d,
+                                const ModuleBase::Vector3<double>& q_c,
+                                const ModuleBase::Vector3<double>& q_d,
+                                bool is_stress)
 {
     using setmem_real_cpu_op = base_device::memory::set_memory_op<Real, base_device::DEVICE_CPU>;
     using syncmem_real_c2d_op = base_device::memory::synchronize_memory_op<Real, base_device::DEVICE_CPU, Device>;
@@ -24,25 +38,11 @@ void get_exx_potential(const K_Vectors* kv,
     Real nqs_half3 = 0.5 * kv->nmp[2];
 
     Real* pot_cpu = nullptr;
-    int nks = wfcpw->nks, npw = rhopw_dev->npw;
+    int npw = rhopw_dev->npw;
     double tpiba2 = tpiba * tpiba;
     pot_cpu = new Real[npw];
     // fill zero
     setmem_real_cpu_op()(pot_cpu, 0, npw);
-
-    std::vector<ModuleBase::Vector3<double>> qvec_c, qvec_d;
-#ifdef __MPI
-    kv->para_k.gatherkvec(kv->kvec_c, qvec_c);
-    kv->para_k.gatherkvec(kv->kvec_d, qvec_d);
-#else
-    qvec_c = kv->kvec_c;
-    qvec_d = kv->kvec_d;
-#endif
-
-    if (ik > nks)
-    {
-        return;
-    }
 
     // calculate Fock pot
     auto param_fock = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock];
@@ -51,10 +51,6 @@ void get_exx_potential(const K_Vectors* kv,
         auto param = param_fock[i];
         double exx_div = OperatorEXXPW<std::complex<Real>, Device>::fock_div[i];
         double alpha = std::stod(param["alpha"]);
-        const ModuleBase::Vector3<double> k_c = wfcpw->kvec_c[ik];
-        const ModuleBase::Vector3<double> k_d = wfcpw->kvec_d[ik];
-        const ModuleBase::Vector3<double> q_c = qvec_c[iq];
-        const ModuleBase::Vector3<double> q_d = qvec_d[iq];
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -84,9 +80,6 @@ void get_exx_potential(const K_Vectors* kv,
                     grid_factor = extrapolate_grid;
                 }
             }
-
-            const int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-            const int nk = nks / nk_fac;
 
             Real gg = (k_c - q_c + rhopw_dev->gcar[ig]).norm2() * tpiba2;
             // if (kqgcar2 > 1e-12) // vasp uses 1/40 of the smallest (k spacing)**2
@@ -121,10 +114,6 @@ void get_exx_potential(const K_Vectors* kv,
                                           tpiba,
                                           gamma_extrapolation,
                                           ucell_omega);
-        const ModuleBase::Vector3<double> k_c = wfcpw->kvec_c[ik];
-        const ModuleBase::Vector3<double> k_d = wfcpw->kvec_d[ik];
-        const ModuleBase::Vector3<double> q_c = qvec_c[iq];
-        const ModuleBase::Vector3<double> q_d = qvec_d[iq];
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -154,10 +143,6 @@ void get_exx_potential(const K_Vectors* kv,
                     grid_factor = extrapolate_grid;
                 }
             }
-
-            const int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-            const int nk = nks / nk_fac;
-            // const int ig_kq = ik * nks * npw + iq * npw + ig;
 
             Real gg = (k_c - q_c + rhopw_dev->gcar[ig]).norm2() * tpiba2;
             // if (ig == 0 && GlobalV::MY_RANK==1)
@@ -192,29 +177,95 @@ void get_exx_potential(const K_Vectors* kv,
 
     // copy the potential to the device memory
 #ifdef __CUDA
-    cudaError_t err = cudaHostRegister(pot_cpu, sizeof(Real) * npw, cudaHostRegisterPortable);
-    if (err != cudaSuccess) {
-        throw std::runtime_error("failed to register potential CPU memory operations");
+    if (PARAM.inp.device == "gpu")
+    {
+        cudaError_t err = cudaHostRegister(pot_cpu, sizeof(Real) * npw, cudaHostRegisterPortable);
+        if (err != cudaSuccess) {
+            throw std::runtime_error("failed to register potential CPU memory operations");
+        }
     }
 #endif
     syncmem_real_c2d_op()(pot, pot_cpu, rhopw_dev->npw);
 #ifdef __CUDA
-    cudaHostUnregister(pot_cpu);
+    if (PARAM.inp.device == "gpu")
+    {
+        cudaHostUnregister(pot_cpu);
+    }
 #endif
 
-    delete pot_cpu;
+    delete[] pot_cpu;
+}
+} // namespace
+
+template <typename Real, typename Device>
+void get_exx_potential(const K_Vectors* kv,
+                       const ModulePW::PW_Basis_K* wfcpw,
+                       ModulePW::PW_Basis* rhopw_dev,
+                       Real* pot,
+                       double tpiba,
+                       bool gamma_extrapolation,
+                       double ucell_omega,
+                       int ik,
+                       int iq,
+                       bool is_stress)
+{
+    const auto& qpoint = get_exx_qpoint(kv, iq);
+    if (ik < 0 || ik >= wfcpw->nks)
+    {
+        ModuleBase::WARNING_QUIT("get_exx_potential", "local k index is outside wavefunction k list");
+    }
+    fill_exx_potential_from_kq<Real, Device>(kv,
+                                             wfcpw,
+                                             rhopw_dev,
+                                             pot,
+                                             tpiba,
+                                             gamma_extrapolation,
+                                             ucell_omega,
+                                             wfcpw->kvec_c[ik],
+                                             wfcpw->kvec_d[ik],
+                                             qpoint.full_kvec_c,
+                                             qpoint.full_kvec_d,
+                                             is_stress);
 }
 
 template <typename Real, typename Device>
-void get_exx_stress_potential(const K_Vectors* kv,
-                              const ModulePW::PW_Basis_K* wfcpw,
-                              ModulePW::PW_Basis* rhopw_dev,
-                              Real* pot,
-                              double tpiba,
-                              bool gamma_extrapolation,
-                              double ucell_omega,
-                              int ik,
-                              int iq)
+void get_exx_potential(const K_Vectors* kv,
+                       const ModulePW::PW_Basis_K* wfcpw,
+                       ModulePW::PW_Basis* rhopw_dev,
+                       Real* pot,
+                       double tpiba,
+                       bool gamma_extrapolation,
+                       double ucell_omega,
+                       const K_Vectors::ExxFullKPoint& kpoint,
+                       const K_Vectors::ExxFullQPoint& qpoint,
+                       bool is_stress)
+{
+    fill_exx_potential_from_kq<Real, Device>(kv,
+                                             wfcpw,
+                                             rhopw_dev,
+                                             pot,
+                                             tpiba,
+                                             gamma_extrapolation,
+                                             ucell_omega,
+                                             kpoint.full_kvec_c,
+                                             kpoint.full_kvec_d,
+                                             qpoint.full_kvec_c,
+                                             qpoint.full_kvec_d,
+                                             is_stress);
+}
+
+template <typename Real, typename Device>
+void fill_exx_stress_potential_from_kq(const K_Vectors* kv,
+                                       const ModulePW::PW_Basis_K* wfcpw,
+                                       ModulePW::PW_Basis* rhopw_dev,
+                                       Real* pot,
+                                       double tpiba,
+                                       bool gamma_extrapolation,
+                                       double ucell_omega,
+                                       const ModuleBase::Vector3<double>& k_c,
+                                       const ModuleBase::Vector3<double>& k_d,
+                                       const ModuleBase::Vector3<double>& q_c,
+                                       const ModuleBase::Vector3<double>& q_d)
 {
     using setmem_real_cpu_op = base_device::memory::set_memory_op<Real, base_device::DEVICE_CPU>;
     using syncmem_real_c2d_op = base_device::memory::synchronize_memory_op<Real, base_device::DEVICE_CPU, Device>;
@@ -224,7 +275,7 @@ void get_exx_stress_potential(const K_Vectors* kv,
     Real nqs_half3 = 0.5 * kv->nmp[2];
 
     Real* pot_cpu = nullptr;
-    int nks = wfcpw->nks, npw = rhopw_dev->npw;
+    int npw = rhopw_dev->npw;
     double tpiba2 = tpiba * tpiba;
     pot_cpu = new Real[npw];
     // fill zero
@@ -243,11 +294,6 @@ void get_exx_stress_potential(const K_Vectors* kv,
         //                                 gamma_extrapolation,
         //                                 ucell_omega);
         double alpha = std::stod(param["alpha"]);
-
-        const ModuleBase::Vector3<double> k_c = wfcpw->kvec_c[ik];
-        const ModuleBase::Vector3<double> k_d = wfcpw->kvec_d[ik];
-        const ModuleBase::Vector3<double> q_c = wfcpw->kvec_c[iq];
-        const ModuleBase::Vector3<double> q_d = wfcpw->kvec_d[iq];
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -277,10 +323,6 @@ void get_exx_stress_potential(const K_Vectors* kv,
                     grid_factor = extrapolate_grid;
                 }
             }
-
-            const int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-            const int nk = nks / nk_fac;
-            // const int ig_kq = ik * nks * npw + iq * npw + ig;
 
             Real gg = (k_c - q_c + rhopw_dev->gcar[ig]).norm2() * tpiba2;
             // if (kqgcar2 > 1e-12) // vasp uses 1/40 of the smallest (k spacing)**2
@@ -308,11 +350,6 @@ void get_exx_stress_potential(const K_Vectors* kv,
         //                                 gamma_extrapolation,
         //                                 ucell_omega);
 
-        const ModuleBase::Vector3<double> k_c = wfcpw->kvec_c[ik];
-        const ModuleBase::Vector3<double> k_d = wfcpw->kvec_d[ik];
-        const ModuleBase::Vector3<double> q_c = wfcpw->kvec_c[iq];
-        const ModuleBase::Vector3<double> q_d = wfcpw->kvec_d[iq];
-
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -342,10 +379,6 @@ void get_exx_stress_potential(const K_Vectors* kv,
                 }
             }
 
-            const int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-            const int nk = nks / nk_fac;
-            // const int ig_kq = ik * nks * npw + iq * npw + ig;
-
             Real gg = (k_c - q_c + rhopw_dev->gcar[ig]).norm2() * tpiba2;
             // if (kqgcar2 > 1e-12) // vasp uses 1/40 of the smallest (k spacing)**2
             if (gg >= 1e-8)
@@ -369,17 +402,76 @@ void get_exx_stress_potential(const K_Vectors* kv,
 
     // copy the potential to the device memory
 #ifdef __CUDA
-    cudaError_t err = cudaHostRegister(pot_cpu, sizeof(Real) * npw, cudaHostRegisterPortable);
-    if (err != cudaSuccess) {
-        throw std::runtime_error("failed to register potential CPU memory operations");
+    if (PARAM.inp.device == "gpu")
+    {
+        cudaError_t err = cudaHostRegister(pot_cpu, sizeof(Real) * npw, cudaHostRegisterPortable);
+        if (err != cudaSuccess) {
+            throw std::runtime_error("failed to register potential CPU memory operations");
+        }
     }
 #endif
     syncmem_real_c2d_op()(pot, pot_cpu, rhopw_dev->npw);
 #ifdef __CUDA
-    cudaHostUnregister(pot_cpu);
+    if (PARAM.inp.device == "gpu")
+    {
+        cudaHostUnregister(pot_cpu);
+    }
 #endif
 
-    delete pot_cpu;
+    delete[] pot_cpu;
+}
+
+template <typename Real, typename Device>
+void get_exx_stress_potential(const K_Vectors* kv,
+                              const ModulePW::PW_Basis_K* wfcpw,
+                              ModulePW::PW_Basis* rhopw_dev,
+                              Real* pot,
+                              double tpiba,
+                              bool gamma_extrapolation,
+                              double ucell_omega,
+                              int ik,
+                              int iq)
+{
+    const auto& qpoint = get_exx_qpoint(kv, iq);
+    if (ik < 0 || ik >= wfcpw->nks)
+    {
+        ModuleBase::WARNING_QUIT("get_exx_stress_potential", "local k index is outside wavefunction k list");
+    }
+    fill_exx_stress_potential_from_kq<Real, Device>(kv,
+                                                    wfcpw,
+                                                    rhopw_dev,
+                                                    pot,
+                                                    tpiba,
+                                                    gamma_extrapolation,
+                                                    ucell_omega,
+                                                    wfcpw->kvec_c[ik],
+                                                    wfcpw->kvec_d[ik],
+                                                    qpoint.full_kvec_c,
+                                                    qpoint.full_kvec_d);
+}
+
+template <typename Real, typename Device>
+void get_exx_stress_potential(const K_Vectors* kv,
+                              const ModulePW::PW_Basis_K* wfcpw,
+                              ModulePW::PW_Basis* rhopw_dev,
+                              Real* pot,
+                              double tpiba,
+                              bool gamma_extrapolation,
+                              double ucell_omega,
+                              const K_Vectors::ExxFullKPoint& kpoint,
+                              const K_Vectors::ExxFullQPoint& qpoint)
+{
+    fill_exx_stress_potential_from_kq<Real, Device>(kv,
+                                                    wfcpw,
+                                                    rhopw_dev,
+                                                    pot,
+                                                    tpiba,
+                                                    gamma_extrapolation,
+                                                    ucell_omega,
+                                                    kpoint.full_kvec_c,
+                                                    kpoint.full_kvec_d,
+                                                    qpoint.full_kvec_c,
+                                                    qpoint.full_kvec_d);
 }
 
 double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
@@ -397,26 +489,29 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
     double nqs_half2 = 0.5 * kv->nmp[1];
     double nqs_half3 = 0.5 * kv->nmp[2];
 
-    int nk_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-
     // here we follow the exx_divergence subroutine in q-e (PW/src/exx_base.f90)
     double alpha = 10.0 / wfcpw->gk_ecut;
     double tpiba2 = tpiba * tpiba;
     double div = 0;
 
-    // this is the \sum_q F(q) part
-    // temporarily for all k points, should be replaced to q points later
-    for (int ik = 0; ik < wfcpw->nks / nk_fac; ik++)
+    // This is the full \sum_q F(q) part.  The q mesh may be symmetry-reduced
+    // for wavefunction storage, so loop over the explicit EXX full-q map.
+    for (const auto& qpoint: kv->exx_full_q_map)
     {
-        const ModuleBase::Vector3<double> k_c = wfcpw->kvec_c[ik];
-        const ModuleBase::Vector3<double> k_d = wfcpw->kvec_d[ik];
+        if (!qpoint.active)
+        {
+            continue;
+        }
+        const double q_mesh_factor = qpoint.weight * kv->get_nkstot_full();
+        const ModuleBase::Vector3<double> qfull_c = qpoint.full_kvec_c;
+        const ModuleBase::Vector3<double> qfull_d = qpoint.full_kvec_d;
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+ : div)
 #endif
         for (int ig = 0; ig < rhopw_dev->npw; ig++)
         {
-            const ModuleBase::Vector3<double> q_c = k_c + rhopw_dev->gcar[ig];
-            const ModuleBase::Vector3<double> q_d = k_d + rhopw_dev->gdirect[ig];
+            const ModuleBase::Vector3<double> q_c = qfull_c + rhopw_dev->gcar[ig];
+            const ModuleBase::Vector3<double> q_d = qfull_d + rhopw_dev->gdirect[ig];
             double qq = q_c.norm2();
             // For gamma_extrapolation (https://doi.org/10.1103/PhysRevB.79.205114)
             // 7/8 of the points in the grid are "activated" and 1/8 are disabled.
@@ -446,16 +541,17 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
             {
                 double omega = erfc_omega;
                 double omega2 = omega * omega;
-                div += std::exp(-alpha * qq) / qq * (1.0 - std::exp(-qq * tpiba2 / 4.0 / omega2)) * grid_factor;
+                div += q_mesh_factor * std::exp(-alpha * qq) / qq
+                       * (1.0 - std::exp(-qq * tpiba2 / 4.0 / omega2)) * grid_factor;
             }
             else
             {
-                div += std::exp(-alpha * qq) / qq * grid_factor;
+                div += q_mesh_factor * std::exp(-alpha * qq) / qq * grid_factor;
             }
         }
     }
 
-    Parallel_Reduce::reduce_all(div);
+    Parallel_Reduce::reduce_pool(div);
     // std::cout << "EXX div: " << div << std::endl;
 
     // if (PARAM.inp.dft_functional == "hse")
@@ -516,7 +612,17 @@ template void get_exx_potential<float, base_device::DEVICE_CPU>(const K_Vectors*
                                                                 double,
                                                                 int,
                                                                 int,
-                                                                        bool);
+                                                                bool);
+template void get_exx_potential<float, base_device::DEVICE_CPU>(const K_Vectors*,
+                                                                const ModulePW::PW_Basis_K*,
+                                                                ModulePW::PW_Basis*,
+                                                                float*,
+                                                                double,
+                                                                bool,
+                                                                double,
+                                                                const K_Vectors::ExxFullKPoint&,
+                                                                const K_Vectors::ExxFullQPoint&,
+                                                                bool);
 template void get_exx_potential<double, base_device::DEVICE_CPU>(const K_Vectors*,
                                                                  const ModulePW::PW_Basis_K*,
                                                                  ModulePW::PW_Basis*,
@@ -526,7 +632,17 @@ template void get_exx_potential<double, base_device::DEVICE_CPU>(const K_Vectors
                                                                  double,
                                                                  int,
                                                                  int,
-                                                                        bool);
+                                                                 bool);
+template void get_exx_potential<double, base_device::DEVICE_CPU>(const K_Vectors*,
+                                                                 const ModulePW::PW_Basis_K*,
+                                                                 ModulePW::PW_Basis*,
+                                                                 double*,
+                                                                 double,
+                                                                 bool,
+                                                                 double,
+                                                                 const K_Vectors::ExxFullKPoint&,
+                                                                 const K_Vectors::ExxFullQPoint&,
+                                                                 bool);
 template void get_exx_stress_potential<float, base_device::DEVICE_CPU>(const K_Vectors*,
                                                                        const ModulePW::PW_Basis_K*,
                                                                        ModulePW::PW_Basis*,
@@ -536,6 +652,15 @@ template void get_exx_stress_potential<float, base_device::DEVICE_CPU>(const K_V
                                                                        double,
                                                                        int,
                                                                        int);
+template void get_exx_stress_potential<float, base_device::DEVICE_CPU>(const K_Vectors*,
+                                                                       const ModulePW::PW_Basis_K*,
+                                                                       ModulePW::PW_Basis*,
+                                                                       float*,
+                                                                       double,
+                                                                       bool,
+                                                                       double,
+                                                                       const K_Vectors::ExxFullKPoint&,
+                                                                       const K_Vectors::ExxFullQPoint&);
 template void get_exx_stress_potential<double, base_device::DEVICE_CPU>(const K_Vectors*,
                                                                         const ModulePW::PW_Basis_K*,
                                                                         ModulePW::PW_Basis*,
@@ -545,6 +670,15 @@ template void get_exx_stress_potential<double, base_device::DEVICE_CPU>(const K_
                                                                         double,
                                                                         int,
                                                                         int);
+template void get_exx_stress_potential<double, base_device::DEVICE_CPU>(const K_Vectors*,
+                                                                        const ModulePW::PW_Basis_K*,
+                                                                        ModulePW::PW_Basis*,
+                                                                        double*,
+                                                                        double,
+                                                                        bool,
+                                                                        double,
+                                                                        const K_Vectors::ExxFullKPoint&,
+                                                                        const K_Vectors::ExxFullQPoint&);
 #if ((defined __CUDA) || (defined __ROCM))
 template class OperatorEXXPW<std::complex<float>, base_device::DEVICE_GPU>;
 template class OperatorEXXPW<std::complex<double>, base_device::DEVICE_GPU>;
@@ -558,6 +692,16 @@ template void get_exx_potential<float, base_device::DEVICE_GPU>(const K_Vectors*
                                                                 int,
                                                                 int,
                                                                 bool);
+template void get_exx_potential<float, base_device::DEVICE_GPU>(const K_Vectors*,
+                                                                const ModulePW::PW_Basis_K*,
+                                                                ModulePW::PW_Basis*,
+                                                                float*,
+                                                                double,
+                                                                bool,
+                                                                double,
+                                                                const K_Vectors::ExxFullKPoint&,
+                                                                const K_Vectors::ExxFullQPoint&,
+                                                                bool);
 template void get_exx_potential<double, base_device::DEVICE_GPU>(const K_Vectors*,
                                                                  const ModulePW::PW_Basis_K*,
                                                                  ModulePW::PW_Basis*,
@@ -568,6 +712,16 @@ template void get_exx_potential<double, base_device::DEVICE_GPU>(const K_Vectors
                                                                  int,
                                                                  int,
                                                                  bool);
+template void get_exx_potential<double, base_device::DEVICE_GPU>(const K_Vectors*,
+                                                                 const ModulePW::PW_Basis_K*,
+                                                                 ModulePW::PW_Basis*,
+                                                                 double*,
+                                                                 double,
+                                                                 bool,
+                                                                 double,
+                                                                 const K_Vectors::ExxFullKPoint&,
+                                                                 const K_Vectors::ExxFullQPoint&,
+                                                                 bool);
 template void get_exx_stress_potential<float, base_device::DEVICE_GPU>(const K_Vectors*,
                                                                        const ModulePW::PW_Basis_K*,
                                                                        ModulePW::PW_Basis*,
@@ -577,6 +731,15 @@ template void get_exx_stress_potential<float, base_device::DEVICE_GPU>(const K_V
                                                                        double,
                                                                        int,
                                                                        int);
+template void get_exx_stress_potential<float, base_device::DEVICE_GPU>(const K_Vectors*,
+                                                                       const ModulePW::PW_Basis_K*,
+                                                                       ModulePW::PW_Basis*,
+                                                                       float*,
+                                                                       double,
+                                                                       bool,
+                                                                       double,
+                                                                       const K_Vectors::ExxFullKPoint&,
+                                                                       const K_Vectors::ExxFullQPoint&);
 template void get_exx_stress_potential<double, base_device::DEVICE_GPU>(const K_Vectors*,
                                                                         const ModulePW::PW_Basis_K*,
                                                                         ModulePW::PW_Basis*,
@@ -586,5 +749,14 @@ template void get_exx_stress_potential<double, base_device::DEVICE_GPU>(const K_
                                                                         double,
                                                                         int,
                                                                         int);
+template void get_exx_stress_potential<double, base_device::DEVICE_GPU>(const K_Vectors*,
+                                                                        const ModulePW::PW_Basis_K*,
+                                                                        ModulePW::PW_Basis*,
+                                                                        double*,
+                                                                        double,
+                                                                        bool,
+                                                                        double,
+                                                                        const K_Vectors::ExxFullKPoint&,
+                                                                        const K_Vectors::ExxFullQPoint&);
 #endif
 } // namespace hamilt

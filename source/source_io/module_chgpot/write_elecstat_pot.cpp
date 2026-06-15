@@ -25,7 +25,7 @@ void write_elecstat_pot(
     const int precision)
 {
     ModuleBase::TITLE("ModuleIO", "write_elecstat_pot");
-    ModuleBase::timer::tick("ModuleIO", "write_elecstat_pot");
+    ModuleBase::timer::start("ModuleIO", "write_elecstat_pot");
 
     std::vector<double> v_elecstat(rho_basis->nrxx, 0.0);
 
@@ -102,9 +102,11 @@ void write_elecstat_pot(
         ef_tmp,
         ucell,
         precision,
-        out_fermi);
+        out_fermi,
+        PARAM.globalv.two_fermi,
+        false);
 
-    ModuleBase::timer::tick("ModuleIO", "write_elecstat_pot");
+    ModuleBase::timer::end("ModuleIO", "write_elecstat_pot");
     return;
 }
 

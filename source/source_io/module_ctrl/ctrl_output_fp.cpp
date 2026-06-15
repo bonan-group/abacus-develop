@@ -1,10 +1,10 @@
 #include "ctrl_output_fp.h" // use ctrl_output_fp()
-
-#include "../module_output/cube_io.h"                                  // use write_vdata_palgrid
+#include "../module_output/cube_io.h" // use write_vdata_palgrid
+#include "../module_dipole/dipole_io.h" // use write_dipole
 #include "source_estate/module_charge/symmetry_rho.h" // use Symmetry_rho
 #include "source_base/tool_quit.h"
 #include "source_hamilt/module_xc/xc_functional.h"    // use XC_Functional
-#include "source_io/module_chgpot/write_elecstat_pot.h"             // use write_elecstat_pot
+#include "source_io/module_chgpot/write_elecstat_pot.h" // use write_elecstat_pot
 #include "source_io/module_elf/write_elf.h"
 #include "source_io/module_training/training_dump.h"
 
@@ -25,7 +25,7 @@ void ctrl_output_fp(UnitCell& ucell,
                     const int istep)
 {
     ModuleBase::TITLE("ModuleIO", "ctrl_output_fp");
-    ModuleBase::timer::tick("ModuleIO", "ctrl_output_fp");
+    ModuleBase::timer::start("ModuleIO", "ctrl_output_fp");
 
     const bool out_app_flag = PARAM.inp.out_app_flag;
     const bool gamma_only = PARAM.globalv.gamma_only_local;
@@ -50,22 +50,18 @@ void ctrl_output_fp(UnitCell& ucell,
     }
 
     std::string geom_block;
-    if (istep_in == -1)
-    {
-        // do nothing
-    }
-    else if (istep_in >= 0)
+    bool should_output = (PARAM.inp.out_freq_ion == 0);
+    if (istep_in >= 0)
     {
         geom_block = "g" + std::to_string(istep + 1);
+        should_output = true;
     }
 
     // 4) write charge density
-    if (PARAM.inp.out_chg[0] > 0)
+    if (PARAM.inp.out_chg[0] > 0 && should_output)
     {
         for (int is = 0; is < nspin; ++is)
         {
-            pw_rhod->real2recip(chr.rho_save[is], chr.rhog_save[is]);
-
             std::string fn = PARAM.globalv.global_out_dir + "chg";
 
             std::string spin_block;
@@ -89,7 +85,9 @@ void ctrl_output_fp(UnitCell& ucell,
                                           pelec->eferm.get_efval(is),
                                           &(ucell),
                                           PARAM.inp.out_chg[1],
-                                          1);
+                                          1,
+                                          PARAM.globalv.two_fermi,
+                                          false);
 
             if (XC_Functional::get_ked_flag())
             {
@@ -104,13 +102,17 @@ void ctrl_output_fp(UnitCell& ucell,
                                               istep,
                                               fn,
                                               pelec->eferm.get_efval(is),
-                                              &(ucell));
+                                              &(ucell),
+                                              11, // default precision
+                                              1, // default out_fermi
+                                              PARAM.globalv.two_fermi,
+                                              false);
             }
         }
     }
 
     // 5) write potential
-    if (PARAM.inp.out_pot[0] == 1 || PARAM.inp.out_pot[0] == 3)
+    if ((PARAM.inp.out_pot[0] == 1 || PARAM.inp.out_pot[0] == 3) && should_output)
     {
         for (int is = 0; is < nspin; is++)
         {
@@ -132,15 +134,17 @@ void ctrl_output_fp(UnitCell& ucell,
                                           pelec->pot->get_eff_v(is),
                                           is,
                                           nspin,
-                                          istep_in,
+                                          istep,
                                           fn,
                                           0.0, // efermi
                                           &(ucell),
                                           PARAM.inp.out_pot[1],  // precision
-                                          0); // out_fermi
+                                          0, // out_fermi
+                                          PARAM.globalv.two_fermi,
+                                          false);
         }
     }
-    else if (PARAM.inp.out_pot[0] == 2)
+    else if (PARAM.inp.out_pot[0] == 2 && should_output)
     {
         std::string fn = PARAM.globalv.global_out_dir + "potes";
         fn += geom_block + ".cube";
@@ -157,11 +161,11 @@ void ctrl_output_fp(UnitCell& ucell,
             &(ucell),
             pelec->pot->get_fixed_v(),
             solvent,
-	    PARAM.inp.out_pot[1]);
+            PARAM.inp.out_pot[1]);
     }
 
     // 6) write ELF
-    if (PARAM.inp.out_elf[0] > 0)
+    if (PARAM.inp.out_elf[0] > 0 && should_output)
     {
         chr.cal_elf = true;
         Symmetry_rho srho;
@@ -171,12 +175,7 @@ void ctrl_output_fp(UnitCell& ucell,
         }
 
         std::string out_dir = PARAM.globalv.global_out_dir;
-        ModuleIO::write_elf(
-#ifdef __MPI
-            pw_big->bz,
-            pw_big->nbz,
-#endif
-            out_dir,
+        ModuleIO::write_elf(out_dir,
             istep,
             nspin,
             chr.rho,
@@ -184,12 +183,14 @@ void ctrl_output_fp(UnitCell& ucell,
             pw_rhod,
             para_grid,
             &(ucell),
-            PARAM.inp.out_elf[1]);
+            PARAM.inp.out_elf[1],
+            geom_block,
+            PARAM.globalv.two_fermi);
     }
 
 #ifdef USE_LIBXC
     // 7) write xc(r)
-    if (PARAM.inp.out_xc_r[0] >= 0)
+    if (PARAM.inp.out_xc_r[0] >= 0 && should_output)
     {
         ModuleIO::write_libxc_r(PARAM.inp.out_xc_r[0],
                                 XC_Functional::get_func_id(),
@@ -211,7 +212,18 @@ void ctrl_output_fp(UnitCell& ucell,
 #endif
     }
 
-    ModuleBase::timer::tick("ModuleIO", "ctrl_output_fp");
+    // 8) write dipole moment
+    if (PARAM.inp.out_dipole == 1 && should_output)
+    {
+        for (int is = 0; is < nspin; ++is)
+        {
+            std::stringstream ss_dipole;
+            ss_dipole << global_out_dir << "dipole_s" << is + 1 << ".txt";
+            ModuleIO::write_dipole(ucell, chr.rho_save[is], pw_rhod, istep, ss_dipole.str(), GlobalV::ofs_running);
+        }
+    }
+
+    ModuleBase::timer::end("ModuleIO", "ctrl_output_fp");
 }
 
 } // namespace ModuleIO

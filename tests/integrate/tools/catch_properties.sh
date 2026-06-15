@@ -5,6 +5,7 @@
 COMPARE_SCRIPT="../../integrate/tools/CompareFile.py"
 #COMPARE_SCRIPT="../../integrate/tools/compare_file.py"
 SUM_CUBE_EXE="python3 ../../integrate/tools/sum_cube.py"
+COLLECT_NPY_MEANS="../../integrate/tools/collect_npy_means.py"
 
 
 sum_file(){
@@ -31,6 +32,29 @@ get_input_key_value(){
 	inputf=$2
 	value=$(awk -v key=$key '{if($1==key) a=$2} END {print a}' $inputf)
 	echo $value
+}
+
+
+sanitize_result_key(){
+	echo "$1" | sed 's/[^A-Za-z0-9_]/_/g'
+}
+
+
+record_compare_result(){
+	result_file=$1
+	result_key=$2
+	ref_file=$3
+	cal_file=$4
+	accuracy=${5:-8}
+	use_abs=${6:-0}
+
+	if [ ! -f "$ref_file" ] || [ ! -f "$cal_file" ]; then
+		echo "$result_key 1" >> "$result_file"
+		return
+	fi
+
+	python3 $COMPARE_SCRIPT "$ref_file" "$cal_file" "$accuracy" -abs "$use_abs"
+	echo "$result_key $?" >> "$result_file"
 }
 
 
@@ -196,8 +220,8 @@ fi
 # echo $out_elf
 #-------------------------------
 if ! test -z "$out_elf"  && [  $out_elf == 1 ]; then
-	elf1ref=refelf.cube
-	elf1cal=OUT.autotest/elf.cube
+	elf1ref=refelftot.cube
+	elf1cal=OUT.autotest/elftot.cube
 	python3 $COMPARE_SCRIPT $elf1ref $elf1cal 3
 	echo "ComparePot1_pass $?" >>$1
 fi
@@ -393,8 +417,8 @@ fi
 #-----------------------------------
 #echo $has_hs2
 if ! test -z "$has_hs2"  && [  $has_hs2 == 1 ]; then
-    #python3 $COMPARE_SCRIPT hrs1_nao.csr.ref OUT.autotest/hrs1_nao.csr 8
-    #echo "CompareHR_pass $?" >>$1
+    python3 $COMPARE_SCRIPT hrs1_nao.csr.ref OUT.autotest/hrs1_nao.csr 8
+    echo "CompareHR_pass $?" >>$1
     python3 $COMPARE_SCRIPT srs1_nao.csr.ref OUT.autotest/srs1_nao.csr 8
     echo "CompareSR_pass $?" >>$1
 fi
@@ -624,6 +648,14 @@ if [ "$need_process_cube" = true ]; then
 fi
 
 #--------------------------------------------
+# ML gene data descriptors (.npy)
+#--------------------------------------------
+descriptor_dir="OUT.autotest/MLKEDF_Descriptors"
+if [ -d "$descriptor_dir" ]; then
+	python3 $COLLECT_NPY_MEANS "$descriptor_dir" >> "$1"
+fi
+
+#--------------------------------------------
 # implicit solvation model
 #--------------------------------------------
 if ! test -z "$imp_sol" && [ $imp_sol == 1 ]; then
@@ -639,9 +671,18 @@ fi
 if ! test -z "$run_rpa" && [ $run_rpa == 1 ]; then
 	Etot_without_rpa=`grep Etot_without_rpa log.txt | awk 'BEGIN{FS=":"} {print $2}' `
 	echo "Etot_without_rpa $Etot_without_rpa" >> $1
-	onref=refcoulomb_mat_0.txt
-	oncal=coulomb_mat_0.txt
-	python3 $COMPARE_SCRIPT $onref $oncal 8
+	shopt -s nullglob
+	rpa_ref_files=(refcoulomb_*.txt refCs_*.txt refshrink_sinvS_*.txt)
+	if [ ${#rpa_ref_files[@]} -gt 0 ]; then
+		IFS=$'\n' rpa_ref_files=($(printf '%s\n' "${rpa_ref_files[@]}" | LC_ALL=C sort))
+		unset IFS
+		for onref in "${rpa_ref_files[@]}"; do
+			oncal=${onref#ref}
+			compare_key="CompareRPA_$(sanitize_result_key "$oncal")_pass"
+			record_compare_result "$1" "$compare_key" "$onref" "$oncal" 8 1
+		done
+	fi
+	shopt -u nullglob
 fi
 
 #--------------------------------------------

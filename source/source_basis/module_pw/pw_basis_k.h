@@ -2,7 +2,6 @@
 #define PWBASISK_H
 
 #include "pw_basis.h"
-#include "source_psi/psi.h"
 #include "source_base/module_device/device.h"
 namespace ModulePW
 {
@@ -58,7 +57,11 @@ class PW_Basis_K : public PW_Basis
 
 public:
     PW_Basis_K();
-    PW_Basis_K(std::string device_, std::string precision_) : PW_Basis(device_, precision_) {classname="PW_Basis_K";}
+    PW_Basis_K(std::string device_, std::string precision_) : PW_Basis(device_, precision_)
+    {
+        classname = "PW_Basis_K";
+        this->fft_bundle.set_precision(this->precision);
+    }
     ~PW_Basis_K();
 
     //init parameters of pw_basis_k class
@@ -82,7 +85,7 @@ public:
 
 public:
     //prepare for transforms between real and reciprocal spaces
-    void setuptransform();
+    void setuptransform(int batch_fft_size = 1);
 
     int *igl2isz_k=nullptr, * d_igl2isz_k = nullptr; //[npwk_max*nks] map (igl,ik) to (is,iz)
     int *igl2ig_k=nullptr;//[npwk_max*nks] map (igl,ik) to ig
@@ -135,6 +138,56 @@ public:
                     const int ik,
                     const bool add = false,
                     const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
+    template <typename FPTYPE>
+    void recip2real_remapped(const std::complex<FPTYPE>* in,
+                             std::complex<FPTYPE>* out,
+                             const int npw_full,
+                             const int* rep_igl,
+                             const int* fft_isz,
+                             const std::complex<double>* phase,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+    template <typename FPTYPE>
+    void recip2real_remapped_conjugate(const std::complex<FPTYPE>* in,
+                                       std::complex<FPTYPE>* out,
+                                       const int npw_full,
+                                       const int* rep_igl,
+                                       const int* fft_isz,
+                                       const std::complex<double>* phase,
+                                       const bool add = false,
+                                       const FPTYPE factor = 1.0) const;
+    template <typename FPTYPE, typename Device>
+    void recip2real_remapped_batch(const Device* ctx,
+                                   const std::complex<FPTYPE>* in_batch,
+                                   std::complex<FPTYPE>* out_batch,
+                                   const int npw_full,
+                                   const int* rep_igl,
+                                   const int* fft_isz,
+                                   const int* fft_ixyz,
+                                   const std::complex<double>* phase,
+                                   const std::complex<FPTYPE>* phase_device,
+                                   int batch_count,
+                                   const bool conjugate,
+                                   const bool add = false,
+                                   const FPTYPE factor = 1.0) const;
+    template <typename FPTYPE>
+    void real2recip_remapped_conjugate(const std::complex<FPTYPE>* in,
+                                       std::complex<FPTYPE>* out,
+                                       const int npw_full,
+                                       const int* rep_igl,
+                                       const int* fft_isz,
+                                       const std::complex<double>* phase,
+                                       const bool add = false,
+                                       const FPTYPE factor = 1.0) const;
+    template <typename FPTYPE>
+    void real2recip_remapped(const std::complex<FPTYPE>* in,
+                             std::complex<FPTYPE>* out,
+                             const int npw_full,
+                             const int* rep_igl,
+                             const int* fft_isz,
+                             const std::complex<double>* phase,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
     #if defined(__DSP)
     template <typename FPTYPE, typename Device>
     void convolution(const Device* ctx,
@@ -175,6 +228,51 @@ public:
                        const int ik,
                        const bool add = false,
                        const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
+
+    // Batch transform methods
+    /**
+     * @brief Batch transform from real space to reciprocal space
+     * @param ctx Device context
+     * @param in_batch Input data batch (size: batch_count * nrxx)
+     * @param out_batch Output data batch (size: batch_count * npwk_max)
+     * @param ik_batch Array of k-point indices (size: batch_count)
+     * @param batch_count Actual number of transforms to process
+     * @param add If true, add to output; if false, overwrite output
+     * @param factor Scaling factor
+     *
+     * Performs batch_count real-to-reciprocal transforms in a single operation.
+     * Falls back to sequential transforms if batch FFT not available.
+     */
+    template <typename FPTYPE, typename Device>
+    void real_to_recip_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             const int ik,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
+
+    /**
+     * @brief Batch transform from reciprocal space to real space
+     * @param ctx Device context
+     * @param in_batch Input data batch (size: batch_count * npwk_max)
+     * @param out_batch Output data batch (size: batch_count * nrxx)
+     * @param ik k-point index (all transforms use same k-point)
+     * @param batch_count Actual number of transforms to process
+     * @param add If true, add to output; if false, overwrite output
+     * @param factor Scaling factor
+     *
+     * Performs batch_count reciprocal-to-real transforms in a single operation.
+     * Falls back to sequential transforms if batch FFT not available.
+     */
+    template <typename FPTYPE, typename Device>
+    void recip_to_real_batch(const Device* ctx,
+                             const std::complex<FPTYPE>* in_batch,
+                             std::complex<FPTYPE>* out_batch,
+                             const int ik,
+                             int batch_count,
+                             const bool add = false,
+                             const FPTYPE factor = 1.0) const;
 
 
     template <typename TK,
@@ -281,4 +379,3 @@ private:
 #endif //PlaneWave_K class
 
 #include "./pw_basis_k_big.h" //temporary it will be removed
-

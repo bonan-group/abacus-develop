@@ -5,7 +5,6 @@
 
 #include "source_base/macros.h"
 
-#include "source_base/parallel_reduce.h"
 
 #include "source_base/module_device/memory_op.h"
 #include "source_base/module_device/types.h"
@@ -241,6 +240,31 @@ template <typename T, typename Device> struct gemm_op {
 };
 
 #ifdef __DSP
+// compute Y = alpha * op(A) * X + beta * Y on DSP Hardware
+template <typename T, typename Device> struct gemv_op_mt {
+  /// @brief Y = alpha * op(A) * X + beta * Y
+  ///
+  /// Input Parameters
+  /// \param trans : whether to transpose matrix A
+  /// \param m : row number of A
+  /// \param n : column number of A
+  /// \param alpha : input constant alpha
+  /// \param A : input matrix A
+  /// \param lda : leading dimension of A
+  /// \param X : input vector X
+  /// \param incx : increment of X
+  /// \param beta : input constant beta
+  /// \param Y : input vector Y
+  /// \param incy : increment of Y
+  ///
+  /// Output Parameters
+  /// \param Y : output vector Y
+  void operator()(const char &trans, const int &m,
+                  const int &n, const T *alpha, const T *A, const int &lda,
+                  const T *X, const int &incx, const T *beta, T *Y,
+                  const int &incy);
+};
+
 // compute C = alpha * op(A) * op(B) + beta * C on DSP Hardware
 template <typename T, typename Device> struct gemm_op_mt {
   /// @brief C = alpha * op(A) * op(B) + beta * C

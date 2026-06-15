@@ -3,7 +3,9 @@
 #include "source_base/timer.h"
 #include "source_base/tool_title.h"
 #include "source_cell/module_neighbor/sltk_grid_driver.h"
+#include "source_estate/module_pot/H_TDDFT_pw.h"
 #include "source_lcao/module_operator_lcao/operator_lcao.h"
+#include "source_lcao/module_rt/td_info.h"
 #include "source_lcao/module_hcontainer/hcontainer_funcs.h"
 
 template <typename TK, typename TR>
@@ -49,7 +51,7 @@ template <typename TK, typename TR>
 void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::initialize_HR(const Grid_Driver* GridD)
 {
     ModuleBase::TITLE("TD_pot_hybrid", "initialize_HR");
-    ModuleBase::timer::tick("TD_pot_hybrid", "initialize_HR");
+    ModuleBase::timer::start("TD_pot_hybrid", "initialize_HR");
 
     auto* paraV = this->hR->get_paraV();// get parallel orbitals from HR
     // TODO: if paraV is nullptr, AtomPair can not use paraV for constructor, I will repair it in the future.
@@ -97,7 +99,7 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::initialize_HR(const Gr
     // allocate the memory of BaseMatrix in HR, and set the new values to zero
     this->hR->allocate(nullptr, true);
 
-    ModuleBase::timer::tick("TD_pot_hybrid", "initialize_HR");
+    ModuleBase::timer::end("TD_pot_hybrid", "initialize_HR");
 }
 
 template <typename TK, typename TR>
@@ -108,7 +110,7 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::calculate_HR()
     {
         ModuleBase::WARNING_QUIT("hamilt::TD_pot_hybrid::calculate_HR", "HR_fixed is nullptr or empty");
     }
-    ModuleBase::timer::tick("TD_pot_hybrid", "calculate_HR");
+    ModuleBase::timer::start("TD_pot_hybrid", "calculate_HR");
 
     const Parallel_Orbitals* paraV = this->HR_fixed->get_atom_pair(0).get_paraV();
 #ifdef _OPENMP
@@ -127,12 +129,13 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::calculate_HR()
             const int iat2 = ucell->itia2iat(T2, I2);
             const ModuleBase::Vector3<int>& R_index2 = adjs.box[ad];
             ModuleBase::Vector3<double> dtau = this->ucell->cal_dtau(iat1, iat2, R_index2);
+            ModuleBase::Vector3<double> dR = this->ucell->cal_dtau(0, 0, R_index2);
 
             hamilt::BaseMatrix<TR>* tmp = this->HR_fixed->find_matrix(iat1, iat2, R_index2);
             hamilt::BaseMatrix<TR>* tmp_overlap = this->SR->find_matrix(iat1, iat2, R_index2);
             if (tmp != nullptr)
             {
-                this->cal_HR_IJR(iat1, iat2, paraV, dtau, tmp->get_pointer(), tmp_overlap->get_pointer());
+                this->cal_HR_IJR(iat1, iat2, paraV, dtau, dR, tmp->get_pointer(), tmp_overlap->get_pointer());
             }
             else
             {
@@ -141,7 +144,7 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::calculate_HR()
         }
     }
 
-    ModuleBase::timer::tick("TD_pot_hybrid", "calculate_HR");
+    ModuleBase::timer::end("TD_pot_hybrid", "calculate_HR");
 }
 
 // cal_HR_IJR()
@@ -150,6 +153,7 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::cal_HR_IJR(const int& 
                                                                    const int& iat2,
                                                                    const Parallel_Orbitals* paraV,
                                                                    const ModuleBase::Vector3<double>& dtau,
+                                                                   const ModuleBase::Vector3<double>& dR,
                                                                    TR* hr_mat_p,
                                                                    TR* sr_p)
 {
@@ -209,7 +213,7 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::cal_HR_IJR(const int& 
             for (int ipol = 0; ipol < npol; ipol++)
             {
                 hr_mat_p[ipol * step_trace] += tmp_r * Et;
-                hr_mat_p[ipol * step_trace] -= ((dtau + tau1) * Et) * sr_p[ipol * step_trace] * this->ucell->lat0;
+                hr_mat_p[ipol * step_trace] -= (dR * Et) * sr_p[ipol * step_trace] * this->ucell->lat0;
             }
             hr_mat_p += npol;
             sr_p += npol;
@@ -246,7 +250,7 @@ template <typename TK, typename TR>
 void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
 {
     ModuleBase::TITLE("TD_pot_hybrid", "contributeHR");
-    ModuleBase::timer::tick("TD_pot_hybrid", "contributeHR");
+    ModuleBase::timer::start("TD_pot_hybrid", "contributeHR");
 
     if (!this->HR_fixed_done || TD_info::evolve_once)
     {
@@ -275,7 +279,7 @@ void hamilt::TD_pot_hybrid<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
         this->hR->add(*(this->HR_fixed));
     }
 
-    ModuleBase::timer::tick("TD_pot_hybrid", "contributeHR");
+    ModuleBase::timer::end("TD_pot_hybrid", "contributeHR");
     return;
 }
 

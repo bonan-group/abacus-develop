@@ -1,6 +1,7 @@
 #include "source_base/kernels/math_kernel_op.h"
 
 #include <base/macros/macros.h>
+#include "source_base/parallel_reduce.h"
 #include <thrust/complex.h>
 
 template <>
@@ -323,6 +324,22 @@ double dot_real_op<double, base_device::DEVICE_GPU>::operator()(const int& dim,
     }
     return result;
 }
+
+template <>
+float dot_real_op<float, base_device::DEVICE_GPU>::operator()(const int& dim,
+                                                                const float* psi_L,
+                                                                const float* psi_R,
+                                                                const bool reduce)
+{
+    float result = 0.0;
+    xdot_wrapper(dim, psi_L, 1, psi_R, 1, result);
+    if (reduce)
+    {
+        Parallel_Reduce::reduce_pool(result);
+    }
+    return result;
+}
+
 // for this implementation, please check
 // https://thrust.github.io/doc/group__transformed__reductions_ga321192d85c5f510e52300ae762c7e995.html denghui modify
 // 2022-10-03 Note that ddot_(2*dim,a,1,b,1) = REAL( zdotc_(dim,a,1,b,1) ) GPU specialization of actual computation.
@@ -388,4 +405,5 @@ template struct vector_add_vector_op<std::complex<double>, base_device::DEVICE_G
 template struct dot_real_op<std::complex<float>, base_device::DEVICE_GPU>;
 template struct dot_real_op<double, base_device::DEVICE_GPU>;
 template struct dot_real_op<std::complex<double>, base_device::DEVICE_GPU>;
+template struct dot_real_op<float, base_device::DEVICE_GPU>;
 } // namespace ModuleBase

@@ -35,7 +35,7 @@ template <typename TK, typename TR>
 void ESolver_KS_LCAO<TK, TR>::others(UnitCell& ucell, const int istep)
 {
     ModuleBase::TITLE("ESolver_KS_LCAO", "others");
-    ModuleBase::timer::tick("ESolver_KS_LCAO", "others");
+    ModuleBase::timer::start("ESolver_KS_LCAO", "others");
 
     const std::string cal_type = PARAM.inp.calculation;
 
@@ -172,7 +172,8 @@ void ESolver_KS_LCAO<TK, TR>::others(UnitCell& ucell, const int istep)
     elecstate::cal_ux(ucell);
 
     // pelec should be initialized before these calculations
-    this->pelec->init_scf(ucell, this->Pgrid, this->sf.strucFac, this->locpp.numeric, ucell.symm);
+    elecstate::init_scf(ucell, this->Pgrid, this->sf.strucFac, this->locpp.numeric, 
+		    istep, PARAM.globalv.global_out_dir, PARAM.inp, this->pelec);
 
     // self consistent calculations for electronic ground state
     if (cal_type == "get_pchg")
@@ -266,7 +267,7 @@ void ESolver_KS_LCAO<TK, TR>::others(UnitCell& ucell, const int istep)
         ModuleBase::WARNING_QUIT("ESolver_KS_LCAO::others", "CALCULATION type not supported");
     }
 
-    ModuleBase::timer::tick("ESolver_KS_LCAO", "others");
+    ModuleBase::timer::end("ESolver_KS_LCAO", "others");
     return;
 }
 

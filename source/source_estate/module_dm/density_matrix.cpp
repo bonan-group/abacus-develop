@@ -2,9 +2,10 @@
 
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/libm/libm.h"
-#include "source_base/memory.h"
+#include "source_base/memory_recorder.h"
 #include "source_base/timer.h"
 #include "source_base/tool_title.h"
+#include "source_base/tool_quit.h"
 #include "source_base/constants.h"
 #include "source_cell/klist.h"
 
@@ -66,7 +67,7 @@ void DensityMatrix_Tools::cal_DMR(
     // To check whether DMR has been initialized
     assert(dmR_out.size()==dm._nspin && "DMR has not been initialized!");
 
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR");
+    ModuleBase::timer::start("DensityMatrix", "cal_DMR");
     const int ld_hk = dm._paraV->nrow;
     for (int is = 1; is <= dm._nspin; ++is)
     {
@@ -191,7 +192,7 @@ void DensityMatrix_Tools::cal_DMR(
             }
         }
     }
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR");
+    ModuleBase::timer::end("DensityMatrix", "cal_DMR");
 }
 
 template <>
@@ -213,7 +214,7 @@ template <typename TK, typename TR_in, typename TR_out>
 void DensityMatrix_Tools::cal_DMR_td(
     const DensityMatrix<TK, TR_in> &dm,
     std::vector<hamilt::HContainer<TR_out>*> &dmR_out,
-    const UnitCell& ucell,
+    const std::map<ModuleBase::Vector3<int>, std::complex<double>>& phase_hybrid,
     const ModuleBase::Vector3<double> At,
     const int ik_in)
 {
@@ -221,7 +222,7 @@ void DensityMatrix_Tools::cal_DMR_td(
     // To check whether DMR has been initialized
     assert(dmR_out.size()==dm._nspin && "DMR has not been initialized!");
 
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR_td");
+    ModuleBase::timer::start("DensityMatrix", "cal_DMR_td");
     const int ld_hk = dm._paraV->nrow;
     for (int is = 1; is <= dm._nspin; ++is)
     {
@@ -261,19 +262,21 @@ void DensityMatrix_Tools::cal_DMR_td(
                 }
                 #endif
                 target_DMR_mat_vec[iR] = target_mat->get_pointer();
-                //cal tddft phase for hybrid gauge
-                const ModuleBase::Vector3<double> dtau = ucell.cal_dtau(iat1, iat2, R_index);
-                const double arg_td = At * dtau * ucell.lat0;
                 for(int ik = 0; ik < dm._nk; ++ik)
                 {
                     if(ik_in >= 0 && ik_in != ik) { continue; }
                     // cal k_phase
                     // if TK==std::complex<double>, kphase is e^{ikR}
                     const ModuleBase::Vector3<double> dR(R_index[0], R_index[1], R_index[2]);
-                    const double arg = (dm._kvec_d[ik] * dR) * ModuleBase::TWO_PI + arg_td;
+                    const double arg = (dm._kvec_d[ik] * dR) * ModuleBase::TWO_PI;
                     double sinp, cosp;
                     ModuleBase::libm::sincos(arg, &sinp, &cosp);
                     kphase_vec[ik][iR] = TK(cosp, sinp);
+                    if(PARAM.inp.td_stype==2)
+                    {
+                        //phase for hybrid gauge tddft
+                        kphase_vec[ik][iR] *= phase_hybrid.at(R_index);
+                    }
                 }
             }
 
@@ -349,19 +352,23 @@ void DensityMatrix_Tools::cal_DMR_td(
             }
         }
     }
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR_td");
+    ModuleBase::timer::end("DensityMatrix", "cal_DMR_td");
+}
+template <>
+void DensityMatrix<double, double>::cal_DMR_td(const std::map<ModuleBase::Vector3<int>, std::complex<double>>& phase_hybrid, const ModuleBase::Vector3<double> At, const int ik_in)
+{
+    return;
+}
+template <>
+void DensityMatrix<std::complex<double>, double>::cal_DMR_td(const std::map<ModuleBase::Vector3<int>, std::complex<double>>& phase_hybrid, const ModuleBase::Vector3<double> At, const int ik_in)
+{
+    DensityMatrix_Tools::cal_DMR_td(*this, this->_DMR, phase_hybrid, At, ik_in);
 }
 
 template <>
-void DensityMatrix<std::complex<double>, double>::cal_DMR_td(const UnitCell& ucell, const ModuleBase::Vector3<double> At, const int ik_in)
+void DensityMatrix<std::complex<double>, std::complex<double>>::cal_DMR_td(const std::map<ModuleBase::Vector3<int>, std::complex<double>>& phase_hybrid, const ModuleBase::Vector3<double> At, const int ik_in)
 {
-    DensityMatrix_Tools::cal_DMR_td(*this, this->_DMR, ucell, At, ik_in);
-}
-
-template <>
-void DensityMatrix<std::complex<double>, std::complex<double>>::cal_DMR_td(const UnitCell& ucell, const ModuleBase::Vector3<double> At, const int ik_in)
-{
-    DensityMatrix_Tools::cal_DMR_td(*this, this->_DMR, ucell, At, ik_in);
+    DensityMatrix_Tools::cal_DMR_td(*this, this->_DMR, phase_hybrid, At, ik_in);
 }
 
 
@@ -375,7 +382,7 @@ void DensityMatrix_Tools::cal_DMR_full(
 {
     ModuleBase::TITLE("DensityMatrix", "cal_DMR_full");
 
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR_full");
+    ModuleBase::timer::start("DensityMatrix", "cal_DMR_full");
     const int ld_hk = dm._paraV->nrow;
     hamilt::HContainer<TR_out>* target_DMR = dmR_out;
     // set zero since this function is called in every scf step
@@ -450,7 +457,7 @@ void DensityMatrix_Tools::cal_DMR_full(
             }
         }
     }
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR_full");
+    ModuleBase::timer::end("DensityMatrix", "cal_DMR_full");
 }
 
 template <>
@@ -481,7 +488,7 @@ void DensityMatrix<double, double>::cal_DMR(const int ik_in)
     // To check whether DMR has been initialized
     assert(this->_DMR.size()==this->_nspin && "DMR has not been initialized!");
 
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR");
+    ModuleBase::timer::start("DensityMatrix", "cal_DMR");
     const int ld_hk = this->_paraV->nrow;
     for (int is = 1; is <= this->_nspin; ++is)
     {
@@ -536,7 +543,7 @@ void DensityMatrix<double, double>::cal_DMR(const int ik_in)
             }
         }
     }
-    ModuleBase::timer::tick("DensityMatrix", "cal_DMR");
+    ModuleBase::timer::end("DensityMatrix", "cal_DMR");
 }
 
 
@@ -552,7 +559,7 @@ void DensityMatrix<TK, TR>::switch_dmr(const int mode)
     }
     else
     {
-        ModuleBase::timer::tick("DensityMatrix", "switch_dmr");
+        ModuleBase::timer::start("DensityMatrix", "switch_dmr");
         switch(mode)
         {
         case 0:
@@ -612,9 +619,9 @@ void DensityMatrix<TK, TR>::switch_dmr(const int mode)
             }
             break;
         default:
-            throw std::string("Unknown mode in switch_dmr");
+            ModuleBase::WARNING_QUIT("density_matrix.cpp", "Unknown mode in switch_dmr");
         }
-        ModuleBase::timer::tick("DensityMatrix", "switch_dmr");
+        ModuleBase::timer::end("DensityMatrix", "switch_dmr");
     }
 }
 

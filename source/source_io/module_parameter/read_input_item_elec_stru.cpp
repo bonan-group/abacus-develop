@@ -55,7 +55,7 @@ For plane-wave basis,
 * cg: The conjugate-gradient (CG) method.
 * bpcg: The BPCG method, which is a block-parallel Conjugate Gradient (CG) method, typically exhibits higher acceleration in a GPU environment.
 * dav: The Davidson algorithm.
-* dav_subspace: The Davidson algorithm without orthogonalization operation, this method is the most recommended for efficiency. pw_diag_ndim can be set to 2 for this method.
+* dav_subspace: The Davidson algorithm without orthogonalization operation, this method is the most recommended for efficiency. `pw_diag_ndim` can be set to 2 for this method.
 
 For numerical atomic orbitals basis,
 
@@ -64,14 +64,20 @@ For numerical atomic orbitals basis,
 * scalapack_gvx: Use Scalapack to diagonalize the Hamiltonian.
 * cusolver: Use CUSOLVER to diagonalize the Hamiltonian, at least one GPU is needed.
 * cusolvermp: Use CUSOLVER to diagonalize the Hamiltonian, supporting multi-GPU devices. Note that you should set the number of MPI processes equal to the number of GPUs.
-* elpa: The ELPA solver supports both CPU and GPU. By setting the device to GPU, you can launch the ELPA solver with GPU acceleration (provided that you have installed a GPU-supported version of ELPA, which requires you to manually compile and install ELPA, and the ABACUS should be compiled with -DUSE_ELPA=ON and -DUSE_CUDA=ON). The ELPA solver also supports multi-GPU acceleration.
+* elpa: The ELPA solver supports both CPU and GPU. By setting the `device` to GPU, you can launch the ELPA solver with GPU acceleration (provided that you have installed a GPU-supported version of ELPA, which requires you to manually compile and install ELPA, and the ABACUS should be compiled with -DUSE_ELPA=ON and -DUSE_CUDA=ON). The ELPA solver also supports multi-GPU acceleration.
 
-If you set ks_solver=genelpa for basis_type=pw, the program will stop with an error message:
+If you set ks_solver=`genelpa` for basis_type=`pw`, the program will stop with an error message:
 
 ``text genelpa can not be used with plane wave basis. ``
 
 Then the user has to correct the input file and restart the calculation.)";
-        item.default_value = "";
+        item.default_value = R"(
+    - PW basis: cg.
+    - LCAO basis:
+        - genelpa (if compiling option `USE_ELPA` has been set)
+        - lapack (if compiling option `ENABLE_MPI` has not been set)
+        - scalapack_gvx (if compiling option `USE_ELPA` has not been set and compiling option `ENABLE_MPI` has been set)
+        - cusolver (if compiling option `USE_CUDA` has been set))";
         item.unit = "";
         item.availability = "";
         read_sync_string(input.ks_solver);
@@ -350,7 +356,7 @@ The other way is only available when compiling with LIBXC, and it allows for sup
         Input_Item item("xc_exch_ext");
         item.annotation = "placeholder for xcpnet exchange functional";
         item.category = "Electronic structure";
-        item.type = "Integer Real ...";
+        item.type = "Integer followed by Real values";
         item.description = "Customized parameterization on the exchange part of XC functional. The first value should be the LibXC ID of the original functional, and latter values are external parameters. Default values are those of Perdew-Burke-Ernzerhof (PBE) functional. For more information on LibXC ID of functionals, please refer to LibXC. For parameters of functionals of interest, please refer to the source code of LibXC, such as PBE functional interface in LibXC: gga_x_pbe.c."
                           "\n\n[NOTE] Solely setting this keyword will take no effect on XC functionals. One should also set "
                           "dft_functional to the corresponding functional to apply the customized parameterization. "
@@ -393,7 +399,7 @@ The other way is only available when compiling with LIBXC, and it allows for sup
         Input_Item item("xc_corr_ext");
         item.annotation = "placeholder for xcpnet exchange functional";
         item.category = "Electronic structure";
-        item.type = "Integer Real ...";
+        item.type = "Integer followed by Real values";
         item.description = "Customized parameterization on the correlation part of XC functional. The first value should be the LibXC ID of the original functional, and latter values are external parameters. Default values are those of Perdew-Burke-Ernzerhof (PBE) functional. For more information on LibXC ID of functionals, please refer to LibXC. For parameters of functionals of interest, please refer to the source code of LibXC, such as PBE functional interface in LibXC: gga_c_pbe.c."
                           "\n\n[NOTE] Solely setting this keyword will take no effect on XC functionals. One should also set "
                           "dft_functional to the corresponding functional to apply the customized parameterization. "
@@ -675,7 +681,7 @@ For systems that are difficult to converge, one could try increasing the value o
         item.description = "At n-th iteration which is calculated by drho<mixing_restart, SCF will start a mixing for real-space density matrix by using the same coefficiences as the mixing of charge density.";
         item.default_value = "false";
         item.unit = "";
-        item.availability = "Only for mixing_restart>=0.0";
+        item.availability = "Only for mixing_restart >= 0.0";
         read_sync_bool(input.mixing_dmr);
         this->add_item(item);
     }
@@ -825,7 +831,7 @@ Note: If gamma_only is set to 1, the KPT file will be overwritten. So make sure 
         item.annotation = "charge density error";
         item.category = "Electronic structure";
         item.type = "Real";
-        item.description = "It's the density threshold for electronic iteration. It represents the charge density error between two sequential densities from electronic iterations. Usually for local orbitals, usually 1e-6 may be accurate enough.";
+        item.description = "It's the density threshold for electronic iteration. It represents the charge density error between two sequential densities from electronic iterations. This criterion is always enabled. If scf_ene_thr is set, the total-energy criterion (scf_ene_thr) is additionally checked only after the first SCF iteration and only when the charge-density criterion (scf_thr) has already been satisfied. For local-orbital calculations, 1e-6 is usually accurate enough.";
         item.default_value = "1.0e-9 (plane-wave basis), or 1.0e-7 (localized atomic orbital basis).";
         item.unit = "Ry if scf_thr_type=1, dimensionless if scf_thr_type=2";
         item.availability = "";
@@ -859,7 +865,7 @@ Note: If gamma_only is set to 1, the KPT file will be overwritten. So make sure 
         item.annotation = "total energy error threshold";
         item.category = "Electronic structure";
         item.type = "Real";
-        item.description = "It's the energy threshold for electronic iteration. It represents the total energy error between two sequential densities from electronic iterations.";
+        item.description = "It's the energy threshold for electronic iteration. The compared quantity is the total-energy difference evaluated from the charge densities before and after the Hpsi operation in one SCF step. It is not the same as the screen-output EDIFF, which is the energy difference before Hpsi and after charge mixing (i.e., across both Hpsi and charge-mixing operations).";
         item.default_value = "-1.0. If the user does not set this parameter, it will not take effect.";
         item.unit = "eV";
         item.availability = "";
@@ -1094,9 +1100,9 @@ Use case: When experimental or high-level theoretical results suggest that the S
         item.category = "Plane wave related variables";
         item.type = "Integer";
         item.description = "Only useful when you use ks_solver = cg/dav/dav_subspace/bpcg. It indicates the maximal iteration number for cg/david/dav_subspace/bpcg method.";
-        item.default_value = "40";
+        item.default_value = "50";
         item.unit = "";
-        item.availability = "";
+        item.availability = "basis_type==pw, ks_solver==cg/dav/dav_subspace/bpcg";
         read_sync_int(input.pw_diag_nmax);
         this->add_item(item);
     }
@@ -1350,7 +1356,7 @@ Use case: When experimental or high-level theoretical results suggest that the S
         Input_Item item("bessel_nao_rcut");
         item.annotation = "radial cutoff for spherical bessel functions(a.u.)";
         item.category = "NAOs";
-        item.type = "Real";
+        item.type = "Vector of Real (N values)";
         item.description = "Cutoff radius (in Bohr) and the common node of spherical Bessel functions used to construct the NAOs.";
         item.default_value = "6.0";
         item.unit = "";

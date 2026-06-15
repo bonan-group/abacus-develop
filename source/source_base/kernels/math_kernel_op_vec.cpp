@@ -1,5 +1,6 @@
 #include "source_base/kernels/math_kernel_op.h"
 #include "source_base/module_external/blas_connector.h"
+#include "source_base/parallel_reduce.h"
 
 
 namespace ModuleBase
@@ -196,4 +197,5 @@ template struct vector_add_vector_op<std::complex<double>, base_device::DEVICE_C
 template struct dot_real_op<std::complex<float>, base_device::DEVICE_CPU>;
 template struct dot_real_op<std::complex<double>, base_device::DEVICE_CPU>;
 template struct dot_real_op<double, base_device::DEVICE_CPU>;
+template struct dot_real_op<float, base_device::DEVICE_CPU>;
 } // namespace ModuleBase

@@ -28,10 +28,10 @@ void ReadInput::item_others()
         item.check_value = [](const Input_Item& item, const Parameter& para) {
             if (para.input.sc_mag_switch)
             {
-                ModuleBase::WARNING_QUIT("ReadInput",
-                                         "This feature is not stable yet and might lead to "
-                                         "erroneous results.\n"
-                                         " Please wait for the official release version.");
+//                ModuleBase::WARNING_QUIT("ReadInput",
+//                                         "This feature is not stable yet and might lead to "
+//                                         "erroneous results.\n"
+//                                         " Please wait for the official release version.");
                 // if (para.input.nspin != 4 && para.input.nspin != 2)
                 // {
                 //     ModuleBase::WARNING_QUIT("ReadInput", "nspin must be 2 or
@@ -236,7 +236,7 @@ void ReadInput::item_others()
         Input_Item item("qo_strategy");
         item.annotation = "strategy to generate generate radial orbitals";
         item.category = "Quasiatomic Orbital (QO) analysis";
-        item.type = "String";
+        item.type = "Vector of String (1 or n values where n is the number of atomic types)";
         item.description = "Strategy to generate radial orbitals for QO analysis. For hydrogen: energy-valence, for pswfc and szv: all";
         item.default_value = "for hydrogen: energy-valence, for pswfc and szv: all";
         item.unit = "";
@@ -284,7 +284,7 @@ void ReadInput::item_others()
         Input_Item item("qo_screening_coeff");
         item.annotation = "rescale the shape of radial orbitals";
         item.category = "Quasiatomic Orbital (QO) analysis";
-        item.type = "Real";
+        item.type = "Vector of Real (n values where n is the number of atomic types; 1 value allowed for qo_basis=pswfc)";
         item.description = "The screening coefficient for each atom type to rescale the shape of radial orbitals";
         item.default_value = "0.1";
         item.unit = "Bohr^-1";
@@ -894,6 +894,98 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
+        Input_Item item("exx_batch_fft_size");
+        item.annotation = "batch size for GPU batched EXX FFT; values <= 1 disable batching";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Integer";
+        item.description = "Batch size used by GPU batched FFTs in the plane-wave EXX operator. Set to 1 to use the sequential EXX FFT path.";
+        item.default_value = "8";
+        item.unit = "";
+        item.availability = "device==gpu";
+        read_sync_int(input.exx_batch_fft_size);
+        item.check_value = [](const Input_Item& item, const Parameter& param) {
+            if (param.input.exx_batch_fft_size < 1 || param.input.exx_batch_fft_size > 128)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_batch_fft_size must be in range [1, 128]");
+            }
+        };
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_debug_allow_legacy_gpu_paths");
+        item.annotation = "debug-only switch to allow legacy scalar GPU PW EXX paths";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Boolean";
+        item.description = "Allow legacy scalar GPU PW EXX paths that are otherwise disabled while the batched/q-tile implementations are being validated. This is intended for debugging only.";
+        item.default_value = "False";
+        item.unit = "";
+        item.availability = "device==gpu";
+        read_sync_bool(input.exx_debug_allow_legacy_gpu_paths);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_full_q_cache");
+        item.annotation = "whether to cache explicit full-q PW EXX wavefunctions";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Boolean";
+        item.description = "Whether to materialize an explicit full-q reciprocal-space wavefunction cache for PW EXX when symmetry-reduced k-points are used. Set to false to use the lower-memory remap-on-demand path.";
+        item.default_value = "True";
+        item.unit = "";
+        item.availability = "";
+        read_sync_bool(input.exx_full_q_cache);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_band_tile_size");
+        item.annotation = "band tile size for tiled PW EXX real-space reuse";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Integer";
+        item.description
+            = "The target/source band tile size used by PW EXX to cache real-space wavefunctions and reduce repeated FFTs.";
+        item.default_value = "8";
+        item.unit = "";
+        item.availability = "";
+        read_sync_int(input.exx_band_tile_size);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.exx_band_tile_size <= 0)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_band_tile_size must > 0");
+            }
+        };
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_use_q_tile");
+        item.annotation = "whether to use the opt-in MPI q-tile path in PW EXX";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Boolean";
+        item.description = "Whether to use the opt-in q-tile path for PW EXX q-state fetching and KPAR communication.";
+        item.default_value = "False";
+        item.unit = "";
+        item.availability = "";
+        read_sync_bool(input.exx_use_q_tile);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_q_tile_size");
+        item.annotation = "q-point tile size for tiled PW EXX q-state fetching";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Integer";
+        item.description
+            = "The q-point tile size used by the opt-in PW EXX q-tile path to fetch and reuse q-state wavefunctions.";
+        item.default_value = "1";
+        item.unit = "";
+        item.availability = "exx_use_q_tile==True.";
+        read_sync_int(input.exx_q_tile_size);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.exx_q_tile_size <= 0)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_q_tile_size must > 0");
+            }
+        };
+        this->add_item(item);
+    }
+    {
         Input_Item item("ecutexx");
         item.annotation = "energy cutoff for exx calculation, Ry";
         item.category = "Exact Exchange (PW)";
@@ -911,7 +1003,6 @@ void ReadInput::item_others()
         };
         this->add_item(item);
     }
-
     {
         Input_Item item("exx_thr_type");
         item.annotation = "threshold type for exx outer loop, energy or density";
