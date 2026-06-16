@@ -2,7 +2,6 @@
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
 #include "source_hamilt/module_xc/xc_functional.h"
-#include "source_base/module_device/nvtx_helper.h"
 #include "source_base/module_device/types.h"
 
 void Charge_Mixing::mix_rho_recip(Charge* chr)
@@ -30,8 +29,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
         }
 
         // Restore timer context for GPU path
-        ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip");
-        NVTX_RANGE_POP();
+        ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip");
 
         mix_rho_recip_gpu(chr);
         return;

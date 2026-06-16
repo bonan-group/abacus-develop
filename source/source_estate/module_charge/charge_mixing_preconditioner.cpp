@@ -72,7 +72,7 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
                 base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(drhog, drhog_d, total_size);
             base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(drhog_d);
 
-            ModuleBase::timer::tick("Charge_Mixing", "Kerker_screen_recip");
+            ModuleBase::timer::end("Charge_Mixing", "Kerker_screen_recip");
             return;
         }
     }

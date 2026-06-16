@@ -200,7 +200,7 @@ void vector_subtract_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
 {
     const int block = (length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     vector_subtract_kernel<<<block, THREADS_PER_BLOCK>>>(out, a, b, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Vector AXPY
@@ -215,7 +215,7 @@ void vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
 {
     const int block = (length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     vector_axpy_kernel<<<block, THREADS_PER_BLOCK>>>(y, x, alpha, z, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Vector scale
@@ -228,7 +228,7 @@ void vector_scale_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
 {
     const int block = (length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     vector_scale_kernel<<<block, THREADS_PER_BLOCK>>>(x, factor, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Vector accumulate subtraction
@@ -241,7 +241,7 @@ void vector_acc_subtract_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
 {
     const int block = (length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     vector_acc_subtract_kernel<<<block, THREADS_PER_BLOCK>>>(out, in, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Vector copy
@@ -253,7 +253,7 @@ void vector_copy_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
     const int length)
 {
     cudaMemcpy(out, in, length * sizeof(FPTYPE), cudaMemcpyDeviceToDevice);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Inner product for real double
@@ -269,7 +269,7 @@ double inner_product_op<double, base_device::DEVICE_GPU>::operator()(
 
     // Launch kernel for partial sums
     inner_product_real_kernel<<<num_blocks, THREADS_PER_BLOCK>>>(a, b, workspace, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 
     // Final reduction using thrust
     thrust::device_ptr<double> dev_ptr(workspace);
@@ -289,7 +289,7 @@ float inner_product_op<float, base_device::DEVICE_GPU>::operator()(
 
     // Launch kernel for partial sums
     inner_product_real_kernel<<<num_blocks, THREADS_PER_BLOCK>>>(a, b, workspace, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 
     // Final reduction using thrust
     thrust::device_ptr<float> dev_ptr(workspace);
@@ -316,7 +316,7 @@ std::complex<double> inner_product_op<std::complex<double>, base_device::DEVICE_
         reinterpret_cast<const thrust::complex<double>*>(a),
         reinterpret_cast<const thrust::complex<double>*>(b),
         partial_real, partial_imag, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 
     // Final reduction using thrust
     thrust::device_ptr<double> dev_real(partial_real);
@@ -347,7 +347,7 @@ std::complex<float> inner_product_op<std::complex<float>, base_device::DEVICE_GP
         reinterpret_cast<const thrust::complex<float>*>(a),
         reinterpret_cast<const thrust::complex<float>*>(b),
         partial_real, partial_imag, length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 
     // Final reduction using thrust
     thrust::device_ptr<float> dev_real(partial_real);
@@ -377,7 +377,7 @@ void gemv_op<double, base_device::DEVICE_GPU>::operator()(
     cublasOperation_t cu_trans = (trans == 'N' || trans == 'n') ? CUBLAS_OP_N : CUBLAS_OP_T;
     cublasHandle_t& handle = get_cublas_handle();
     cublasDgemv(handle, cu_trans, m, n, &alpha, A, lda, x, incx, &beta, y, incy);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // GEMV for float
@@ -399,7 +399,7 @@ void gemv_op<float, base_device::DEVICE_GPU>::operator()(
     cublasOperation_t cu_trans = (trans == 'N' || trans == 'n') ? CUBLAS_OP_N : CUBLAS_OP_T;
     cublasHandle_t& handle = get_cublas_handle();
     cublasSgemv(handle, cu_trans, m, n, &alpha, A, lda, x, incx, &beta, y, incy);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // GEMV for complex double
@@ -431,7 +431,7 @@ void gemv_op<std::complex<double>, base_device::DEVICE_GPU>::operator()(
                 reinterpret_cast<const cuDoubleComplex*>(A), lda,
                 reinterpret_cast<const cuDoubleComplex*>(x), incx,
                 &cu_beta, reinterpret_cast<cuDoubleComplex*>(y), incy);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // GEMV for complex float
@@ -463,7 +463,7 @@ void gemv_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(
                 reinterpret_cast<const cuFloatComplex*>(A), lda,
                 reinterpret_cast<const cuFloatComplex*>(x), incx,
                 &cu_beta, reinterpret_cast<cuFloatComplex*>(y), incy);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 //==========================================================
@@ -485,7 +485,7 @@ void vector_subtract_op<std::complex<double>, base_device::DEVICE_GPU>::operator
         reinterpret_cast<const thrust::complex<double>*>(a),
         reinterpret_cast<const thrust::complex<double>*>(b),
         length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -502,7 +502,7 @@ void vector_subtract_op<std::complex<float>, base_device::DEVICE_GPU>::operator(
         reinterpret_cast<const thrust::complex<float>*>(a),
         reinterpret_cast<const thrust::complex<float>*>(b),
         length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -523,7 +523,7 @@ void vector_axpy_op<std::complex<double>, base_device::DEVICE_GPU>::operator()(
         thrust_alpha,
         reinterpret_cast<const thrust::complex<double>*>(z),
         length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -544,7 +544,7 @@ void vector_axpy_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(
         thrust_alpha,
         reinterpret_cast<const thrust::complex<float>*>(z),
         length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -557,7 +557,7 @@ void vector_scale_op<std::complex<double>, base_device::DEVICE_GPU>::operator()(
     cuDoubleComplex cu_factor = make_cuDoubleComplex(factor.real(), factor.imag());
     cublasHandle_t& handle = get_cublas_handle();
     cublasZscal(handle, length, &cu_factor, reinterpret_cast<cuDoubleComplex*>(x), 1);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -570,7 +570,7 @@ void vector_scale_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(
     cuFloatComplex cu_factor = make_cuFloatComplex(factor.real(), factor.imag());
     cublasHandle_t& handle = get_cublas_handle();
     cublasCscal(handle, length, &cu_factor, reinterpret_cast<cuFloatComplex*>(x), 1);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -585,7 +585,7 @@ void vector_acc_subtract_op<std::complex<double>, base_device::DEVICE_GPU>::oper
         reinterpret_cast<thrust::complex<double>*>(out),
         reinterpret_cast<const thrust::complex<double>*>(in),
         length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -600,7 +600,7 @@ void vector_acc_subtract_op<std::complex<float>, base_device::DEVICE_GPU>::opera
         reinterpret_cast<thrust::complex<float>*>(out),
         reinterpret_cast<const thrust::complex<float>*>(in),
         length);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -611,7 +611,7 @@ void vector_copy_op<std::complex<double>, base_device::DEVICE_GPU>::operator()(
     const int length)
 {
     cudaMemcpy(out, in, length * sizeof(std::complex<double>), cudaMemcpyDeviceToDevice);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 template <>
@@ -622,7 +622,7 @@ void vector_copy_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(
     const int length)
 {
     cudaMemcpy(out, in, length * sizeof(std::complex<float>), cudaMemcpyDeviceToDevice);
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Explicit template instantiations for real types

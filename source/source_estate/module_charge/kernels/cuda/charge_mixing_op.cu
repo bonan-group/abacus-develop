@@ -90,7 +90,7 @@ void kerker_screen_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
         reinterpret_cast<thrust::complex<FPTYPE>*>(drhog),
         gg, gg0, gg0_min, npw, nspin);
 
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 }
 
 // Inner product operator implementation
@@ -113,7 +113,7 @@ FPTYPE inner_product_recip_hartree_op<FPTYPE, base_device::DEVICE_GPU>::operator
         reinterpret_cast<const thrust::complex<FPTYPE>*>(rhog2),
         gg, workspace, npw, ig_gge0, tpiba2);
 
-    cudaCheckOnDebug();
+    CHECK_CUDA_SYNC();
 
     // Final reduction using thrust
     thrust::device_ptr<FPTYPE> dev_ptr(workspace);

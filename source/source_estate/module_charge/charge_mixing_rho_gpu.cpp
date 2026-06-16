@@ -4,7 +4,6 @@
 
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
-#include "source_base/module_device/nvtx_helper.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_base/parallel_reduce.h"
 #include "kernels/charge_mixing_op.h"
@@ -109,8 +108,7 @@ double Charge_Mixing::inner_product_recip_hartree_gpu(
 void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
 {
     ModuleBase::TITLE("Charge_Mixing", "mix_rho_recip_gpu");
-    ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip_gpu");
-    NVTX_RANGE_PUSH("mix_rho_recip_gpu");
+    ModuleBase::timer::start("Charge_Mixing", "mix_rho_recip_gpu");
 
     const int nspin = PARAM.inp.nspin;
 
@@ -119,8 +117,7 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
     if (nspin != 1 || (mixing_mode != "broyden" && mixing_mode != "pulay"))
     {
         // Fall back to CPU mixing
-        ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip_gpu");
-        NVTX_RANGE_POP();
+        ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip_gpu");
         mix_rho_recip(chr);
         return;
     }
@@ -193,8 +190,7 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
     chr->sync_rho_to_host<base_device::DEVICE_GPU>();
     chr->sync_rhog_to_host<base_device::DEVICE_GPU>();
 
-    ModuleBase::timer::tick("Charge_Mixing", "mix_rho_recip_gpu");
-    NVTX_RANGE_POP();
+    ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip_gpu");
 }
 
 #endif // __CUDA || __ROCM

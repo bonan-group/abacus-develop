@@ -65,7 +65,7 @@ void ElecStatePW<T, Device>::init_rho_data()
     }
 
     // Set device mode on Charge object (hybrid pattern like PW_Basis)
-    if constexpr (std::is_same<Device, base_device::DEVICE_GPU>::value)
+    if (std::is_same<Device, base_device::DEVICE_GPU>::value)
     {
         this->charge->set_device("gpu");
         this->charge->set_precision(PARAM.inp.precision);
@@ -157,7 +157,7 @@ void ElecStatePW<T, Device>::psiToRho(const psi::Psi<T, Device>& psi)
             }
         }
         // Sync rho from host to Charge's device memory for use by other modules (e.g., Charge_Mixing)
-        if constexpr (std::is_same<Device, base_device::DEVICE_GPU>::value)
+        if (std::is_same<Device, base_device::DEVICE_GPU>::value)
         {
             this->charge->sync_rho_to_device<Device>();
             if (XC_Functional::get_func_type() == 3)
