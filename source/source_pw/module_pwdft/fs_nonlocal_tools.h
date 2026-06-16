@@ -191,6 +191,7 @@ class FS_Nonlocal_tools
     /// --------------------- Key variable ---------------------
     /// borrow the memory from the vkb in VNL_in_pw to calculate vkb and dvkb
     std::complex<FPTYPE>* ppcell_vkb = nullptr;
+    bool owns_ppcell_vkb = false;
     /// ---------------------------------------------------------
     /// the following variables are used for the calculation
     /// allocate memory on CPU device only

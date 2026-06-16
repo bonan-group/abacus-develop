@@ -106,6 +106,13 @@ void FS_Nonlocal_tools<FPTYPE, Device>::allocate_memory(const ModuleBase::matrix
         resmem_complex_op()(d_pref_in, max_nh);
 
         this->ppcell_vkb = this->nlpp_->template get_vkb_data<FPTYPE>();
+        if (this->ppcell_vkb == nullptr && this->nkb > 0)
+        {
+            resmem_complex_op()(this->ppcell_vkb,
+                                static_cast<std::size_t>(this->nkb) * this->max_npw,
+                                "FS_Nonlocal_tools::vkb");
+            this->owns_ppcell_vkb = true;
+        }
     }
     else
     {
@@ -143,6 +150,12 @@ void FS_Nonlocal_tools<FPTYPE, Device>::delete_memory()
         delmem_var_op()(d_vq_tab);
         delmem_complex_op()(this->d_pref_in);
         delmem_int_op()(d_dvkb_indexes);
+        if (this->owns_ppcell_vkb)
+        {
+            delmem_complex_op()(this->ppcell_vkb);
+            this->ppcell_vkb = nullptr;
+            this->owns_ppcell_vkb = false;
+        }
     }
 
     if (becp != nullptr)
