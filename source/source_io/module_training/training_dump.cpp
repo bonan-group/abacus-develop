@@ -9,7 +9,7 @@
 #include "source_base/timer.h"
 #include "source_estate/module_charge/charge.h"
 #include "source_hamilt/module_xc/xc_functional.h"
-#include "source_hamilt/module_xc/xc_functional_libxc.h"
+#include "source_hamilt/module_xc/libxc_abacus.h"
 #include "source_io/module_parameter/parameter.h"
 
 #include <algorithm>
@@ -322,7 +322,7 @@ void write_training_dump(const UnitCell& ucell,
                          const std::string& output_root)
 {
     ModuleBase::TITLE("ModuleIO", "write_training_dump");
-    ModuleBase::timer::tick("ModuleIO", "write_training_dump");
+    ModuleBase::timer::start("ModuleIO", "write_training_dump");
 
     if (PARAM.inp.basis_type != "pw")
     {
@@ -424,7 +424,7 @@ void write_training_dump(const UnitCell& ucell,
 #ifdef __MPI
     if (GlobalV::MY_RANK != 0)
     {
-        ModuleBase::timer::tick("ModuleIO", "write_training_dump");
+        ModuleBase::timer::end("ModuleIO", "write_training_dump");
         return;
     }
 #endif
@@ -581,7 +581,7 @@ void write_training_dump(const UnitCell& ucell,
     js << "}\n";
 
     GlobalV::ofs_running << "write_training_dump: wrote " << dump_dir << std::endl;
-    ModuleBase::timer::tick("ModuleIO", "write_training_dump");
+    ModuleBase::timer::end("ModuleIO", "write_training_dump");
 }
 
 } // namespace ModuleIO

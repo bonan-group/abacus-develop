@@ -52,6 +52,7 @@ Sep_Cell::Sep_Cell() noexcept {}
 Sep_Cell::~Sep_Cell() noexcept {}
 int XC_Functional::func_type = 0;
 bool XC_Functional::ked_flag = false;
+bool XC_Functional::forced_ked_flag = false;
 
 Symmetry_rho::Symmetry_rho()
 {

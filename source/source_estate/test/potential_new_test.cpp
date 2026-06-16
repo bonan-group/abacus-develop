@@ -50,6 +50,7 @@ surchem::~surchem()
 }
 int XC_Functional::func_type = 1;
 bool XC_Functional::ked_flag = false;
+bool XC_Functional::forced_ked_flag = false;
 namespace elecstate
 {
 

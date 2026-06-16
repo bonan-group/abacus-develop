@@ -44,6 +44,7 @@ Sep_Cell::~Sep_Cell() noexcept {}
 
 int XC_Functional::func_type = 0;
 bool XC_Functional::ked_flag = false;
+bool XC_Functional::forced_ked_flag = false;
 
 /***************************************************************
  *  unit test of functions in elecstate_print.cpp

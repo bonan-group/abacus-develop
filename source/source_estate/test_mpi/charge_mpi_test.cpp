@@ -8,6 +8,7 @@
 #include "source_io/module_parameter/parameter.h"
 
 bool XC_Functional::ked_flag = false;
+bool XC_Functional::forced_ked_flag = false;
 Charge::Charge()
 {
 }

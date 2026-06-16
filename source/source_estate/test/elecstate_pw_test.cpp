@@ -15,6 +15,8 @@
 #include "source_io/module_parameter/parameter.h"
 // mock functions for testing
 int XC_Functional::func_type = 1;
+bool XC_Functional::ked_flag = false;
+bool XC_Functional::forced_ked_flag = false;
 namespace elecstate
 {
 void Potential::init_pot(Charge const*)

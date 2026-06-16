@@ -33,18 +33,12 @@ Atom::Atom()
 Atom::~Atom()
 {
 }
-InfoNonlocal::InfoNonlocal()
-{
-}
-InfoNonlocal::~InfoNonlocal()
-{
-}
-LCAO_Orbitals::LCAO_Orbitals()
-{
-}
-LCAO_Orbitals::~LCAO_Orbitals()
-{
-}
+#ifdef __LCAO
+InfoNonlocal::InfoNonlocal() {}
+InfoNonlocal::~InfoNonlocal() {}
+LCAO_Orbitals::LCAO_Orbitals() {}
+LCAO_Orbitals::~LCAO_Orbitals() {}
+#endif
 Magnetism::Magnetism()
 {
 }

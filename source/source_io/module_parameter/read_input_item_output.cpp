@@ -313,10 +313,6 @@ In molecular dynamics calculations, the output frequency is controlled by out_fr
                 {
                     ModuleBase::WARNING_QUIT("ReadInput", "out_training_data currently requires bndpar = 1");
                 }
-                if (para.input.symmetry != "-1")
-                {
-                    ModuleBase::WARNING_QUIT("ReadInput", "out_training_data EXX labeling currently requires symmetry = -1");
-                }
             }
         };
         this->add_item(item);

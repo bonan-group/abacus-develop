@@ -274,8 +274,6 @@ struct Input_para
     int seed_sto = 0;          ///< random seed for sDFT
     double initsto_ecut = 0.0; ///< maximum ecut to init stochastic bands
     int initsto_freq = 0;      ///< frequency to init stochastic orbitals when running md
-    bool ml_exx = false;       ///< use ML EXX or not
-
     // ==============   #Parameters (8.DeepKS) ===========================
     //==========================================================
     // DeepKS -- added by caoyu and mohan

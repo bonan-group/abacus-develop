@@ -24,9 +24,11 @@ void output::printrm(std::ofstream& ofs, const std::string& description, const M
     // Mock implementation
 }
 
+#ifdef __LCAO
 // Mock InfoNonlocal class
 InfoNonlocal::InfoNonlocal() {}
 InfoNonlocal::~InfoNonlocal() {}
+#endif
 
 // Mock Magnetism class
 Magnetism::Magnetism() {}

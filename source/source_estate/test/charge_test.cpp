@@ -31,6 +31,7 @@ Magnetism::~Magnetism()
 // mock functions for Charge
 int XC_Functional::func_type = 1;
 bool XC_Functional::ked_flag = false;
+bool XC_Functional::forced_ked_flag = false;
 namespace elecstate
 {
 double tmp_ucell_omega = 500.0;
@@ -220,4 +221,3 @@ TEST_F(ChargeTest, InitFinalScf)
     charge->init_final_scf();
     EXPECT_TRUE(charge->allocate_rho_final_scf);
 }
-

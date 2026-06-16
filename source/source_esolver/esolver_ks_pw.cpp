@@ -373,21 +373,21 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
     if (write_training_data)
     {
         ModuleBase::TITLE("ESolver_KS_PW", "training_pbe0_exx_label");
-        ModuleBase::timer::tick("ESolver_KS_PW", "training_pbe0_exx_label");
+        ModuleBase::timer::start("ESolver_KS_PW", "training_pbe0_exx_label");
         this->pelec->f_en.exx = evaluate_training_pbe0_exx_energy<T, Device>(ucell,
                                                                               this->kv.isk.data(),
                                                                               this->pw_wfc,
                                                                               this->pw_rhod,
                                                                               &this->kv,
                                                                               &this->pelec->wg,
-                                                                              this->stp.psi_t);
+                                                                              this->stp.template get_psi_t<T, Device>());
         GlobalV::ofs_running << "training_pbe0_exx_label: hybrid-scaled EXX energy = "
-                             << this->pelec->f_en.exx << " Ry" << std::endl;
-        ModuleBase::timer::tick("ESolver_KS_PW", "training_pbe0_exx_label");
+                             << 0.5 * this->pelec->f_en.exx << " Ha" << std::endl;
+        ModuleBase::timer::end("ESolver_KS_PW", "training_pbe0_exx_label");
     }
 
     // Call 'after_scf' of ESolver_KS
-    ESolver_KS<T, Device>::after_scf(ucell, istep, conv_esolver);
+    ESolver_KS::after_scf(ucell, istep, conv_esolver);
     if (write_training_data)
     {
         this->pelec->f_en.exx = saved_exx_energy;
