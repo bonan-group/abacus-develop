@@ -85,15 +85,10 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     double omega = ucell.omega;
     double tpiba = ucell.tpiba;
     double tpiba2 = ucell.tpiba2;
-    double omega_inv = 1.0 / omega;
 
     // allocate space
-    T* psi_nk_real = nullptr;
-    T* psi_mq_real = nullptr;
     T* density_real = nullptr;
     T* density_recip = nullptr;
-    Real* pot = nullptr; // This factor is 2x of the potential in 10.1103/PhysRevB.73.125120
-    Real* pot_stress = nullptr;
     Real* pot_tile = nullptr;
     Real* pot_stress_tile = nullptr;
     Real* sigma_exx_device = nullptr;
@@ -106,12 +101,10 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     std::vector<int> exx_to_wfc_offsets;
     int* exx_to_wfc_map_device = nullptr;
     hamilt::ExxWaveRedistributorCpu<T> exx_wave_redistributor;
-    constexpr bool use_q_tile = true;
 #if defined(__ROCM) && !defined(__CUDA)
     ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
                              "GPU q-tile PW EXX stress path is not implemented for ROCm yet");
 #endif
-    const bool use_gpu_q_tile = use_q_tile && !std::is_same<Device, base_device::DEVICE_CPU>::value;
     {
         double ecut_exx = PARAM.inp.ecutexx;
         if (ecut_exx == 0.0)
@@ -190,31 +183,21 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
         }
     }
 
-    resmem_complex_op()(psi_nk_real, wfcpw_exx->nrxx);
-    resmem_complex_op()(psi_mq_real, wfcpw_exx->nrxx);
     resmem_complex_op()(psi_exx_recip, wfcpw_exx->npwk_max);
     resmem_complex_op()(density_real, rhopw_exx->nrxx);
     resmem_complex_op()(density_recip, rhopw_exx->npw);
-    resmem_real_op()(pot, rhopw_exx->npw);
-    resmem_real_op()(pot_stress, rhopw_exx->npw);
     resmem_real_op()(sigma_exx_device, 6);
 
-    if (use_q_tile)
+    std::vector<Real> gcar_host(static_cast<std::size_t>(rhopw_exx->npw) * 3);
+    for (int ig = 0; ig < rhopw_exx->npw; ++ig)
     {
-        std::vector<Real> gcar_host(static_cast<std::size_t>(rhopw_exx->npw) * 3);
-        for (int ig = 0; ig < rhopw_exx->npw; ++ig)
-        {
-            gcar_host[ig * 3] = static_cast<Real>(rhopw_exx->gcar[ig].x);
-            gcar_host[ig * 3 + 1] = static_cast<Real>(rhopw_exx->gcar[ig].y);
-            gcar_host[ig * 3 + 2] = static_cast<Real>(rhopw_exx->gcar[ig].z);
-        }
-        resmem_real_op()(gcar_flat, gcar_host.size());
-        syncmem_real_h2d_op()(gcar_flat, gcar_host.data(), gcar_host.size());
-        base_device::memory::set_memory_op<Real, Device>()(sigma_exx_device, 0, 6);
+        gcar_host[ig * 3] = static_cast<Real>(rhopw_exx->gcar[ig].x);
+        gcar_host[ig * 3 + 1] = static_cast<Real>(rhopw_exx->gcar[ig].y);
+        gcar_host[ig * 3 + 2] = static_cast<Real>(rhopw_exx->gcar[ig].z);
     }
-
-    // hamilt::get_exx_potential<Real, Device>(p_kv, wfcpw, rhopw, pot, tpiba, gamma_extrapolation, omega);
-    // hamilt::get_exx_stress_potential<Real, Device>(p_kv, wfcpw, rhopw, pot_stress, tpiba, gamma_extrapolation, omega);
+    resmem_real_op()(gcar_flat, gcar_host.size());
+    syncmem_real_h2d_op()(gcar_flat, gcar_host.data(), gcar_host.size());
+    base_device::memory::set_memory_op<Real, Device>()(sigma_exx_device, 0, 6);
 
     auto wave_recip_to_exx_recip = [&](const T* psi_recip, int ik_local) -> const T* {
         if (std::is_same<Device, base_device::DEVICE_CPU>::value && wfcpw->poolnproc > 1)
@@ -381,19 +364,16 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     T* q_real_tile = nullptr;
     std::vector<Real> target_weights;
     std::vector<Real> q_weights;
-    if (use_q_tile)
-    {
-        resmem_complex_op()(target_real_tile,
-                            static_cast<std::size_t>(target_tile_size) * static_cast<std::size_t>(wfcpw_exx->nrxx));
-        resmem_complex_op()(q_real_tile,
-                            static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size)
-                                * static_cast<std::size_t>(wfcpw_exx->nrxx));
-        resmem_real_op()(pot_tile, static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(rhopw_exx->npw));
-        resmem_real_op()(pot_stress_tile,
-                         static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(rhopw_exx->npw));
-        target_weights.resize(static_cast<std::size_t>(target_tile_size), 0);
-        q_weights.resize(static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size), 0);
-    }
+    resmem_complex_op()(target_real_tile,
+                        static_cast<std::size_t>(target_tile_size) * static_cast<std::size_t>(wfcpw_exx->nrxx));
+    resmem_complex_op()(q_real_tile,
+                        static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size)
+                            * static_cast<std::size_t>(wfcpw_exx->nrxx));
+    resmem_real_op()(pot_tile, static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(rhopw_exx->npw));
+    resmem_real_op()(pot_stress_tile,
+                     static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(rhopw_exx->npw));
+    target_weights.resize(static_cast<std::size_t>(target_tile_size), 0);
+    q_weights.resize(static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size), 0);
 
     for (int ispin = 0; ispin < nspin_fac; ++ispin)
     {
@@ -405,7 +385,6 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
             }
             const int ik_rep_spin = p_kv->exx_rep_spin_index(kpoint, ispin);
             const bool own_kpoint = kpoint.rep_pool == GlobalV::MY_POOL;
-            if (use_q_tile)
             {
                 for (int n_start = 0; n_start < nbands_psi; n_start += target_tile_size)
                 {
@@ -623,134 +602,6 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                         }
                     }
                 }
-                continue;
-            }
-
-            for (int nband = 0; nband < d_psi_in->get_nbands(); nband++)
-            {
-                double wg_nkb = 0.0;
-                double wk_nk = 0.0;
-                if (own_kpoint)
-                {
-                    wg_nkb = wg(ik_rep_spin, nband);
-                    wk_nk = p_kv->wk[ik_rep_spin];
-                }
-#ifdef __MPI
-                MPI_Bcast(&wg_nkb, 1, MPI_DOUBLE, p_kv->para_k.get_startpro_pool(kpoint.rep_pool), MPI_COMM_WORLD);
-                MPI_Bcast(&wk_nk, 1, MPI_DOUBLE, p_kv->para_k.get_startpro_pool(kpoint.rep_pool), MPI_COMM_WORLD);
-#endif
-                if (wg_nkb >= 1e-12 && own_kpoint)
-                {
-                    load_k_real(kpoint, ispin, nband, psi_nk_real);
-                }
-                const Real k_occ = wg_nkb / wk_nk;
-
-                for (const auto& qpoint: p_kv->exx_full_q_map)
-                {
-                    if (!qpoint.active)
-                    {
-                        continue;
-                    }
-                    const int iq_rep_spin = p_kv->exx_rep_spin_index(qpoint, ispin);
-                    if (own_kpoint && wg_nkb >= 1e-12)
-                    {
-                        hamilt::get_exx_potential<Real, Device>(p_kv,
-                                                                wfcpw,
-                                                                rhopw_exx,
-                                                                pot,
-                                                                tpiba,
-                                                                gamma_extrapolation,
-                                                                omega,
-                                                                kpoint,
-                                                                qpoint,
-                                                                true);
-                        hamilt::get_exx_stress_potential<Real, Device>(p_kv,
-                                                                       wfcpw,
-                                                                       rhopw_exx,
-                                                                       pot_stress,
-                                                                       tpiba,
-                                                                       gamma_extrapolation,
-                                                                       omega,
-                                                                       kpoint,
-                                                                       qpoint);
-                    }
-                    const bool own_qpoint = qpoint.rep_pool == GlobalV::MY_POOL;
-                    for (int mband = 0; mband < d_psi_in->get_nbands(); mband++)
-                    {
-                        double wg_mqb = 0.0;
-                        double wk_mq = 0.0;
-                        if (own_qpoint)
-                        {
-                            wg_mqb = wg(iq_rep_spin, mband);
-                            wk_mq = p_kv->wk[iq_rep_spin];
-                        }
-#ifdef __MPI
-                        MPI_Bcast(&wg_mqb, 1, MPI_DOUBLE, p_kv->para_k.get_startpro_pool(qpoint.rep_pool), MPI_COMM_WORLD);
-                        MPI_Bcast(&wk_mq, 1, MPI_DOUBLE, p_kv->para_k.get_startpro_pool(qpoint.rep_pool), MPI_COMM_WORLD);
-#endif
-                        if (wg_mqb < 1e-12 || wg_nkb < 1e-12)
-                        {
-                            continue;
-                        }
-                        if (own_qpoint)
-                        {
-                            load_q_real(qpoint, ispin, mband, psi_mq_real);
-                        }
-#ifdef __MPI
-                        Parallel_Common::bcast_dev<T, Device>(psi_mq_real, wfcpw_exx->nrxx, KP_WORLD, qpoint.rep_pool);
-#endif
-                        if (!own_kpoint)
-                        {
-                            continue;
-                        }
-
-                        // overlap density in real space
-                        setmem_complex_op()(density_real, 0.0, rhopw_exx->nrxx);
-                        for (int ig = 0; ig < wfcpw_exx->nrxx; ig++)
-                        {
-                            density_real[ig] = psi_nk_real[ig] * std::conj(psi_mq_real[ig]) * omega_inv;
-                        }
-
-                        // density in reciprocal space
-                        rhopw_exx->template real_to_recip<T, T, Device>(density_real, density_recip);
-
-                        // really calculate the stress
-
-                        // for alpha beta
-                        for (int alpha = 0; alpha < 3; alpha++)
-                        {
-                            for (int beta = alpha; beta < 3; beta++)
-                            {
-                                int delta_ab = (alpha == beta) ? 1 : 0;
-                                double sigma_ab_loc = 0.0;
-                            #ifdef _OPENMP
-                            #pragma omp parallel for schedule(static) reduction(+:sigma_ab_loc)
-                            #endif
-                                for (int ig = 0; ig < rhopw_exx->npw; ig++)
-                                {
-                                    const ModuleBase::Vector3<double> kqg
-                                        = kpoint.full_kvec_c - qpoint.full_kvec_c + rhopw_exx->gcar[ig];
-                                    double kqg_alpha = kqg[alpha] * tpiba;
-                                    double kqg_beta = kqg[beta] * tpiba;
-                                    // equation 10 of 10.1103/PhysRevB.73.125120
-                                    double density_recip2 = std::real(density_recip[ig] * std::conj(density_recip[ig]));
-                                    const int idx = ig;
-                                    double pot_local = pot[idx];
-                                    double pot_stress_local = pot_stress[idx];
-                                    sigma_ab_loc += density_recip2 * pot_local
-                                                    * (kqg_alpha * kqg_beta * pot_stress_local - delta_ab);
-
-                                }
-
-                                // 0.5 in the following line is caused by 2x in the pot
-                                const double q_occ = wg_mqb / wk_mq;
-                                sigma(alpha, beta) -= GlobalC::exx_info.info_global.hybrid_alpha
-                                                      * 0.25 * sigma_ab_loc * k_occ * kpoint.weight
-                                                      * k_spin_degeneracy * q_occ * qpoint.weight;
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -762,24 +613,21 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
             sigma(m, l) = sigma(l, m);
         }
     }
-    if (use_q_tile)
+    Real sigma_exx_host[6] = {0, 0, 0, 0, 0, 0};
+    syncmem_real_d2h_op()(sigma_exx_host, sigma_exx_device, 6);
+    int idx = 0;
+    for (int alpha = 0; alpha < 3; ++alpha)
     {
-        Real sigma_exx_host[6] = {0, 0, 0, 0, 0, 0};
-        syncmem_real_d2h_op()(sigma_exx_host, sigma_exx_device, 6);
-        int idx = 0;
-        for (int alpha = 0; alpha < 3; ++alpha)
+        for (int beta = alpha; beta < 3; ++beta)
         {
-            for (int beta = alpha; beta < 3; ++beta)
-            {
-                sigma(alpha, beta) += sigma_exx_host[idx++];
-            }
+            sigma(alpha, beta) += sigma_exx_host[idx++];
         }
-        for (int l = 0; l < 3; l++)
+    }
+    for (int l = 0; l < 3; l++)
+    {
+        for (int m = l + 1; m < 3; m++)
         {
-            for (int m = l + 1; m < 3; m++)
-            {
-                sigma(m, l) = sigma(l, m);
-            }
+            sigma(m, l) = sigma(l, m);
         }
     }
 
@@ -788,13 +636,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     Parallel_Reduce::reduce_all(sigma.c, sigma.nr * sigma.nc);
 
 
-    delmem_complex_op()(psi_nk_real);
-    delmem_complex_op()(psi_mq_real);
     delmem_complex_op()(psi_exx_recip);
     delmem_complex_op()(density_real);
     delmem_complex_op()(density_recip);
-    delmem_real_op()(pot);
-    delmem_real_op()(pot_stress);
     delmem_real_op()(pot_tile);
     delmem_real_op()(pot_stress_tile);
     delmem_real_op()(sigma_exx_device);
