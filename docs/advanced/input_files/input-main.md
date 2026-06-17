@@ -324,10 +324,7 @@
     - [exxace](#exxace)
     - [exx\_gamma\_extrapolation](#exx_gamma_extrapolation)
     - [exx\_batch\_fft\_size](#exx_batch_fft_size)
-    - [exx\_debug\_allow\_legacy\_gpu\_paths](#exx_debug_allow_legacy_gpu_paths)
-    - [exx\_full\_q\_cache](#exx_full_q_cache)
     - [exx\_band\_tile\_size](#exx_band_tile_size)
-    - [exx\_use\_q\_tile](#exx_use_q_tile)
     - [exx\_q\_tile\_size](#exx_q_tile_size)
     - [ecutexx](#ecutexx)
     - [exx\_thr\_type](#exx_thr_type)
@@ -3150,41 +3147,20 @@
 ### exx_batch_fft_size
 
 - **Type**: Integer
-- **Availability**: *device==gpu*
-- **Description**: Batch size used by GPU batched FFTs in the plane-wave EXX operator. Set to 1 to use the sequential EXX FFT path.
+- **Description**: Batch size used by PW EXX batched FFTs. The default is 8. CPU paths use scalar FFT chunks; GPU KPAR paths still assemble q states one at a time but batch the subsequent EXX density FFT/application step.
 - **Default**: 8
-
-### exx_debug_allow_legacy_gpu_paths
-
-- **Type**: Boolean
-- **Availability**: *device==gpu*
-- **Description**: Allow legacy scalar GPU PW EXX paths that are otherwise disabled while the batched/q-tile implementations are being validated. This is intended for debugging only.
-- **Default**: False
-
-### exx_full_q_cache
-
-- **Type**: Boolean
-- **Description**: Whether to materialize an explicit full-q reciprocal-space wavefunction cache for PW EXX when symmetry-reduced k-points are used. Set to false to use the lower-memory remap-on-demand path.
-- **Default**: True
 
 ### exx_band_tile_size
 
 - **Type**: Integer
-- **Description**: The target/source band tile size used by PW EXX to cache real-space wavefunctions and reduce repeated FFTs.
+- **Description**: Target/source band tile size used by the PW EXX q-tile path to cache real-space wavefunctions and feed batched FFTs.
 - **Default**: 8
-
-### exx_use_q_tile
-
-- **Type**: Boolean
-- **Description**: Whether to use the opt-in q-tile path for PW EXX q-state fetching and KPAR communication.
-- **Default**: False
 
 ### exx_q_tile_size
 
 - **Type**: Integer
-- **Availability**: *exx_use_q_tile==True.*
-- **Description**: The q-point tile size used by the opt-in PW EXX q-tile path to fetch and reuse q-state wavefunctions.
-- **Default**: 1
+- **Description**: Q-point tile size used by the PW EXX q-tile path to fetch and reuse source q-state wavefunctions.
+- **Default**: 4
 
 ### ecutexx
 
