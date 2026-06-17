@@ -895,13 +895,13 @@ void ReadInput::item_others()
     }
     {
         Input_Item item("exx_batch_fft_size");
-        item.annotation = "batch size for GPU batched EXX FFT; values <= 1 disable batching";
+        item.annotation = "batch size for PW EXX batched FFTs";
         item.category = "Exact Exchange (PW)";
         item.type = "Integer";
-        item.description = "Batch size used by GPU batched FFTs in the plane-wave EXX operator. Set to 1 to use the sequential EXX FFT path.";
+        item.description = "Batch size used by PW EXX batched FFTs. The default is 8. CPU paths use scalar FFT chunks; GPU KPAR paths still assemble q states one at a time but batch the subsequent EXX density FFT/application step.";
         item.default_value = "8";
         item.unit = "";
-        item.availability = "device==gpu";
+        item.availability = "";
         read_sync_int(input.exx_batch_fft_size);
         item.check_value = [](const Input_Item& item, const Parameter& param) {
             if (param.input.exx_batch_fft_size < 1 || param.input.exx_batch_fft_size > 128)
@@ -912,36 +912,11 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
-        Input_Item item("exx_debug_allow_legacy_gpu_paths");
-        item.annotation = "debug-only switch to allow legacy scalar GPU PW EXX paths";
-        item.category = "Exact Exchange (PW)";
-        item.type = "Boolean";
-        item.description = "Allow legacy scalar GPU PW EXX paths that are otherwise disabled while the batched/q-tile implementations are being validated. This is intended for debugging only.";
-        item.default_value = "False";
-        item.unit = "";
-        item.availability = "device==gpu";
-        read_sync_bool(input.exx_debug_allow_legacy_gpu_paths);
-        this->add_item(item);
-    }
-    {
-        Input_Item item("exx_full_q_cache");
-        item.annotation = "whether to cache explicit full-q PW EXX wavefunctions";
-        item.category = "Exact Exchange (PW)";
-        item.type = "Boolean";
-        item.description = "Whether to materialize an explicit full-q reciprocal-space wavefunction cache for PW EXX when symmetry-reduced k-points are used. Set to false to use the lower-memory remap-on-demand path.";
-        item.default_value = "True";
-        item.unit = "";
-        item.availability = "";
-        read_sync_bool(input.exx_full_q_cache);
-        this->add_item(item);
-    }
-    {
         Input_Item item("exx_band_tile_size");
-        item.annotation = "band tile size for tiled PW EXX real-space reuse";
+        item.annotation = "band tile size for PW EXX q-tile real-space reuse";
         item.category = "Exact Exchange (PW)";
         item.type = "Integer";
-        item.description
-            = "The target/source band tile size used by PW EXX to cache real-space wavefunctions and reduce repeated FFTs.";
+        item.description = "Target/source band tile size used by the PW EXX q-tile path to cache real-space wavefunctions and feed batched FFTs.";
         item.default_value = "8";
         item.unit = "";
         item.availability = "";
@@ -955,27 +930,14 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
-        Input_Item item("exx_use_q_tile");
-        item.annotation = "whether to use the opt-in MPI q-tile path in PW EXX";
-        item.category = "Exact Exchange (PW)";
-        item.type = "Boolean";
-        item.description = "Whether to use the opt-in q-tile path for PW EXX q-state fetching and KPAR communication.";
-        item.default_value = "False";
-        item.unit = "";
-        item.availability = "";
-        read_sync_bool(input.exx_use_q_tile);
-        this->add_item(item);
-    }
-    {
         Input_Item item("exx_q_tile_size");
-        item.annotation = "q-point tile size for tiled PW EXX q-state fetching";
+        item.annotation = "q-point tile size for PW EXX q-state fetching";
         item.category = "Exact Exchange (PW)";
         item.type = "Integer";
-        item.description
-            = "The q-point tile size used by the opt-in PW EXX q-tile path to fetch and reuse q-state wavefunctions.";
-        item.default_value = "1";
+        item.description = "Q-point tile size used by the PW EXX q-tile path to fetch and reuse source q-state wavefunctions.";
+        item.default_value = "4";
         item.unit = "";
-        item.availability = "exx_use_q_tile==True.";
+        item.availability = "";
         read_sync_int(input.exx_q_tile_size);
         item.check_value = [](const Input_Item& item, const Parameter& para) {
             if (para.input.exx_q_tile_size <= 0)

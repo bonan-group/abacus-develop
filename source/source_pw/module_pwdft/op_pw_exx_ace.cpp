@@ -165,58 +165,13 @@ void OperatorEXXPW<T, Device>::construct_ace() const
             *ik_ = ik;
             if (skip_ik)
             {
-                if (PARAM.inp.exx_use_q_tile)
+                if (std::is_same<Device, base_device::DEVICE_CPU>::value)
                 {
-                    if (std::is_same<Device, base_device::DEVICE_CPU>::value)
-                    {
-                        act_op_qtile_cpu(nbands, nbasis, 1, nullptr, h_psi_ace, nbasis, false, false, ispin);
-                    }
-                    else
-                    {
-                        act_op_qtile_gpu(nbands, nbasis, 1, nullptr, h_psi_ace, nbasis, false, false, ispin);
-                    }
+                    act_op_qtile_cpu(nbands, nbasis, 1, nullptr, h_psi_ace, nbasis, false, false, ispin);
                 }
                 else
                 {
-                    for (const auto& qpoint: kv->exx_full_q_map)
-                    {
-                        if (!qpoint.active)
-                        {
-                            continue;
-                        }
-                        ensure_full_point_supported(qpoint);
-                        const int iq_rep_spin = rep_spin_index(qpoint, ispin);
-
-                        // decide which pool does the iq belong to
-                        int iq_pool = qpoint.rep_pool;
-
-                        for (int m_iband = 0; m_iband < psi.get_nbands(); m_iband++)
-                        {
-                            double wg_mqb = 0;
-                            double wk_iq = 0;
-                            if (iq_pool == GlobalV::MY_POOL)
-                            {
-                                wg_mqb = (*wg)(iq_rep_spin, m_iband);
-                                wk_iq = kv->wk[iq_rep_spin];
-                            }
-#ifdef __MPI
-                            MPI_Bcast(&wg_mqb, 1, MPI_DOUBLE, kv->para_k.get_startpro_pool(iq_pool), MPI_COMM_WORLD);
-                            MPI_Bcast(&wk_iq, 1, MPI_DOUBLE, kv->para_k.get_startpro_pool(iq_pool), MPI_COMM_WORLD);
-#endif
-                            if (wg_mqb < 1e-12)
-                                continue;
-
-                            if (iq_pool == GlobalV::MY_POOL)
-                            {
-                                load_full_point_real(qpoint, ispin, m_iband, psi_mq_real);
-                            }
-#ifdef __MPI
-                            Parallel_Common::bcast_dev<T, Device>(psi_mq_real, wfcpw_exx->nrxx, KP_WORLD, iq_pool);
-#endif
-
-                        } // end of band
-
-                    }
+                    act_op_qtile_gpu(nbands, nbasis, 1, nullptr, h_psi_ace, nbasis, false, false, ispin);
                 }
             }
             else
@@ -228,40 +183,16 @@ void OperatorEXXPW<T, Device>::construct_ace() const
 
                 if (GlobalV::KPAR > 1 && GlobalV::MY_RANK == 0)
                 {
-                    GlobalV::ofs_running << " EXX ACE KPAR: calling act_op_kpar for local ik = "
+                    GlobalV::ofs_running << " EXX ACE KPAR: calling act_op_qtile for local ik = "
                                          << ik << ", spin = " << ispin << std::endl;
                 }
-                if (PARAM.inp.exx_use_q_tile)
+                if (std::is_same<Device, base_device::DEVICE_CPU>::value)
                 {
-                    if (std::is_same<Device, base_device::DEVICE_CPU>::value)
-                    {
-                        act_op_qtile_cpu(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false, true, ispin);
-                    }
-                    else
-                    {
-                        act_op_qtile_gpu(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false, true, ispin);
-                    }
+                    act_op_qtile_cpu(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false, true, ispin);
                 }
                 else
                 {
-                    if (PARAM.inp.exx_batch_fft_size > 1
-                        && wfcpw_exx->fft_bundle.is_batch_fft_available<Real>()
-                        && GlobalV::KPAR == 1)
-                    {
-                        act_op_batch(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false);
-                    }
-                    else
-                    {
-                        if (!std::is_same<Device, base_device::DEVICE_CPU>::value
-                            && !PARAM.inp.exx_debug_allow_legacy_gpu_paths)
-                        {
-                            ModuleBase::WARNING_QUIT("OperatorEXXPW::construct_ace",
-                                                     "legacy scalar GPU ACE construction is disabled; "
-                                                     "set exx_batch_fft_size > 1 with KPAR=1 or use "
-                                                     "exx_use_q_tile 1 for ACE KPAR");
-                        }
-                        act_op_kpar(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false);
-                    }
+                    act_op_qtile_gpu(nbands, nbasis, 1, p_psi, h_psi_ace, nbasis, false, true, ispin);
                 }
                 // psi_h_psi_ace = psi^\dagger * h_psi_ace
                 // p_exx_helper->psi.fix_kb(0, 0);

@@ -4687,50 +4687,26 @@ parameters:
     category: Exact Exchange (PW)
     type: Integer
     description: |
-      Batch size used by GPU batched FFTs in the plane-wave EXX operator. Set to 1 to use the sequential EXX FFT path.
+      Batch size used by PW EXX batched FFTs. The default is 8. CPU paths use scalar FFT chunks; GPU KPAR paths still assemble q states one at a time but batch the subsequent EXX density FFT/application step.
     default_value: "8"
-    unit: ""
-    availability: device==gpu
-  - name: exx_debug_allow_legacy_gpu_paths
-    category: Exact Exchange (PW)
-    type: Boolean
-    description: |
-      Allow legacy scalar GPU PW EXX paths that are otherwise disabled while the batched/q-tile implementations are being validated. This is intended for debugging only.
-    default_value: "False"
-    unit: ""
-    availability: device==gpu
-  - name: exx_full_q_cache
-    category: Exact Exchange (PW)
-    type: Boolean
-    description: |
-      Whether to materialize an explicit full-q reciprocal-space wavefunction cache for PW EXX when symmetry-reduced k-points are used. Set to false to use the lower-memory remap-on-demand path.
-    default_value: "True"
     unit: ""
     availability: ""
   - name: exx_band_tile_size
     category: Exact Exchange (PW)
     type: Integer
     description: |
-      The target/source band tile size used by PW EXX to cache real-space wavefunctions and reduce repeated FFTs.
+      Target/source band tile size used by the PW EXX q-tile path to cache real-space wavefunctions and feed batched FFTs.
     default_value: "8"
-    unit: ""
-    availability: ""
-  - name: exx_use_q_tile
-    category: Exact Exchange (PW)
-    type: Boolean
-    description: |
-      Whether to use the opt-in q-tile path for PW EXX q-state fetching and KPAR communication.
-    default_value: "False"
     unit: ""
     availability: ""
   - name: exx_q_tile_size
     category: Exact Exchange (PW)
     type: Integer
     description: |
-      The q-point tile size used by the opt-in PW EXX q-tile path to fetch and reuse q-state wavefunctions.
-    default_value: "1"
+      Q-point tile size used by the PW EXX q-tile path to fetch and reuse source q-state wavefunctions.
+    default_value: "4"
     unit: ""
-    availability: exx_use_q_tile==True.
+    availability: ""
   - name: ecutexx
     category: Exact Exchange (PW)
     type: Real

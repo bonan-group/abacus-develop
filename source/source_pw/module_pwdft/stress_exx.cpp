@@ -19,6 +19,24 @@
 #error "PW EXX GPU stress implementation is not implemented for ROCm in this merge."
 #endif
 
+namespace
+{
+int exx_batch_fft_size()
+{
+    return std::max(1, PARAM.inp.exx_batch_fft_size);
+}
+
+int exx_band_tile_size()
+{
+    return std::max(1, PARAM.inp.exx_band_tile_size);
+}
+
+int exx_q_tile_size()
+{
+    return std::max(1, PARAM.inp.exx_q_tile_size);
+}
+} // namespace
+
 template <typename FPTYPE, typename Device>
 void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                            const ModuleBase::matrix& wg,
@@ -88,21 +106,12 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     std::vector<int> exx_to_wfc_offsets;
     int* exx_to_wfc_map_device = nullptr;
     hamilt::ExxWaveRedistributorCpu<T> exx_wave_redistributor;
-    const bool use_device_q_tile = PARAM.inp.exx_use_q_tile
-                                   && !std::is_same<Device, base_device::DEVICE_CPU>::value;
-    if (!std::is_same<Device, base_device::DEVICE_CPU>::value && !use_device_q_tile)
-    {
-        ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
-                                 "GPU PW EXX stress requires exx_use_q_tile=1");
-    }
+    constexpr bool use_q_tile = true;
 #if defined(__ROCM) && !defined(__CUDA)
-    if (use_device_q_tile)
-    {
-        ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
-                                 "GPU q-tile PW EXX stress path is not implemented for ROCm yet");
-    }
+    ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                             "GPU q-tile PW EXX stress path is not implemented for ROCm yet");
 #endif
-    const bool use_gpu_q_tile = use_device_q_tile;
+    const bool use_gpu_q_tile = use_q_tile && !std::is_same<Device, base_device::DEVICE_CPU>::value;
     {
         double ecut_exx = PARAM.inp.ecutexx;
         if (ecut_exx == 0.0)
@@ -133,7 +142,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                   wfcpw->kvec_d,
                                   wfcpw->distribution_type,
                                   wfcpw->xprime);
-        wfcpw_exx->setuptransform(PARAM.inp.exx_batch_fft_size);
+        wfcpw_exx->setuptransform(exx_batch_fft_size());
         wfcpw_exx->collect_local_pw();
         if (rhopw_exx->nrxx != wfcpw_exx->nrxx)
         {
@@ -190,7 +199,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     resmem_real_op()(pot_stress, rhopw_exx->npw);
     resmem_real_op()(sigma_exx_device, 6);
 
-    if (PARAM.inp.exx_use_q_tile)
+    if (use_q_tile)
     {
         std::vector<Real> gcar_host(static_cast<std::size_t>(rhopw_exx->npw) * 3);
         for (int ig = 0; ig < rhopw_exx->npw; ++ig)
@@ -363,16 +372,16 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     }();
 
     const int nbands_psi = d_psi_in->get_nbands();
-    const int target_tile_size = std::max(1, std::min(PARAM.inp.exx_band_tile_size, nbands_psi));
+    const int target_tile_size = std::max(1, std::min(exx_band_tile_size(), nbands_psi));
     const int source_tile_size = target_tile_size;
     const int q_tile_size = q_points.empty() ? 1
-                                             : std::max(1, std::min(PARAM.inp.exx_q_tile_size,
+                                             : std::max(1, std::min(exx_q_tile_size(),
                                                                     static_cast<int>(q_points.size())));
     T* target_real_tile = nullptr;
     T* q_real_tile = nullptr;
     std::vector<Real> target_weights;
     std::vector<Real> q_weights;
-    if (PARAM.inp.exx_use_q_tile)
+    if (use_q_tile)
     {
         resmem_complex_op()(target_real_tile,
                             static_cast<std::size_t>(target_tile_size) * static_cast<std::size_t>(wfcpw_exx->nrxx));
@@ -396,7 +405,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
             }
             const int ik_rep_spin = p_kv->exx_rep_spin_index(kpoint, ispin);
             const bool own_kpoint = kpoint.rep_pool == GlobalV::MY_POOL;
-            if (PARAM.inp.exx_use_q_tile)
+            if (use_q_tile)
             {
                 for (int n_start = 0; n_start < nbands_psi; n_start += target_tile_size)
                 {
@@ -753,7 +762,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
             sigma(m, l) = sigma(l, m);
         }
     }
-    if (PARAM.inp.exx_use_q_tile)
+    if (use_q_tile)
     {
         Real sigma_exx_host[6] = {0, 0, 0, 0, 0, 0};
         syncmem_real_d2h_op()(sigma_exx_host, sigma_exx_device, 6);
