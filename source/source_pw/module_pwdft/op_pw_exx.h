@@ -153,8 +153,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                                      const T* full_real,
                                      T* rep_recip,
                                      Real factor = 1.0) const;
-    void prepare_kpar_q_cache() const;
-    std::size_t kpar_q_cache_offset(int ispin, int iq, int iband) const;
 
     void multiply_potential(T *density_recip, int ik, int iq) const;
 
@@ -165,30 +163,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                 T *tmhpsi,
                 const int ngk_ik = 0,
                 const bool is_first_node = false) const;
-
-    void act_op_scalar(const int nbands,
-                       const int nbasis,
-                       const int npol,
-                       const T *tmpsi_in,
-                       T *tmhpsi,
-                       const int ngk_ik = 0,
-                       const bool is_first_node = false) const;
-
-    void act_op_tiled_cpu(const int nbands,
-                          const int nbasis,
-                          const int npol,
-                          const T *tmpsi_in,
-                          T *tmhpsi,
-                          const int ngk_ik = 0,
-                          const bool is_first_node = false) const;
-
-    void act_op_batch(const int nbands,
-                      const int nbasis,
-                      const int npol,
-                      const T *tmpsi_in,
-                      T *tmhpsi,
-                      const int ngk_ik = 0,
-                      const bool is_first_node = false) const;
 
     void act_op_qtile_cpu(const int nbands,
                           const int nbasis,
@@ -210,14 +184,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                           bool accumulate_hpsi = true,
                           int ispin_override = -1) const;
 
-    void act_op_kpar(const int nbands,
-            const int nbasis,
-            const int npol,
-            const T *tmpsi_in,
-            T *tmhpsi,
-            const int ngk_ik = 0,
-            const bool is_first_node = false) const;
-
     void act_op_ace(const int nbands,
                     const int nbasis,
                     const int npol,
@@ -226,8 +192,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                     const int ngk_ik = 0,
                     const bool is_first_node = false) const;
 
-    double cal_exx_energy_op(psi::Psi<T, Device> *psi_) const;
-    double cal_exx_energy_batch(psi::Psi<T, Device> *psi_) const;
     double cal_exx_energy_op_qtile(psi::Psi<T, Device> *psi_) const;
 
     double cal_exx_energy_ace(psi::Psi<T, Device> *psi_) const;
@@ -315,13 +279,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     mutable std::vector<const K_Vectors::ExxFullKPoint*> k_points;
     mutable std::map<int, K_Vectors::ExxFullKPoint> local_kpoint_cache;
     mutable std::map<std::pair<int, int>, FullPointSpatialRemap> point_gmaps;
-    mutable std::vector<T> kpar_q_real_cache;
-    mutable std::vector<Real> kpar_q_weight_cache;
-    mutable int kpar_q_cache_nspin = 0;
-    mutable int kpar_q_cache_nq = 0;
-    mutable int kpar_q_cache_nbands = 0;
-    mutable int kpar_q_cache_nrxx = 0;
-    mutable bool kpar_q_cache_ready = false;
     mutable T* qtile_target_real = nullptr;
     mutable T* qtile_h_real = nullptr;
     mutable T* qtile_q_real = nullptr;
