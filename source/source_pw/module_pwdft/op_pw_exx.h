@@ -153,8 +153,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                                      const T* full_real,
                                      T* rep_recip,
                                      Real factor = 1.0) const;
-    void prepare_kpar_q_cache() const;
-    std::size_t kpar_q_cache_offset(int ispin, int iq, int iband) const;
 
     void multiply_potential(T *density_recip, int ik, int iq) const;
 
@@ -281,13 +279,6 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     mutable std::vector<const K_Vectors::ExxFullKPoint*> k_points;
     mutable std::map<int, K_Vectors::ExxFullKPoint> local_kpoint_cache;
     mutable std::map<std::pair<int, int>, FullPointSpatialRemap> point_gmaps;
-    mutable std::vector<T> kpar_q_real_cache;
-    mutable std::vector<Real> kpar_q_weight_cache;
-    mutable int kpar_q_cache_nspin = 0;
-    mutable int kpar_q_cache_nq = 0;
-    mutable int kpar_q_cache_nbands = 0;
-    mutable int kpar_q_cache_nrxx = 0;
-    mutable bool kpar_q_cache_ready = false;
     mutable T* qtile_target_real = nullptr;
     mutable T* qtile_h_real = nullptr;
     mutable T* qtile_q_real = nullptr;

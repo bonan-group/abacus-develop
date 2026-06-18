@@ -1045,7 +1045,6 @@ void OperatorEXXPW<T, Device>::act_op_qtile_gpu(const int nbands,
 template <typename T, typename Device>
 void OperatorEXXPW<T, Device>::set_psi(psi::Psi<T, Device>& psi_in) const
 {
-    kpar_q_cache_ready = false;
     set_psi_for_cache(psi_in);
 }
 
@@ -1053,100 +1052,6 @@ template <typename T, typename Device>
 void OperatorEXXPW<T, Device>::set_psi_for_cache(const psi::Psi<T, Device>& psi_in) const
 {
     psi = psi_in;
-}
-
-template <typename T, typename Device>
-std::size_t OperatorEXXPW<T, Device>::kpar_q_cache_offset(int ispin, int iq, int iband) const
-{
-    return ((static_cast<std::size_t>(ispin) * static_cast<std::size_t>(kpar_q_cache_nq)
-             + static_cast<std::size_t>(iq))
-                * static_cast<std::size_t>(kpar_q_cache_nbands)
-            + static_cast<std::size_t>(iband))
-           * static_cast<std::size_t>(kpar_q_cache_nrxx);
-}
-
-template <typename T, typename Device>
-void OperatorEXXPW<T, Device>::prepare_kpar_q_cache() const
-{
-    ModuleBase::timer::start("OperatorEXXPW", "prepare_kpar_q_cache");
-
-    if (!std::is_same<Device, base_device::DEVICE_CPU>::value)
-    {
-        ModuleBase::WARNING_QUIT("OperatorEXXPW::prepare_kpar_q_cache", "CPU-only KPAR q cache called on GPU");
-    }
-    if (GlobalV::KPAR <= 1)
-    {
-        kpar_q_cache_ready = false;
-        ModuleBase::timer::end("OperatorEXXPW", "prepare_kpar_q_cache");
-        return;
-    }
-    if (wg == nullptr)
-    {
-        ModuleBase::WARNING_QUIT("OperatorEXXPW::prepare_kpar_q_cache", "occupation matrix is not set");
-    }
-
-    const int nspin_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-    kpar_q_cache_nspin = nspin_fac;
-    kpar_q_cache_nq = static_cast<int>(kv->exx_full_q_map.size());
-    kpar_q_cache_nbands = psi.get_nbands();
-    kpar_q_cache_nrxx = wfcpw_exx->nrxx;
-
-    const std::size_t nstates = static_cast<std::size_t>(kpar_q_cache_nspin)
-                                * static_cast<std::size_t>(kpar_q_cache_nq)
-                                * static_cast<std::size_t>(kpar_q_cache_nbands);
-    kpar_q_real_cache.assign(nstates * static_cast<std::size_t>(kpar_q_cache_nrxx), T(0));
-    kpar_q_weight_cache.assign(nstates, Real(0));
-
-    for (int ispin = 0; ispin < nspin_fac; ++ispin)
-    {
-        for (int iq = 0; iq < kpar_q_cache_nq; ++iq)
-        {
-            const auto& qpoint = kv->exx_full_q_map[iq];
-            if (!qpoint.active)
-            {
-                continue;
-            }
-            ensure_full_point_supported(qpoint);
-            const int iq_rep_spin = rep_spin_index(qpoint, ispin);
-            const int iq_pool = qpoint.rep_pool;
-
-            for (int iband = 0; iband < kpar_q_cache_nbands; ++iband)
-            {
-                double wg_iqb_real = 0.0;
-                double wk_iqb_real = 0.0;
-                if (iq_pool == GlobalV::MY_POOL)
-                {
-                    wg_iqb_real = (*wg)(iq_rep_spin, iband);
-                    wk_iqb_real = kv->wk[iq_rep_spin];
-                }
-#ifdef __MPI
-                MPI_Bcast(&wg_iqb_real, 1, MPI_DOUBLE, kv->para_k.get_startpro_pool(iq_pool), MPI_COMM_WORLD);
-                MPI_Bcast(&wk_iqb_real, 1, MPI_DOUBLE, kv->para_k.get_startpro_pool(iq_pool), MPI_COMM_WORLD);
-#endif
-                const std::size_t offset = kpar_q_cache_offset(ispin, iq, iband);
-                const std::size_t state = offset / static_cast<std::size_t>(kpar_q_cache_nrxx);
-                if (wg_iqb_real < 1e-12)
-                {
-                    continue;
-                }
-
-                if (iq_pool == GlobalV::MY_POOL)
-                {
-                    load_full_point_real(qpoint, ispin, iband, kpar_q_real_cache.data() + offset);
-                }
-#ifdef __MPI
-                Parallel_Common::bcast_data(kpar_q_real_cache.data() + offset,
-                                            kpar_q_cache_nrxx,
-                                            KP_WORLD,
-                                            iq_pool);
-#endif
-                kpar_q_weight_cache[state] = static_cast<Real>(wg_iqb_real / wk_iqb_real * qpoint.weight);
-            }
-        }
-    }
-
-    kpar_q_cache_ready = true;
-    ModuleBase::timer::end("OperatorEXXPW", "prepare_kpar_q_cache");
 }
 
 template <typename T, typename Device>
