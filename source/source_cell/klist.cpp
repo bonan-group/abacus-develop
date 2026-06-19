@@ -9,6 +9,146 @@
 #include "source_io/module_unk/berryphase.h"
 #include "source_io/module_parameter/parameter.h"
 
+#include <sstream>
+
+namespace
+{
+void interpolate_band_k_between(std::ifstream& ifk,
+                                const int nks_special,
+                                std::vector<ModuleBase::Vector3<double>>& kvec,
+                                std::vector<int>& kl_segids)
+{
+    std::vector<int> nkl(nks_special, 0);
+    std::vector<ModuleBase::Vector3<double>> ks(nks_special);
+    std::vector<int> special_segids;
+    special_segids.reserve(nks_special);
+    int total_kpoints = 0;
+    int kpt_segid = 0;
+    for (int iks = 0; iks < nks_special; iks++)
+    {
+        ifk >> ks[iks].x;
+        ifk >> ks[iks].y;
+        ifk >> ks[iks].z;
+        ModuleBase::GlobalFunc::READ_VALUE(ifk, nkl[iks]);
+        assert(nkl[iks] >= 0);
+        total_kpoints += nkl[iks];
+        if ((nkl[iks] == 1) && (iks != (nks_special - 1)))
+        {
+            kpt_segid++;
+        }
+        special_segids.push_back(kpt_segid);
+    }
+    assert(nkl[nks_special - 1] == 1);
+
+    kvec.clear();
+    kl_segids.clear();
+    kvec.resize(total_kpoints);
+    kl_segids.reserve(total_kpoints);
+
+    int count = 0;
+    for (int iks = 1; iks < nks_special; iks++)
+    {
+        const double dxs = (ks[iks].x - ks[iks - 1].x) / nkl[iks - 1];
+        const double dys = (ks[iks].y - ks[iks - 1].y) / nkl[iks - 1];
+        const double dzs = (ks[iks].z - ks[iks - 1].z) / nkl[iks - 1];
+        for (int is = 0; is < nkl[iks - 1]; is++)
+        {
+            kvec[count].x = ks[iks - 1].x + is * dxs;
+            kvec[count].y = ks[iks - 1].y + is * dys;
+            kvec[count].z = ks[iks - 1].z + is * dzs;
+            kl_segids.push_back(special_segids[iks - 1]);
+            ++count;
+        }
+    }
+
+    kvec[count] = ks[nks_special - 1];
+    kl_segids.push_back(special_segids[nks_special - 1]);
+    ++count;
+
+    assert(count == total_kpoints);
+    assert(kl_segids.size() == kvec.size());
+}
+
+bool try_read_band_kpoints(std::ifstream& ifk,
+                           std::vector<ModuleBase::Vector3<double>>& band_kvec_c,
+                           std::vector<ModuleBase::Vector3<double>>& band_kvec_d,
+                           std::vector<int>& band_kl_segids,
+                           bool& band_kc_done,
+                           bool& band_kd_done)
+{
+    std::string word;
+    while (ifk >> word)
+    {
+        if (word == "K_POINTS_BAND" || word == "KPOINTS_BAND" || word == "K_BAND")
+        {
+            break;
+        }
+        ifk.ignore(150, '\n');
+    }
+    if (!ifk.good() && word != "K_POINTS_BAND" && word != "KPOINTS_BAND" && word != "K_BAND")
+    {
+        return true;
+    }
+
+    int nk_band = 0;
+    ModuleBase::GlobalFunc::READ_VALUE(ifk, nk_band);
+    std::string kword_band;
+    ModuleBase::GlobalFunc::READ_VALUE(ifk, kword_band);
+
+    band_kvec_c.clear();
+    band_kvec_d.clear();
+    band_kl_segids.clear();
+    band_kc_done = false;
+    band_kd_done = false;
+
+    if (nk_band <= 0)
+    {
+        GlobalV::ofs_warning << " Error: K_POINTS_BAND requires a positive number of points." << std::endl;
+        return false;
+    }
+
+    if (kword_band == "Line_Direct" || kword_band == "L" || kword_band == "Line")
+    {
+        interpolate_band_k_between(ifk, nk_band, band_kvec_d, band_kl_segids);
+        band_kd_done = true;
+    }
+    else if (kword_band == "Line_Cartesian")
+    {
+        interpolate_band_k_between(ifk, nk_band, band_kvec_c, band_kl_segids);
+        band_kc_done = true;
+    }
+    else if (kword_band == "Direct" || kword_band == "D")
+    {
+        band_kvec_d.resize(nk_band);
+        band_kl_segids.resize(nk_band, 0);
+        for (int ik = 0; ik < nk_band; ++ik)
+        {
+            ifk >> band_kvec_d[ik].x >> band_kvec_d[ik].y >> band_kvec_d[ik].z;
+            ifk.ignore(150, '\n');
+        }
+        band_kd_done = true;
+    }
+    else if (kword_band == "Cartesian" || kword_band == "C")
+    {
+        band_kvec_c.resize(nk_band);
+        band_kl_segids.resize(nk_band, 0);
+        for (int ik = 0; ik < nk_band; ++ik)
+        {
+            ifk >> band_kvec_c[ik].x >> band_kvec_c[ik].y >> band_kvec_c[ik].z;
+            ifk.ignore(150, '\n');
+        }
+        band_kc_done = true;
+    }
+    else
+    {
+        GlobalV::ofs_warning << " Error : unsupported K_POINTS_BAND type." << std::endl;
+        return false;
+    }
+
+    return true;
+}
+} // namespace
+
 void K_Vectors::cal_ik_global()
 {
     const int my_pool = this->para_k.my_pool;
@@ -202,6 +342,65 @@ void K_Vectors::finalize_exx_full_q_map()
     }
 }
 
+K_Vectors K_Vectors::make_band_target_kvectors(const int nspin_in) const
+{
+    if (!this->has_band_kpoints() || !this->band_kd_done || !this->band_kc_done)
+    {
+        ModuleBase::WARNING_QUIT("K_Vectors::make_band_target_kvectors",
+                                 "band-target k-points are not fully initialized");
+    }
+
+    const int nk_no_spin = static_cast<int>(this->band_kvec_d.size());
+    K_Vectors band_kv;
+    int nkstot_for_para = nk_no_spin;
+    band_kv.para_k.kinfo(nkstot_for_para,
+                         GlobalV::KPAR,
+                         GlobalV::MY_POOL,
+                         GlobalV::RANK_IN_POOL,
+                         GlobalV::NPROC,
+                         nspin_in);
+    const int local_nk_no_spin = band_kv.para_k.nks_np;
+    const int local_start = band_kv.para_k.startk_pool.empty() ? 0 : band_kv.para_k.startk_pool[GlobalV::MY_POOL];
+
+    band_kv.nspin = nspin_in;
+    band_kv.nkstot = nk_no_spin;
+    band_kv.nkstot_full = nk_no_spin;
+    band_kv.nks = local_nk_no_spin;
+    band_kv.k_nkstot = nk_no_spin;
+    band_kv.k_kword = "Direct";
+    band_kv.kc_done = true;
+    band_kv.kd_done = true;
+    band_kv.is_mp = false;
+    band_kv.kl_segids = this->band_kl_segids;
+    if (band_kv.kl_segids.size() != static_cast<std::size_t>(nk_no_spin))
+    {
+        band_kv.kl_segids.assign(nk_no_spin, 0);
+    }
+
+    const int spin_storage = (nspin_in == 2) ? 2 : 1;
+    band_kv.renew(local_nk_no_spin * spin_storage);
+    const double target_weight = nk_no_spin > 0 ? 1.0 / static_cast<double>(nk_no_spin) : 0.0;
+    for (int ik = 0; ik < local_nk_no_spin; ++ik)
+    {
+        const int global_ik = local_start + ik;
+        band_kv.kvec_d[ik] = this->band_kvec_d[global_ik];
+        band_kv.kvec_c[ik] = this->band_kvec_c[global_ik];
+        band_kv.kvec_c_full[ik] = this->band_kvec_c[global_ik];
+        band_kv.wk[ik] = target_weight;
+        band_kv.isk[ik] = 0;
+    }
+#ifdef __MPI
+    KVectorUtils::kvec_mpi_k(band_kv);
+#endif
+
+    band_kv.set_kup_and_kdw();
+    band_kv.cal_ik_global();
+    band_kv.build_exx_identity_full_q_map();
+    band_kv.finalize_exx_full_q_map();
+
+    return band_kv;
+}
+
 void K_Vectors::normalize_exx_full_q_map_weights()
 {
     auto normalize_full_map_weights = [this](std::vector<ExxFullPoint>& points) {
@@ -328,6 +527,21 @@ void K_Vectors::set(const UnitCell& ucell,
     {
         for (size_t ik = 0; ik != this->nkstot_full; ++ik)
             this->kvec_c_full[ik] = this->kvec_c[ik];
+    }
+
+    if (this->band_kd_done && !this->band_kc_done)
+    {
+        this->band_kvec_c.resize(this->band_kvec_d.size());
+        for (size_t ik = 0; ik != this->band_kvec_d.size(); ++ik)
+        {
+            this->band_kvec_c[ik] = this->band_kvec_d[ik] * reciprocal_vec;
+        }
+        this->band_kc_done = true;
+    }
+    else if (this->band_kc_done && !this->band_kd_done)
+    {
+        KVectorUtils::band_kvec_c2d(*this, latvec);
+        this->band_kd_done = true;
     }
 
     // Start from the no-reduction map.  The symmetry reducer overwrites this
@@ -515,6 +729,12 @@ bool K_Vectors::read_kpoints(const UnitCell& ucell,
 
     int ierr = 0;
 
+    this->band_kvec_c.clear();
+    this->band_kvec_d.clear();
+    this->band_kl_segids.clear();
+    this->band_kc_done = false;
+    this->band_kd_done = false;
+
     ifk.rdstate();
 
     while (ifk.good())
@@ -581,10 +801,10 @@ bool K_Vectors::read_kpoints(const UnitCell& ucell,
         koffset[0] = 0;
         koffset[1] = 0;
         koffset[2] = 0;
-        if (!(ifk >> koffset[0] >> koffset[1] >> koffset[2]))
-        {
-            ModuleBase::WARNING("K_Vectors::read_kpoints", "Missing k-point offsets in the k-points file.");
-        }
+        std::string offset_line;
+        std::getline(ifk, offset_line);
+        std::istringstream offset_stream(offset_line);
+        offset_stream >> koffset[0] >> koffset[1] >> koffset[2];
 
         this->Monkhorst_Pack(nmp, koffset, k_type);
     }
@@ -651,6 +871,16 @@ bool K_Vectors::read_kpoints(const UnitCell& ucell,
     }
 
     this->nkstot_full = this->nks = this->nkstot;
+
+    if (!try_read_band_kpoints(ifk,
+                               this->band_kvec_c,
+                               this->band_kvec_d,
+                               this->band_kl_segids,
+                               this->band_kc_done,
+                               this->band_kd_done))
+    {
+        return false;
+    }
 
     ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "nkstot", nkstot);
     return true;

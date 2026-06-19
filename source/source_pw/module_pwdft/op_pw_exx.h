@@ -24,6 +24,13 @@
 namespace hamilt
 {
 
+enum class ExxSingularCorrectionMode
+{
+    None,
+    ScfMp,
+    SmoothTarget
+};
+
 template <typename T, typename Device>
 class OperatorEXXPW : public OperatorPW<T, Device>
 {
@@ -39,6 +46,11 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     template <typename T_in, typename Device_in = Device>
     explicit OperatorEXXPW(const OperatorEXXPW<T_in, Device_in> *op_exx);
+
+    OperatorEXXPW(const OperatorEXXPW<T, Device>* source_op,
+                  const int* target_isk,
+                  const ModulePW::PW_Basis_K* target_wfcpw,
+                  const K_Vectors* target_kv);
 
     virtual ~OperatorEXXPW();
 
@@ -70,11 +82,15 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     const ModulePW::PW_Basis* rhopw = nullptr;
     ModulePW::PW_Basis_K* wfcpw_exx = nullptr; // k-dependent EXX grid
     ModulePW::PW_Basis* rhopw_dev = nullptr; // for device
-    bool owns_exx_bases = true;
+    const OperatorEXXPW<T, Device>* source_op_for_target = nullptr;
+    const K_Vectors* target_kv_for_target = nullptr;
+    bool owns_wfcpw_exx = true;
+    bool owns_rhopw_dev = true;
     const UnitCell *ucell = nullptr;
     Real tpiba = 0;
     
     std::vector<const K_Vectors::ExxFullQPoint*> get_q_points(const int ik) const;
+    std::vector<const K_Vectors::ExxFullQPoint*> get_active_q_points() const;
     std::vector<const K_Vectors::ExxFullKPoint*> get_k_points() const;
     const T *get_pw(const int m, const int ik_local) const;
     int rep_spin_index(const K_Vectors::ExxFullPoint& point, int ispin) const;
@@ -124,7 +140,9 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                       const int ngk_ik = 0,
                       const bool is_first_node = false,
                       bool accumulate_hpsi = true,
-                      int ispin_override = -1) const;
+                      int ispin_override = -1,
+                      const K_Vectors::ExxFullKPoint* target_kpoint_override = nullptr,
+                      int target_ik_override = -1) const;
     void process_qtile_apply_tile(const K_Vectors::ExxFullKPoint& local_kpoint,
                                   const K_Vectors::ExxFullQPoint& qpoint,
                                   const T* target_real,
@@ -317,6 +335,9 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     using lapack_trtri = container::kernels::lapack_trtri<T, ct_Device>;
 
     bool gamma_extrapolation = true;
+    ExxSingularCorrectionMode singular_correction_mode = ExxSingularCorrectionMode::ScfMp;
+    std::vector<Real> fock_div_local;
+    std::vector<Real> erfc_div_local;
 
 };
 
@@ -326,7 +347,9 @@ void get_exx_potential(const K_Vectors* kv,
                        ModulePW::PW_Basis* rhopw_dev,
                        Real* pot,
                        double tpiba,
-                       bool gamma_extrapolation,
+                       ExxSingularCorrectionMode singular_correction_mode,
+                       const std::vector<Real>* fock_div_override,
+                       const std::vector<Real>* erfc_div_override,
                        double ucell_omega,
                        int ik,
                        int iq,
@@ -338,7 +361,9 @@ void get_exx_potential(const K_Vectors* kv,
                        ModulePW::PW_Basis* rhopw_dev,
                        Real* pot,
                        double tpiba,
-                       bool gamma_extrapolation,
+                       ExxSingularCorrectionMode singular_correction_mode,
+                       const std::vector<Real>* fock_div_override,
+                       const std::vector<Real>* erfc_div_override,
                        double ucell_omega,
                        const K_Vectors::ExxFullKPoint& kpoint,
                        const K_Vectors::ExxFullQPoint& qpoint,
@@ -372,7 +397,7 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
                       const ModulePW::PW_Basis_K* wfcpw,
                       ModulePW::PW_Basis* rhopw_dev,
                       double tpiba,
-                      bool gamma_extrapolation,
+                      ExxSingularCorrectionMode singular_correction_mode,
                       double ucell_omega);
 
 } // namespace hamilt

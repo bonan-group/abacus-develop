@@ -1,0 +1,10 @@
+K_POINTS
+0
+Gamma
+2 2 2
+
+K_POINTS_BAND
+2
+Line_Direct
+0.0 0.0 0.0 2
+0.5 0.0 0.0 1

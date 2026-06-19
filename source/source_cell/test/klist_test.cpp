@@ -498,6 +498,93 @@ TEST_F(KlistTest, ReadKpointsDirect)
     EXPECT_TRUE(kv->kd_done);
 }
 
+TEST_F(KlistTest, ReadKpointsMixedBandLine)
+{
+    ModuleSymmetry::Symmetry::symm_flag = 0;
+    std::string k_file = "./support/KPT_mixed_band_line";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+
+    EXPECT_TRUE(kv->has_band_kpoints());
+    EXPECT_EQ(kv->get_nkstot(), 8);
+    EXPECT_EQ(kv->band_kvec_d.size(), 3);
+    EXPECT_EQ(kv->band_kl_segids.size(), 3);
+    EXPECT_TRUE(kv->band_kd_done);
+    EXPECT_FALSE(kv->band_kc_done);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[0].x, 0.0);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[1].x, 0.25);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[2].x, 0.5);
+    EXPECT_EQ(kv->band_kl_segids[0], kv->band_kl_segids[1]);
+}
+
+TEST_F(KlistTest, ReadKpointsMixedBandLineAfterMpWithoutOffsets)
+{
+    ModuleSymmetry::Symmetry::symm_flag = 0;
+    std::string k_file = "./support/KPT_mixed_band_line_no_offsets";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+
+    EXPECT_TRUE(kv->has_band_kpoints());
+    EXPECT_EQ(kv->get_nkstot(), 8);
+    EXPECT_EQ(kv->band_kvec_d.size(), 3);
+    EXPECT_TRUE(kv->band_kd_done);
+    EXPECT_FALSE(kv->band_kc_done);
+    EXPECT_DOUBLE_EQ(kv->koffset[0], 0.0);
+    EXPECT_DOUBLE_EQ(kv->koffset[1], 0.0);
+    EXPECT_DOUBLE_EQ(kv->koffset[2], 0.0);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[2].x, 0.5);
+}
+
+TEST_F(KlistTest, ReadKpointsMixedBandDirect)
+{
+    std::string k_file = "./support/KPT_mixed_band_direct";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+
+    EXPECT_TRUE(kv->has_band_kpoints());
+    EXPECT_EQ(kv->get_nkstot(), 8);
+    EXPECT_EQ(kv->band_kvec_d.size(), 4);
+    EXPECT_EQ(kv->band_kl_segids.size(), 4);
+    EXPECT_TRUE(kv->band_kd_done);
+    EXPECT_FALSE(kv->band_kc_done);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[0].x, 0.0);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[1].x, 0.5);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[2].y, 0.5);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[3].z, 0.5);
+    EXPECT_EQ(kv->band_kl_segids[0], 0);
+    EXPECT_EQ(kv->band_kl_segids[3], 0);
+}
+
+TEST_F(KlistTest, SetMixedBandCartesianUsesReciprocalTranspose)
+{
+    std::string k_file = "./support/KPT_mixed_band_cartesian";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+    ASSERT_TRUE(kv->has_band_kpoints());
+    ASSERT_EQ(kv->band_kvec_c.size(), 2);
+    EXPECT_TRUE(kv->band_kc_done);
+    EXPECT_FALSE(kv->band_kd_done);
+
+    ModuleBase::Matrix3 latvec;
+    latvec.e11 = 1.0;
+    latvec.e12 = 2.0;
+    latvec.e13 = 3.0;
+    latvec.e21 = 4.0;
+    latvec.e22 = 6.0;
+    latvec.e23 = 8.0;
+    latvec.e31 = 2.0;
+    latvec.e32 = 5.0;
+    latvec.e33 = 9.0;
+
+    KVectorUtils::band_kvec_c2d(*kv, latvec);
+    ASSERT_EQ(kv->band_kvec_d.size(), 2);
+
+    const ModuleBase::Vector3<double> expected = kv->band_kvec_c[0] * latvec.Transpose();
+    EXPECT_NEAR(kv->band_kvec_d[0].x, expected.x, 1e-12);
+    EXPECT_NEAR(kv->band_kvec_d[0].y, expected.y, 1e-12);
+    EXPECT_NEAR(kv->band_kvec_d[0].z, expected.z, 1e-12);
+}
+
 TEST_F(KlistTest, ReadKpointsWarning1)
 {
     std::string k_file = "arbitrary_1";
@@ -1046,4 +1133,3 @@ TEST_F(KlistTest, IbzKpointCustomWeights)
     ClearUcell();
     remove("tmp_klist_custom_weights");
 }
-

@@ -36,6 +36,7 @@ class Exx_HelperBase
     virtual void set_op_first_iter(bool flag) = 0;
 
     virtual void set_op_exx(void* op) = 0;
+    virtual void* get_op_exx() const = 0;
 };
 
 #endif // EXX_HELPER_BASE_H

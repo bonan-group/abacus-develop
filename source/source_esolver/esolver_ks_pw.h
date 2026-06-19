@@ -49,6 +49,10 @@ class ESolver_KS_PW : public ESolver_KS
 
     virtual void allocate_hamilt(const UnitCell& ucell);
 
+    void validate_mixed_band_targets(const Input_para& inp) const;
+
+    void solve_mixed_band_targets(UnitCell& ucell);
+
     // Electronic wave function psi
     Setup_Psi_pw stp;
 

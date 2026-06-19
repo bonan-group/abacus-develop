@@ -80,6 +80,20 @@ void kvec_c2d(K_Vectors& kv, const ModuleBase::Matrix3& latvec)
     }
 }
 
+void band_kvec_c2d(K_Vectors& kv, const ModuleBase::Matrix3& latvec)
+{
+    if (kv.band_kvec_d.size() != kv.band_kvec_c.size())
+    {
+        kv.band_kvec_d.resize(kv.band_kvec_c.size());
+    }
+
+    ModuleBase::Matrix3 RT = latvec.Transpose();
+    for (size_t ik = 0; ik != kv.band_kvec_c.size(); ++ik)
+    {
+        kv.band_kvec_d[ik] = kv.band_kvec_c[ik] * RT;
+    }
+}
+
 void set_both_kvec(K_Vectors& kv, const ModuleBase::Matrix3& G, const ModuleBase::Matrix3& R, std::string& skpt)
 {
     if (true) // Originally GlobalV::FINAL_SCF, but we don't have this variable in the new code.
@@ -225,6 +239,8 @@ void kvec_mpi_k(K_Vectors& kv)
     Parallel_Common::bcast_bool(kv.kc_done);
 
     Parallel_Common::bcast_bool(kv.kd_done);
+    Parallel_Common::bcast_bool(kv.band_kc_done);
+    Parallel_Common::bcast_bool(kv.band_kd_done);
 
     Parallel_Common::bcast_int(kv.nspin);
 
@@ -236,6 +252,12 @@ void kvec_mpi_k(K_Vectors& kv)
 
     kv.kl_segids.resize(kv.nkstot);
     Parallel_Common::bcast_int(kv.kl_segids.data(), kv.nkstot);
+
+    int band_nkstot = kv.band_kd_done ? static_cast<int>(kv.band_kvec_d.size())
+                                      : static_cast<int>(kv.band_kvec_c.size());
+    Parallel_Common::bcast_int(band_nkstot);
+    kv.band_kl_segids.resize(band_nkstot);
+    Parallel_Common::bcast_int(kv.band_kl_segids.data(), band_nkstot);
 
     Parallel_Common::bcast_double(kv.koffset, 3);
 
@@ -261,6 +283,8 @@ void kvec_mpi_k(K_Vectors& kv)
     std::vector<double> kvec_c_aux(kv.nkstot * 3);
     std::vector<double> kvec_d_aux(kv.nkstot * 3);
     std::vector<double> kvec_c_full_aux(kv.nkstot_full * 3);
+    std::vector<double> band_kvec_c_aux(band_nkstot * 3);
+    std::vector<double> band_kvec_d_aux(band_nkstot * 3);
 
     // collect and process in rank 0
     if (GlobalV::MY_RANK == 0)
@@ -279,6 +303,21 @@ void kvec_mpi_k(K_Vectors& kv)
             kvec_c_full_aux[3 * ik + 1] = kv.kvec_c_full[ik].y;
             kvec_c_full_aux[3 * ik + 2] = kv.kvec_c_full[ik].z;
         }
+        for (int ik = 0; ik < band_nkstot; ++ik)
+        {
+            if (kv.band_kc_done)
+            {
+                band_kvec_c_aux[3 * ik] = kv.band_kvec_c[ik].x;
+                band_kvec_c_aux[3 * ik + 1] = kv.band_kvec_c[ik].y;
+                band_kvec_c_aux[3 * ik + 2] = kv.band_kvec_c[ik].z;
+            }
+            if (kv.band_kd_done)
+            {
+                band_kvec_d_aux[3 * ik] = kv.band_kvec_d[ik].x;
+                band_kvec_d_aux[3 * ik + 1] = kv.band_kvec_d[ik].y;
+                band_kvec_d_aux[3 * ik + 2] = kv.band_kvec_d[ik].z;
+            }
+        }
     }
 
     // broadcast k point data to all processors
@@ -288,6 +327,25 @@ void kvec_mpi_k(K_Vectors& kv)
     Parallel_Common::bcast_double(kvec_c_aux.data(), kv.nkstot * 3);
     Parallel_Common::bcast_double(kvec_d_aux.data(), kv.nkstot * 3);
     Parallel_Common::bcast_double(kvec_c_full_aux.data(), kv.nkstot_full * 3);
+    Parallel_Common::bcast_double(band_kvec_c_aux.data(), band_nkstot * 3);
+    Parallel_Common::bcast_double(band_kvec_d_aux.data(), band_nkstot * 3);
+    kv.band_kvec_c.resize(kv.band_kc_done ? band_nkstot : 0);
+    kv.band_kvec_d.resize(kv.band_kd_done ? band_nkstot : 0);
+    for (int ik = 0; ik < band_nkstot; ++ik)
+    {
+        if (kv.band_kc_done)
+        {
+            kv.band_kvec_c[ik].x = band_kvec_c_aux[3 * ik];
+            kv.band_kvec_c[ik].y = band_kvec_c_aux[3 * ik + 1];
+            kv.band_kvec_c[ik].z = band_kvec_c_aux[3 * ik + 2];
+        }
+        if (kv.band_kd_done)
+        {
+            kv.band_kvec_d[ik].x = band_kvec_d_aux[3 * ik];
+            kv.band_kvec_d[ik].y = band_kvec_d_aux[3 * ik + 1];
+            kv.band_kvec_d[ik].z = band_kvec_d_aux[3 * ik + 2];
+        }
+    }
 
     // process k point data in each processor
     kv.renew(kv.nks * kv.nspin);
@@ -840,7 +898,7 @@ void kvec_ibz_kpoint(K_Vectors& kv,
         point.active = true;
         point.weight = full_k_weights[i];
         point.full_kvec_d = kv.kvec_d[i];
-        point.full_kvec_c = kv.kvec_c_full[i];
+        point.full_kvec_c = point.full_kvec_d * ucell.G;
         point.gmatrix = gmatrix[isym];
         point.kgmatrix = kgmatrix[isym];
         point.gtrans = gtrans[isym];

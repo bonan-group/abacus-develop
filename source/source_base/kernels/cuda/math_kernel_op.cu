@@ -174,6 +174,10 @@ void gemv_op<double, base_device::DEVICE_GPU>::operator()(const char& trans,
                                                           double* Y,
                                                           const int& incy)
 {
+    if (m == 0 || n == 0)
+    {
+        return;
+    }
     cublasOperation_t cutrans = judge_trans_op(false, trans, "gemv_op");
     CHECK_CUBLAS(cublasDgemv(cublas_handle, cutrans, m, n, alpha, A, lda, X, incx, beta, Y, incy));
 }
@@ -191,6 +195,10 @@ void gemv_op<float, base_device::DEVICE_GPU>::operator()(const char& trans,
                                                           float* Y,
                                                           const int& incy)
 {
+    if (m == 0 || n == 0)
+    {
+        return;
+    }
     cublasOperation_t cutrans = judge_trans_op(false, trans, "gemv_op");
     CHECK_CUBLAS(cublasSgemv(cublas_handle, cutrans, m, n, alpha, A, lda, X, incx, beta, Y, incy));
 }
@@ -210,6 +218,10 @@ void gemv_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(const cha
                                                                        std::complex<float>* Y,
                                                                        const int& incy)
 {
+    if (m == 0 || n == 0)
+    {
+        return;
+    }
     cublasOperation_t cutrans = judge_trans_op(true, trans, "gemv_op");
     cuFloatComplex alpha = make_cuFloatComplex(alpha_in->real(), alpha_in->imag());
     cuFloatComplex beta = make_cuFloatComplex(beta_in->real(), beta_in->imag());
@@ -229,12 +241,27 @@ void gemv_op<std::complex<double>, base_device::DEVICE_GPU>::operator()(const ch
                                                                         std::complex<double>* Y,
                                                                         const int& incy)
 {
+    if (m == 0 || n == 0)
+    {
+        return;
+    }
     cublasOperation_t cutrans = judge_trans_op(true, trans, "gemv_op");
     cuDoubleComplex alpha = make_cuDoubleComplex(alpha_in->real(), alpha_in->imag());
     cuDoubleComplex beta = make_cuDoubleComplex(beta_in->real(), beta_in->imag());
     // icpc and nvcc have some compatible problems
     // We must use cuDoubleComplex instead of converting std::complex<double>* to cuDoubleComplex*
-    CHECK_CUBLAS(cublasZgemv(cublas_handle, cutrans, m, n, &alpha, (cuDoubleComplex*)A, lda, (cuDoubleComplex*)X, incx, &beta, (cuDoubleComplex*)Y, incy));
+    CHECK_CUBLAS(cublasZgemv(cublas_handle,
+                             cutrans,
+                             m,
+                             n,
+                             &alpha,
+                             (cuDoubleComplex*)A,
+                             lda,
+                             (cuDoubleComplex*)X,
+                             incx,
+                             &beta,
+                             (cuDoubleComplex*)Y,
+                             incy));
 }
 
 template <>
@@ -252,6 +279,10 @@ void gemm_op<float, base_device::DEVICE_GPU>::operator()(const char& transa,
                                                          float* c,
                                                          const int& ldc)
 {
+    if (m == 0 || n == 0 || k == 0)
+    {
+        return;
+    }
     cublasOperation_t cutransA = judge_trans_op(false, transa, "gemm_op");
     cublasOperation_t cutransB = judge_trans_op(false, transb, "gemm_op");
     CHECK_CUBLAS(cublasSgemm(cublas_handle, cutransA, cutransB, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc));
@@ -272,6 +303,10 @@ void gemm_op<double, base_device::DEVICE_GPU>::operator()(const char& transa,
                                                           double* c,
                                                           const int& ldc)
 {
+    if (m == 0 || n == 0 || k == 0)
+    {
+        return;
+    }
     cublasOperation_t cutransA = judge_trans_op(false, transa, "gemm_op");
     cublasOperation_t cutransB = judge_trans_op(false, transb, "gemm_op");
     CHECK_CUBLAS(cublasDgemm(cublas_handle, cutransA, cutransB, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc));
@@ -291,6 +326,10 @@ void gemm_op<std::complex<float>, base_device::DEVICE_GPU>::operator()(const cha
                                                                        std::complex<float>* c,
                                                                        const int& ldc)
 {
+    if (m == 0 || n == 0 || k == 0)
+    {
+        return;
+    }
     cublasOperation_t cutransA = judge_trans_op(true, transa, "gemm_op");
     cublasOperation_t cutransB = judge_trans_op(true, transb, "gemm_op");
     CHECK_CUBLAS(cublasCgemm(cublas_handle, cutransA, cutransB, m, n ,k, (float2*)alpha, (float2*)a , lda, (float2*)b, ldb, (float2*)beta, (float2*)c, ldc));
@@ -311,6 +350,10 @@ void gemm_op<std::complex<double>, base_device::DEVICE_GPU>::operator()(const ch
                                                                         std::complex<double>* c,
                                                                         const int& ldc)
 {
+    if (m == 0 || n == 0 || k == 0)
+    {
+        return;
+    }
     cublasOperation_t cutransA = judge_trans_op(true, transa, "gemm_op");
     cublasOperation_t cutransB = judge_trans_op(true, transb, "gemm_op");
     CHECK_CUBLAS(cublasZgemm(cublas_handle, cutransA, cutransB, m, n ,k, (double2*)alpha, (double2*)a , lda, (double2*)b, ldb, (double2*)beta, (double2*)c, ldc));

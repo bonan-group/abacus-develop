@@ -4,11 +4,11 @@
 #include "source_base/kernels/math_kernel_op.h"
 #include "source_base/macros.h"
 #include "source_cell/klist.h"
-#include "source_esolver/esolver_ks_pw.h"
 #include "source_estate/module_pot/potential_new.h"
 #include "source_hamilt/hamilt.h"
 #include "source_lcao/module_dftu/dftu.h" // mohan add 2025-11-06
 #include "source_pw/module_pwdft/exx_helper.h"
+#include "source_pw/module_pwdft/op_pw_exx.h"
 #include "source_pw/module_pwdft/vnl_pw.h"
 
 namespace hamilt
@@ -29,7 +29,8 @@ class HamiltPW : public Hamilt<T, Device>
              K_Vectors* p_kv,
              pseudopot_cell_vnl* nlpp,
              Plus_U* p_dftu, // mohan add 2025-11-06
-             const UnitCell* ucell);
+             const UnitCell* ucell,
+             OperatorEXXPW<T, Device>* source_exx = nullptr);
 
     ~HamiltPW();
 

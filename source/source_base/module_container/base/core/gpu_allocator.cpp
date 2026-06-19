@@ -1,4 +1,5 @@
 #include <base/core/gpu_allocator.h>
+#include "source_base/module_device/device_check.h"
 
 #if defined(__CUDA)
 #include <cuda_runtime.h> // for CUDA APIs
@@ -21,7 +22,7 @@ void *GPUAllocator::allocate(size_t size) {
     void * ptr = nullptr;
     device_result_t result = device_malloc(&ptr, size);
     if (result != device_success) {
-        return nullptr;
+        CHECK_CUDA(result);
     }
     this->allocated_size_ = size;
     return ptr;
@@ -32,7 +33,7 @@ void *GPUAllocator::allocate(size_t size, size_t alignment) {
     void * ptr = nullptr;
     device_result_t result = device_malloc(&ptr, size);
     if (result != device_success) {
-        return nullptr;
+        CHECK_CUDA(result);
     }
     this->allocated_size_ = size;
     return ptr;
