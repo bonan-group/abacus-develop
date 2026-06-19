@@ -840,7 +840,7 @@ void kvec_ibz_kpoint(K_Vectors& kv,
         point.active = true;
         point.weight = full_k_weights[i];
         point.full_kvec_d = kv.kvec_d[i];
-        point.full_kvec_c = kv.kvec_c_full[i];
+        point.full_kvec_c = point.full_kvec_d * ucell.G;
         point.gmatrix = gmatrix[isym];
         point.kgmatrix = kgmatrix[isym];
         point.gtrans = gtrans[isym];
