@@ -585,6 +585,71 @@ TEST_F(KlistTest, SetMixedBandCartesianUsesReciprocalTranspose)
     EXPECT_NEAR(kv->band_kvec_d[0].z, expected.z, 1e-12);
 }
 
+TEST_F(KlistTest, MakeBandTargetKvectorsSpinExpanded)
+{
+#ifdef __MPI
+    int mpi_initialized = 0;
+    MPI_Initialized(&mpi_initialized);
+    if (!mpi_initialized)
+    {
+        MPI_Init(nullptr, nullptr);
+    }
+#endif
+    GlobalV::KPAR = 1;
+    GlobalV::MY_POOL = 0;
+    GlobalV::RANK_IN_POOL = 0;
+    GlobalV::NPROC = 1;
+
+    kv->nspin = 1;
+    kv->band_kvec_d = {{0.0, 0.0, 0.0}, {0.5, 0.0, 0.0}, {0.5, 0.5, 0.0}, {0.5, 0.5, 0.5}};
+    kv->band_kvec_c = kv->band_kvec_d;
+    kv->band_kl_segids = {0, 0, 1, 1};
+    kv->band_kd_done = true;
+    kv->band_kc_done = true;
+
+    K_Vectors band_kv = kv->make_band_target_kvectors(2);
+
+    EXPECT_EQ(band_kv.get_nkstot(), 8);
+    EXPECT_EQ(band_kv.get_nkstot_full(), 4);
+    EXPECT_EQ(band_kv.get_nks(), 8);
+    EXPECT_EQ(band_kv.kvec_d.size(), 8);
+    EXPECT_EQ(band_kv.kvec_d[4].x, band_kv.kvec_d[0].x);
+    EXPECT_EQ(band_kv.isk[0], 0);
+    EXPECT_EQ(band_kv.isk[4], 1);
+    EXPECT_NEAR(band_kv.wk[0], 0.25, 1e-12);
+    EXPECT_EQ(band_kv.exx_rep_spin_index(band_kv.exx_full_q_map[1], 1), 5);
+}
+
+TEST_F(KlistTest, FinalizeExxFullQMapNormalizesRepresentativeWeights)
+{
+    kv->nspin = 1;
+    kv->set_nkstot(2);
+    kv->set_nkstot_full(2);
+    kv->set_nks(2);
+    kv->wk = {0.6, 0.4};
+    kv->para_k.nks_pool = {2};
+
+    K_Vectors::ExxFullPoint point0;
+    point0.full_index = 0;
+    point0.rep_index = 0;
+    point0.rep_local_index = 0;
+    point0.weight = 0.25;
+
+    K_Vectors::ExxFullPoint point1 = point0;
+    point1.full_index = 1;
+    point1.weight = 0.75;
+
+    kv->exx_full_q_map = {point0, point1};
+    kv->exx_full_k_map = {point0, point1};
+    kv->normalize_exx_full_q_map_weights();
+    kv->finalize_exx_full_q_map();
+
+    EXPECT_NEAR(kv->exx_full_q_map[0].weight, 0.075, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[1].weight, 0.225, 1e-12);
+    EXPECT_EQ(kv->exx_full_q_map[1].rep_pool, 0);
+    EXPECT_EQ(kv->exx_full_q_map[1].rep_local_index, 0);
+}
+
 TEST_F(KlistTest, ReadKpointsWarning1)
 {
     std::string k_file = "arbitrary_1";

@@ -207,6 +207,36 @@ TEST_F(InputTest, Item_test)
         output = testing::internal::GetCapturedStdout();
         EXPECT_THAT(output, testing::HasSubstr("NOTICE"));
     }
+    { // PW EXX tile sizes
+        auto it = find_label("exx_batch_fft_size", readinput.input_lists);
+        param.input.exx_batch_fft_size = 1;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_batch_fft_size = 128;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_batch_fft_size = 129;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("exx_batch_fft_size"));
+
+        it = find_label("exx_band_tile_size", readinput.input_lists);
+        param.input.exx_band_tile_size = 1;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_band_tile_size = 0;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("exx_band_tile_size"));
+
+        it = find_label("exx_q_tile_size", readinput.input_lists);
+        param.input.exx_q_tile_size = 1;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_q_tile_size = 0;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("exx_q_tile_size"));
+    }
     { // mem_saver
         auto it = find_label("mem_saver", readinput.input_lists);
         param.input.mem_saver = 1;
