@@ -42,10 +42,15 @@ ElecStatePW<T, Device>::~ElecStatePW()
             delmem_complex_op()(this->rhog_data);
             delete[] this->rhog;
         }
-        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+        if (this->kin_r_data != nullptr)
         {
             delmem_var_op()(this->kin_r_data);
+            this->kin_r_data = nullptr;
+        }
+        if (this->kin_r != nullptr)
+        {
             delete[] this->kin_r;
+            this->kin_r = nullptr;
         }
     }
     if (PARAM.globalv.use_uspp)
@@ -81,7 +86,7 @@ void ElecStatePW<T, Device>::init_rho_data()
                 this->rhog[ii] = this->rhog_data + ii * this->charge->rhopw->npw;
             }
         }
-        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0 || PARAM.inp.out_training_data)
         {
             this->kin_r = new Real*[this->charge->nspin];
             resmem_var_op()(this->kin_r_data, this->charge->nspin * this->charge->nrxx);
@@ -97,7 +102,7 @@ void ElecStatePW<T, Device>::init_rho_data()
         {
             this->rhog = reinterpret_cast<T**>(this->charge->rhog);
         }
-        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0 || PARAM.inp.out_training_data)
         {
             this->kin_r = reinterpret_cast<Real **>(this->charge->kin_r);
         }

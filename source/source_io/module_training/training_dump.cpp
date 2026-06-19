@@ -394,7 +394,7 @@ void write_training_dump(const UnitCell& ucell,
     }
 
     std::vector<double> tau_local;
-    if (XC_Functional::get_ked_flag() && chr.kin_r != nullptr)
+    if (chr.kin_r != nullptr)
     {
         tau_local.assign(nspin * nrxx, 0.0);
         const double pi = std::acos(-1.0);

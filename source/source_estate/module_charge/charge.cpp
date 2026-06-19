@@ -56,7 +56,7 @@ void Charge::set_rhopw(ModulePW::PW_Basis* rhopw_in)
 // mohan add 2025-12-02
 bool Charge::kin_density()
 {
-	if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+	if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0 || PARAM.inp.out_training_data)
 	{
 		return true;
 	}
@@ -80,13 +80,20 @@ void Charge::destroy()
         delete[] _space_rho_save;
         delete[] _space_rhog;
         delete[] _space_rhog_save;
-        delete[] _space_kin_r;
-        delete[] _space_kin_r_save;
-        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+        if (kin_r != nullptr)
         {
             delete[] kin_r;
-            delete[] kin_r_save;
+            kin_r = nullptr;
         }
+        if (kin_r_save != nullptr)
+        {
+            delete[] kin_r_save;
+            kin_r_save = nullptr;
+        }
+        delete[] _space_kin_r;
+        delete[] _space_kin_r_save;
+        _space_kin_r = nullptr;
+        _space_kin_r_save = nullptr;
     }
 }
 

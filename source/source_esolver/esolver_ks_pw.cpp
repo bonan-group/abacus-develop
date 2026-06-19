@@ -360,14 +360,6 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
     ModuleBase::TITLE("ESolver_KS_PW", "after_scf");
     ModuleBase::timer::start("ESolver_KS_PW", "after_scf");
 
-    // Calculate kinetic energy density tau for ELF if needed
-    if (PARAM.inp.out_elf[0] > 0)
-    {
-        auto* elec_pw = static_cast<elecstate::ElecStatePW<T, Device>*>(this->pelec);
-        auto& psi = *this->stp.template get_psi_t<T, Device>();
-        elec_pw->cal_tau(psi);
-    }
-
     const bool write_training_data = PARAM.inp.out_training_data;
     const double saved_exx_energy = this->pelec->f_en.exx;
     if (write_training_data)
@@ -384,6 +376,16 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
         GlobalV::ofs_running << "training_pbe0_exx_label: hybrid-scaled EXX energy = "
                              << 0.5 * this->pelec->f_en.exx << " Ha" << std::endl;
         ModuleBase::timer::end("ESolver_KS_PW", "training_pbe0_exx_label");
+    }
+
+    // Calculate kinetic energy density tau immediately before output paths
+    // that consume it. Keep this independent of the XC meta-GGA flag so PBE
+    // training dumps do not enter the meta-GGA XC path.
+    if ((PARAM.inp.out_elf[0] > 0 || PARAM.inp.out_training_data) && this->chr.kin_r != nullptr)
+    {
+        auto* elec_pw = static_cast<elecstate::ElecStatePW<T, Device>*>(this->pelec);
+        auto& psi = *this->stp.template get_psi_t<T, Device>();
+        elec_pw->cal_tau(psi);
     }
 
     // Call 'after_scf' of ESolver_KS

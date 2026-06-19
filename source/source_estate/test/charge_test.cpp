@@ -99,6 +99,18 @@ TEST_F(ChargeTest, Constructor)
     EXPECT_FALSE(charge->allocate_rho_final_scf);
 }
 
+TEST_F(ChargeTest, OutTrainingDataRequestsKineticEnergyDensity)
+{
+    XC_Functional::func_type = 1;
+    XC_Functional::ked_flag = false;
+    XC_Functional::set_ked_flag(false);
+    PARAM.input.out_elf[0] = 0;
+    PARAM.input.out_training_data = true;
+
+    EXPECT_TRUE(charge->kin_density());
+    EXPECT_FALSE(XC_Functional::get_ked_flag());
+}
+
 TEST_F(ChargeTest, Allocate)
 {
     // ucell info

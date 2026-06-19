@@ -129,7 +129,7 @@ void Charge::rho_mpi()
     for (int is = 0; is < PARAM.inp.nspin; ++is)
     {
         reduce_diff_pools(this->rho[is]);
-        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+        if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0 || PARAM.inp.out_training_data)
         {
             reduce_diff_pools(this->kin_r[is]);
         }
@@ -148,7 +148,7 @@ void Charge::kin_r_mpi()
     }
     ModuleBase::timer::start("Charge", "kin_r_mpi");
 
-    if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0)
+    if (XC_Functional::get_ked_flag() || PARAM.inp.out_elf[0] > 0 || PARAM.inp.out_training_data)
     {
         for (int is = 0; is < PARAM.inp.nspin; ++is)
         {
