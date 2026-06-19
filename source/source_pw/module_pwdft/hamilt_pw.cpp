@@ -12,6 +12,8 @@
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 #include "source_io/module_parameter/parameter.h"
 
+#include <algorithm>
+
 namespace hamilt
 {
 

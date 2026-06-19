@@ -90,3 +90,65 @@ The rest of the files arranged in sections, each section with a header such as b
 ```
 
 The shape of text contents of element `<data>` is (Number of k-points, Number of bands)
+
+## Hybrid PW Band Structure With EXX
+
+For plane-wave hybrid-functional calculations, ABACUS can calculate band eigenvalues on a separate band path after the hybrid SCF calculation converges. This workflow is different from the ordinary NSCF workflow above: keep `calculation` set to `scf`, and provide the SCF k-point mesh plus an additional `K_POINTS_BAND` section in the `KPT` file.
+
+The INPUT file should include the PW hybrid settings and request band output, for example:
+
+```
+INPUT_PARAMETERS
+calculation             scf
+basis_type              pw
+ks_solver               dav
+out_band                1
+
+exx_hybrid_step         1
+exxace                  1
+exx_separate_loop       1
+```
+
+The `KPT` file first defines the k-point mesh used by the SCF calculation, then defines the target band path:
+
+```
+K_POINTS
+0
+Gamma
+2 2 2 0 0 0
+
+K_POINTS_BAND
+4
+Line
+0.0 0.0 0.0 10
+0.5 0.0 0.0 10
+0.5 0.5 0.0 10
+0.0 0.0 0.0 1
+```
+
+`K_POINTS_BAND` supports the following coordinate modes:
+
+- `Line`, `L`, or `Line_Direct`: line-mode interpolation in direct coordinates. Each special point line contains `kx ky kz n`, where `n` is the number of points generated from that special point toward the next one.
+- `Line_Cartesian`: line-mode interpolation in Cartesian coordinates, with the same `kx ky kz n` format.
+- `Direct` or `D`: explicit target k-point list in direct coordinates.
+- `Cartesian` or `C`: explicit target k-point list in Cartesian coordinates.
+
+For explicit `Direct` or `Cartesian` lists, only `kx ky kz` is used. A trailing weight value may be present for compatibility with ordinary `K_POINTS` files, but it is ignored:
+
+```
+K_POINTS_BAND
+2
+Direct
+0.0 0.0 0.0
+0.5 0.0 0.0
+```
+
+After the SCF calculation converges, ABACUS reuses the converged hybrid potential and EXX operator to solve the Hamiltonian on the `K_POINTS_BAND` path and writes the band eigenvalues through the usual `out_band` output files.
+
+Current restrictions:
+
+- This workflow requires `calculation scf`, not `calculation nscf`.
+- It is implemented for `basis_type pw` hybrid EXX calculations.
+- `exxace 1` and `exx_separate_loop 1` are required.
+- `out_band 1` is required when `K_POINTS_BAND` is present.
+- `KPAR > 1` is not supported for this workflow.

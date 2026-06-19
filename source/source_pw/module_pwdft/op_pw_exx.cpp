@@ -1787,6 +1787,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T_in, Device_in> *op
     this->psi = op->psi;
     this->ctx = op->ctx;
     this->cpu_ctx = op->cpu_ctx;
+    this->options = op->options;
     this->gamma_extrapolation = op->gamma_extrapolation;
     this->singular_correction_mode = op->singular_correction_mode;
     this->fock_div_local = op->fock_div_local;
