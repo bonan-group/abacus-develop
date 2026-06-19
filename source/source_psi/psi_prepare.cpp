@@ -8,14 +8,87 @@
 #include "source_base/tool_quit.h"
 #include "source_hsolver/diago_iter_assist.h"
 #include "source_io/module_parameter/parameter.h"
+#include "source_psi/kernels/psi_init_op.h"
 #include "source_psi/psi_init_atomic.h"
 #include "source_psi/psi_init_atomic_random.h"
 #include "source_psi/psi_init_file.h"
 #include "source_psi/psi_init_nao.h"
 #include "source_psi/psi_init_nao_random.h"
 #include "source_psi/psi_init_random.h"
+
 namespace psi
 {
+
+namespace
+{
+
+template <typename T, typename Device>
+struct GpuRandomInit
+{
+    static bool enabled(const psi_initializer<T>* psi_initer, const std::string& ks_solver)
+    {
+        return false;
+    }
+};
+
+#if defined __CUDA
+template <typename T>
+struct GpuRandomInit<T, base_device::DEVICE_GPU>
+{
+    static bool enabled(const psi_initializer<T>* psi_initer, const std::string& ks_solver)
+    {
+        return PARAM.inp.device == "gpu" && !PARAM.inp.psi_init_cpu_debug && PARAM.inp.pw_seed > 0 && ks_solver != "bpcg"
+               && psi_initer != nullptr && psi_initer->method() == "random";
+    }
+};
+#endif
+
+template <typename T, typename Device>
+struct RandomDeviceInitializer
+{
+    static void init(const ModulePW::PW_Basis_K& pw_wfc,
+                     psi::Psi<T, Device>* psi_device,
+                     const int nbands_start,
+                     const int nbasis,
+                     const int ik,
+                     const int ik_tot,
+                     const int random_seed)
+    {
+    }
+};
+
+#if defined __CUDA
+template <typename T>
+struct RandomDeviceInitializer<T, base_device::DEVICE_GPU>
+{
+    static void init(const ModulePW::PW_Basis_K& pw_wfc,
+                     psi::Psi<T, base_device::DEVICE_GPU>* psi_device,
+                     const int nbands_start,
+                     const int nbasis,
+                     const int ik,
+                     const int ik_tot,
+                     const int random_seed)
+    {
+        using Real = typename GetTypeReal<T>::type;
+        const int npol = PARAM.globalv.npol;
+        psi::init_random_op<T, base_device::DEVICE_GPU>()(psi_device->get_device(),
+                                                          psi_device->get_pointer(),
+                                                          nbands_start,
+                                                          pw_wfc.npwk[ik],
+                                                          pw_wfc.npwk_max,
+                                                          npol,
+                                                          ik,
+                                                          ik_tot,
+                                                          random_seed,
+                                                          pw_wfc.template get_gk2_data<Real>(),
+                                                          pw_wfc.get_igl2isz_data(),
+                                                          pw_wfc.nst,
+                                                          pw_wfc.nz);
+    }
+};
+#endif
+
+} // namespace
 
 template <typename T, typename Device>
 PSIPrepare<T, Device>::PSIPrepare(const std::string& init_wfc_in,
@@ -128,6 +201,7 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     ModuleBase::timer::start("PSIPrepare", "initialize_psi");
 
     const int nbands_start = this->psi_initer->nbands_start();
+    const bool gpu_random_init = GpuRandomInit<T, Device>::enabled(this->psi_initer.get(), this->ks_solver);
     const int nbands_l = psi->get_nbands();
     const int nbasis = psi->get_nbasis();
     const bool not_equal = (nbands_start != nbands_l);
@@ -140,9 +214,16 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     {
         if (not_equal)
         {
-            psi_cpu = new Psi<T>(1, nbands_start, nbasis, nbasis, true);
-            psi_device = PARAM.inp.device == "gpu" ? new psi::Psi<T, Device>(psi_cpu[0])
-                                                   : reinterpret_cast<psi::Psi<T, Device>*>(psi_cpu);
+            if (gpu_random_init)
+            {
+                psi_device = new psi::Psi<T, Device>(1, nbands_start, nbasis, nbasis, true);
+            }
+            else
+            {
+                psi_cpu = new Psi<T>(1, nbands_start, nbasis, nbasis, true);
+                psi_device = PARAM.inp.device == "gpu" ? new psi::Psi<T, Device>(psi_cpu[0])
+                                                       : reinterpret_cast<psi::Psi<T, Device>*>(psi_cpu);
+            }
         }
         else if (PARAM.inp.precision == "single")
         {
@@ -153,7 +234,10 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
             }
             else
             {
-                psi_cpu = new Psi<T>(1, nbands_start, nbasis, nbasis, true);
+                if (!gpu_random_init)
+                {
+                    psi_cpu = new Psi<T>(1, nbands_start, nbasis, nbasis, true);
+                }
                 psi_device = kspw_psi;
             }
         }
@@ -164,6 +248,7 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     for (int ik = 0; ik < this->pw_wfc.nks; ik++)
     {
         if(PARAM.inp.use_k_continuity && ik > 0) continue;
+        const int ik_tot = this->kv.ik2iktot.empty() ? ik : this->kv.ik2iktot[ik];
         //! Fix the wavefunction to initialize at given kpoint
         psi->fix_k(ik);
         kspw_psi->fix_k(ik);
@@ -173,10 +258,23 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
         if (fill)
         {
             //! initialize psi_cpu
-            this->psi_initer->init_psig(psi_cpu->get_pointer(), ik);
-            if (psi_device->get_pointer() != psi_cpu->get_pointer())
+            if (gpu_random_init)
             {
-                syncmem_h2d_op()(psi_device->get_pointer(), psi_cpu->get_pointer(), nbands_start * nbasis);
+                RandomDeviceInitializer<T, Device>::init(this->pw_wfc,
+                                                         psi_device,
+                                                         nbands_start,
+                                                         nbasis,
+                                                         ik,
+                                                         ik_tot,
+                                                         PARAM.inp.pw_seed);
+            }
+            else
+            {
+                this->psi_initer->init_psig(psi_cpu->get_pointer(), ik);
+                if (psi_device->get_pointer() != psi_cpu->get_pointer())
+                {
+                    syncmem_h2d_op()(psi_device->get_pointer(), psi_cpu->get_pointer(), nbands_start * nbasis);
+                }
             }
 
 
@@ -245,13 +343,16 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     {
         if (not_equal)
         {
-            delete psi_cpu;
+            if (!gpu_random_init)
+            {
+                delete psi_cpu;
+            }
             if (PARAM.inp.device == "gpu")
             {
                 delete psi_device;
             }
         }
-        else if (PARAM.inp.precision == "single" && PARAM.inp.device == "gpu")
+        else if (PARAM.inp.precision == "single" && PARAM.inp.device == "gpu" && !gpu_random_init)
         {
             delete psi_cpu;
         }

@@ -404,6 +404,17 @@ int& PW_Basis_K::getigl2isz(const int ik, const int igl) const
 {
     return this->igl2isz_k[ik * this->npwk_max + igl];
 }
+
+const int* PW_Basis_K::get_igl2isz_data() const
+{
+#if defined(__CUDA) || defined(__ROCM)
+    if (this->device == "gpu")
+    {
+        return this->d_igl2isz_k;
+    }
+#endif
+    return this->igl2isz_k;
+}
 int& PW_Basis_K::getigl2ig(const int ik, const int igl) const
 {
     return this->igl2ig_k[ik * this->npwk_max + igl];

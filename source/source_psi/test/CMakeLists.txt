@@ -24,4 +24,12 @@ AddTest(
 )
 endif()
 
+if(USE_CUDA)
+AddTest(
+    TARGET MODULE_PSI_init_gpu_test
+    LIBS parameter ${math_libs} base device psi
+    SOURCES psi_init_gpu_test.cpp
+)
+endif()
+
 install(DIRECTORY support DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

@@ -97,6 +97,7 @@ if(USE_CUDA)
     source_pw/module_pwdft/kernels/cuda/mul_potential_op.cu
     source_pw/module_pwdft/kernels/cuda/vec_mul_vec_complex.cu
     source_pw/module_pwdft/kernels/cuda/exx_cal_energy_op.cu
+    source_psi/kernels/cuda/psi_init_op.cu
   )
 endif()
 

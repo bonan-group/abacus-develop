@@ -257,6 +257,7 @@ public:
     ModuleBase::Vector3<double> getgpluskcar(const int ik, const int igl) const;
     //get igl2isz_k
     int& getigl2isz(const int ik, const int igl) const;
+    const int* get_igl2isz_data() const;
     //get igl2ig_k or igk(ik,ig) in older ABACUS
     int& getigl2ig(const int ik, const int igl) const;
 
@@ -280,4 +281,3 @@ private:
 #endif //PlaneWave_K class
 
 #include "./pw_basis_k_big.h" //temporary it will be removed
-

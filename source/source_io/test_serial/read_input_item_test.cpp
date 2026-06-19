@@ -332,6 +332,13 @@ TEST_F(InputTest, Item_test)
         it->second.reset_value(it->second, param);
         EXPECT_EQ(param.input.init_wfc, "nao");
     }
+    { // psi_init_cpu_debug
+        auto it = find_label("psi_init_cpu_debug", readinput.input_lists);
+        ASSERT_NE(it, readinput.input_lists.end());
+        it->second.str_values = {"1"};
+        it->second.read_value(it->second, param);
+        EXPECT_TRUE(param.input.psi_init_cpu_debug);
+    }
     { // init_chg
         auto it = find_label("init_chg", readinput.input_lists);
         param.input.init_chg = "get_pchg";
