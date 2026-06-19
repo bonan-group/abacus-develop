@@ -30,10 +30,6 @@
 #include <type_traits>
 #include <utility>
 
-#if defined(__ROCM) && !defined(__CUDA)
-#error "PW EXX q-tile GPU implementation is not implemented for ROCm in this merge."
-#endif
-
 namespace hamilt
 {
 
@@ -1084,6 +1080,10 @@ void OperatorEXXPW<T, Device>::act_op_qtile_gpu(const int nbands,
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::act_op_qtile_gpu", "GPU q-tile PW EXX wrapper called on CPU");
     }
+#if defined(__ROCM) && !defined(__CUDA)
+    ModuleBase::WARNING_QUIT("OperatorEXXPW::act_op_qtile_gpu",
+                             "PW EXX q-tile GPU implementation is not implemented for ROCm");
+#endif
     act_op_qtile(nbands,
                  nbasis,
                  npol,
@@ -1950,6 +1950,13 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
         ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
                                  "GPU q-tile PW EXX energy supports KPAR=1 only in this milestone");
     }
+#if defined(__ROCM) && !defined(__CUDA)
+    if (!is_cpu)
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                 "PW EXX q-tile GPU energy implementation is not implemented for ROCm");
+    }
+#endif
 
     const psi::Psi<T, Device> psi_saved = psi;
     set_psi_for_cache(*ppsi_);
