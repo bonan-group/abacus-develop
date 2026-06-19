@@ -77,3 +77,20 @@ TEST_F(BandTest, nscf_bands)
     EXPECT_THAT(str, testing::HasSubstr("   1 0.00000000 -27.21139600 -13.60569800 0.00000000"));
     ifs.close();
 }
+
+TEST_F(BandTest, nscf_bands_without_kline_segments)
+{
+    kv->kl_segids.clear();
+    kv->para_k.nks_pool.resize(1);
+    kv->para_k.nks_pool[0] = nks;
+    kv->para_k.nkstot_np = nks;
+    kv->para_k.nks_np = nks;
+
+    ModuleIO::nscf_bands(is, out_band_dir, nband, fermie, 8, ekb, *kv);
+
+    std::ifstream ifs(out_band_dir);
+    std::string str((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ASSERT_TRUE(ifs.is_open());
+    EXPECT_THAT(str, testing::HasSubstr("   1 0.00000000 -27.21139600 -13.60569800 0.00000000"));
+    ifs.close();
+}

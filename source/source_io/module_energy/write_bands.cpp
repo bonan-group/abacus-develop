@@ -75,6 +75,10 @@ void ModuleIO::nscf_bands(
     // nspin = 4, nkstot = nkstot_np
     const int nkstot_np = kv.para_k.nkstot_np;
     const int nks_np = kv.para_k.nks_np;
+    const bool has_kline_segments = kv.kl_segids.size() >= static_cast<size_t>(nkstot_np);
+    const auto same_kline_segment = [&kv, has_kline_segments](const int ik) {
+        return !has_kline_segments || kv.kl_segids[ik] == kv.kl_segids[ik - 1];
+    };
 
 
 #ifdef __MPI
@@ -104,7 +108,7 @@ void ModuleIO::nscf_bands(
         {
             auto delta=kvec_c_global[ik]-kvec_c_global[ik-1];
             klength[ik] = klength[ik-1];
-            klength[ik] += (kv.kl_segids[ik] == kv.kl_segids[ik-1]) ? delta.norm() : 0.0;
+            klength[ik] += same_kline_segment(ik) ? delta.norm() : 0.0;
         }
         //! first find if present kpoint in present pool
         if ( GlobalV::MY_POOL == kv.para_k.whichpool[ik] )
@@ -156,7 +160,7 @@ void ModuleIO::nscf_bands(
         {
             auto delta=kv.kvec_c[ik]-kv.kvec_c[ik-1];
             klength[ik] = klength[ik-1];
-            klength[ik] += (kv.kl_segids[ik] == kv.kl_segids[ik-1]) ? delta.norm() : 0.0;
+            klength[ik] += same_kline_segment(ik) ? delta.norm() : 0.0;
         }
         if( kv.isk[ik] == is)
         {
