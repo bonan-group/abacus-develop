@@ -4,11 +4,13 @@
 #include <complex>
 #include <vector>
 #include <functional>
+#include <algorithm>
 #include "mixing_data_gpu.h"
 #include "source_base/matrix.h"
 #include "source_base/module_device/types.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_base/module_external/lapack_connector.h"
+#include "source_base/tool_quit.h"
 #include "kernels/mixing_op.h"
 
 namespace Base_Mixing
@@ -102,6 +104,17 @@ class Broyden_Mixing_GPU
                   std::function<double(const FPTYPE*, const FPTYPE*)> inner_product_gpu);
 
     /**
+     * @brief Calculate coefficients from batched GPU beta/gamma builders.
+     *
+     * The beta builder updates the overwritten dF row/column in raw slot order.
+     * The gamma builder fills gamma[i]=<dF_i,F> for active raw dF slots.
+     */
+    void cal_coef_from_beta_gamma(
+        const Mixing_Data_GPU<FPTYPE>& mdata,
+        std::function<void(const FPTYPE*, int, int, ModuleBase::matrix&)> build_beta_gpu,
+        std::function<void(const FPTYPE*, const FPTYPE*, int, std::vector<double>&)> build_gamma_gpu);
+
+    /**
      * @brief Mix data using computed coefficients
      *
      * result_d = sum_i coef[i] * mdata[i]
@@ -118,6 +131,9 @@ class Broyden_Mixing_GPU
   private:
     void alloc_gpu_memory();
     void free_gpu_memory();
+    void use_latest_coefficients(const Mixing_Data_GPU<FPTYPE>& mdata);
+    void sync_coefficients_to_device();
+    void set_identity_slot_map(const int ndim_use);
 
     int dFindex_move(const int& index) const
     {
@@ -136,10 +152,12 @@ class Broyden_Mixing_GPU
     FPTYPE* dF_d = nullptr;    // Residual differences [mixing_ndim * length]
     FPTYPE* temp_d = nullptr;  // Temporary buffer [length]
     FPTYPE* workspace_d = nullptr; // Workspace for inner products
+    FPTYPE* coef_d = nullptr;  // Coefficients mirrored to GPU for final mix
 
     // CPU memory for coefficient calculation
     ModuleBase::matrix beta_matrix;  // Inner product matrix
     std::vector<double> coef;        // Mixing coefficients
+    std::vector<int> coef_to_gpu_slot; // CPU coefficient index -> GPU history slot
 
     // State
     Mixing_Data_GPU<FPTYPE>* address = nullptr;
@@ -162,6 +180,8 @@ void Broyden_Mixing_GPU<FPTYPE>::alloc_gpu_memory()
             dF_d, mixing_ndim * length, "Broyden_dF");
         base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(
             temp_d, length, "Broyden_temp");
+        base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(
+            coef_d, data_ndim, "Broyden_coef");
 
         // Workspace for reductions (need enough blocks)
         const int max_blocks = (length + 255) / 256;
@@ -193,6 +213,47 @@ void Broyden_Mixing_GPU<FPTYPE>::free_gpu_memory()
         base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(workspace_d);
         workspace_d = nullptr;
     }
+    if (coef_d != nullptr)
+    {
+        base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(coef_d);
+        coef_d = nullptr;
+    }
+}
+
+template <typename FPTYPE>
+void Broyden_Mixing_GPU<FPTYPE>::use_latest_coefficients(const Mixing_Data_GPU<FPTYPE>& mdata)
+{
+    std::fill(coef.begin(), coef.end(), 0.0);
+    if (mdata.start >= 0 && mdata.start < static_cast<int>(coef.size()))
+    {
+        coef[mdata.start] = 1.0;
+    }
+    else if (!coef.empty())
+    {
+        coef[0] = 1.0;
+    }
+}
+
+template <typename FPTYPE>
+void Broyden_Mixing_GPU<FPTYPE>::set_identity_slot_map(const int ndim_use)
+{
+    coef_to_gpu_slot.resize(ndim_use);
+    for (int i = 0; i < ndim_use; ++i)
+    {
+        coef_to_gpu_slot[i] = i;
+    }
+}
+
+template <typename FPTYPE>
+void Broyden_Mixing_GPU<FPTYPE>::sync_coefficients_to_device()
+{
+    std::vector<FPTYPE> coef_fp(coef.size());
+    for (std::size_t i = 0; i < coef.size(); ++i)
+    {
+        coef_fp[i] = static_cast<FPTYPE>(coef[i]);
+    }
+    base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+        coef_d, coef_fp.data(), coef_fp.size());
 }
 
 template <typename FPTYPE>
@@ -205,10 +266,11 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
 {
     const std::size_t len = mdata.length;
     const base_device::DEVICE_GPU* ctx = nullptr;
+    const int len_i = static_cast<int>(len);
 
     // F = data_out - data_in (on GPU)
     mixing::vector_subtract_op<FPTYPE, base_device::DEVICE_GPU>()(
-        ctx, temp_d, data_out_d, data_in_d, static_cast<int>(len));
+        ctx, temp_d, data_out_d, data_in_d, len_i);
 
     // Apply Kerker screening (on GPU)
     if (screen != nullptr)
@@ -219,7 +281,7 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
     // mixed = data_in + mixing_beta * F (on GPU)
     // Store in temp buffer first, then push to mdata
     mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
-        ctx, temp_d, data_in_d, mixing_beta, temp_d, static_cast<int>(len));
+        ctx, temp_d, data_in_d, mixing_beta, temp_d, len_i);
 
     // Push mixed data to history
     mdata.push(temp_d);
@@ -230,13 +292,14 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
     // Verify we're bound to this mdata
     if (address != &mdata && address != nullptr)
     {
-        // Error: trying to use with different mdata
-        return;
+        ModuleBase::WARNING_QUIT(
+            "Broyden_Mixing",
+            "One Broyden_Mixing object can only bind one Mixing_Data object to calculate coefficients");
     }
 
     // Recompute F = data_out - data_in for coefficient calculation
     mixing::vector_subtract_op<FPTYPE, base_device::DEVICE_GPU>()(
-        ctx, temp_d, data_out_d, data_in_d, static_cast<int>(len));
+        ctx, temp_d, data_out_d, data_in_d, len_i);
 
     if (screen != nullptr)
     {
@@ -248,7 +311,7 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
         // First iteration: just store F
         address = &mdata;
         mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, F_d, temp_d, static_cast<int>(len));
+            ctx, F_d, temp_d, len_i);
     }
     else
     {
@@ -260,11 +323,11 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
 
         // dF = F_prev - F_curr (stored as dF = old_F - new_F)
         mixing::vector_subtract_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, dF_slot, F_d, temp_d, static_cast<int>(len));
+            ctx, dF_slot, F_d, temp_d, len_i);
 
         // Update F for next iteration
         mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, F_d, temp_d, static_cast<int>(len));
+            ctx, F_d, temp_d, len_i);
     }
 }
 
@@ -275,7 +338,9 @@ void Broyden_Mixing_GPU<FPTYPE>::cal_coef(
 {
     if (address != &mdata && address != nullptr)
     {
-        return;
+        ModuleBase::WARNING_QUIT(
+            "Broyden_mixing",
+            "One Broyden_Mixing object can only bind one Mixing_Data object to calculate coefficients");
     }
 
     const std::size_t len = mdata.length;
@@ -328,8 +393,16 @@ void Broyden_Mixing_GPU<FPTYPE>::cal_coef(
         // Use LAPACK dsysv
         dsysv_(&uu, &ndim_cal_dF, &m, beta_tmp.c, &ndim_cal_dF, iwork,
                gamma.data(), &ndim_cal_dF, work, &ndim_cal_dF, &info);
+        if (info != 0)
+        {
+            delete[] work;
+            delete[] iwork;
+            ModuleBase::WARNING_QUIT("Charge_Mixing", "Error when DSYSV.");
+        }
 
         // Compute final coefficients
+        std::fill(coef.begin(), coef.end(), 0.0);
+        set_identity_slot_map(mdata.ndim_use);
         coef[mdata.start] = 1.0 + gamma[dFindex_move(0)];
         for (int i = 1; i < ndim_cal_dF; ++i)
         {
@@ -339,13 +412,108 @@ void Broyden_Mixing_GPU<FPTYPE>::cal_coef(
 
         delete[] work;
         delete[] iwork;
+        sync_coefficients_to_device();
     }
     else
     {
-        coef[0] = 1.0;
+        use_latest_coefficients(mdata);
+        set_identity_slot_map(mdata.ndim_use);
+        sync_coefficients_to_device();
     }
 
     // Prepare dF for next iteration
+    FPTYPE* dFnext = dF_d + dFindex_move(1) * len;
+    const base_device::DEVICE_GPU* ctx = nullptr;
+    mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
+        ctx, dFnext, F_d, static_cast<int>(len));
+}
+
+template <typename FPTYPE>
+void Broyden_Mixing_GPU<FPTYPE>::cal_coef_from_beta_gamma(
+    const Mixing_Data_GPU<FPTYPE>& mdata,
+    std::function<void(const FPTYPE*, int, int, ModuleBase::matrix&)> build_beta_gpu,
+    std::function<void(const FPTYPE*, const FPTYPE*, int, std::vector<double>&)> build_gamma_gpu)
+{
+    if (address != &mdata && address != nullptr)
+    {
+        ModuleBase::WARNING_QUIT(
+            "Broyden_mixing",
+            "One Broyden_Mixing object can only bind one Mixing_Data object to calculate coefficients");
+    }
+
+    const std::size_t len = mdata.length;
+
+    if (ndim_cal_dF > 0)
+    {
+        ModuleBase::matrix beta_tmp(ndim_cal_dF, ndim_cal_dF);
+
+        for (int i = 0; i < ndim_cal_dF; ++i)
+        {
+            for (int j = i; j < ndim_cal_dF; ++j)
+            {
+                if (i != start_dF && j != start_dF)
+                {
+                    beta_tmp(i, j) = beta_matrix(i, j);
+                }
+                if (j != i)
+                {
+                    beta_tmp(j, i) = beta_tmp(i, j);
+                }
+            }
+        }
+
+        build_beta_gpu(dF_d, ndim_cal_dF, start_dF, beta_tmp);
+        for (int i = 0; i < ndim_cal_dF; ++i)
+        {
+            beta_matrix(start_dF, i) = beta_tmp(start_dF, i);
+            beta_matrix(i, start_dF) = beta_tmp(i, start_dF);
+        }
+        for (int i = 0; i < ndim_cal_dF; ++i)
+        {
+            for (int j = i + 1; j < ndim_cal_dF; ++j)
+            {
+                beta_tmp(j, i) = beta_tmp(i, j);
+            }
+        }
+
+        std::vector<double> gamma(ndim_cal_dF);
+        build_gamma_gpu(dF_d, F_d, ndim_cal_dF, gamma);
+
+        double* work = new double[ndim_cal_dF];
+        int* iwork = new int[ndim_cal_dF];
+        char uu = 'U';
+        int info = 0;
+        int m = 1;
+
+        dsysv_(&uu, &ndim_cal_dF, &m, beta_tmp.c, &ndim_cal_dF, iwork,
+               gamma.data(), &ndim_cal_dF, work, &ndim_cal_dF, &info);
+        if (info != 0)
+        {
+            delete[] work;
+            delete[] iwork;
+            ModuleBase::WARNING_QUIT("Charge_Mixing", "Error when DSYSV.");
+        }
+
+        std::fill(coef.begin(), coef.end(), 0.0);
+        set_identity_slot_map(mdata.ndim_use);
+        coef[mdata.start] = 1.0 + gamma[dFindex_move(0)];
+        for (int i = 1; i < ndim_cal_dF; ++i)
+        {
+            coef[mdata.index_move(-i)] = gamma[dFindex_move(-i)] - gamma[dFindex_move(-i + 1)];
+        }
+        coef[mdata.index_move(-ndim_cal_dF)] = -gamma[dFindex_move(-ndim_cal_dF + 1)];
+
+        delete[] work;
+        delete[] iwork;
+        sync_coefficients_to_device();
+    }
+    else
+    {
+        use_latest_coefficients(mdata);
+        set_identity_slot_map(mdata.ndim_use);
+        sync_coefficients_to_device();
+    }
+
     FPTYPE* dFnext = dF_d + dFindex_move(1) * len;
     const base_device::DEVICE_GPU* ctx = nullptr;
     mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
@@ -359,34 +527,22 @@ void Broyden_Mixing_GPU<FPTYPE>::mix_data(
 {
     const std::size_t len = mdata.length;
     const base_device::DEVICE_GPU* ctx = nullptr;
+    const int len_i = static_cast<int>(len);
 
-    // result = sum_i coef[i] * mdata[i]
-    // Start with coef[start] * mdata[start]
-    const FPTYPE* first_data = mdata.get_data_d(0);
-
-    // Initialize result = coef[0] * mdata[0]
-    mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
-        ctx, result_d, first_data, static_cast<int>(len));
-    mixing::vector_scale_op<FPTYPE, base_device::DEVICE_GPU>()(
-        ctx, result_d, static_cast<FPTYPE>(coef[mdata.start]), static_cast<int>(len));
-
-    // Add contributions from other history vectors
-    for (int i = 1; i < mdata.ndim_use; ++i)
+    if (len == 0 || mdata.ndim_use <= 0)
     {
-        int idx = mdata.index_move(-i);
-        const FPTYPE* hist_data = mdata.data_d + idx * len;
-
-        // result += coef[idx] * hist_data
-        // Using temp buffer for scaled version, then add
-        mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, temp_d, hist_data, static_cast<int>(len));
-        mixing::vector_scale_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, temp_d, static_cast<FPTYPE>(coef[idx]), static_cast<int>(len));
-
-        // result += temp (no direct add kernel, so use axpy with alpha=1)
-        mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, result_d, result_d, static_cast<FPTYPE>(1.0), temp_d, static_cast<int>(len));
+        return;
     }
+    if (mdata.ndim_use == 1)
+    {
+        mixing::vector_copy_op<FPTYPE, base_device::DEVICE_GPU>()(
+            ctx, result_d, mdata.get_data_d(0), len_i);
+        return;
+    }
+
+    mixing::gemv_op<FPTYPE, base_device::DEVICE_GPU>()(
+        ctx, 'N', len_i, mdata.ndim_tot, static_cast<FPTYPE>(1.0), mdata.data_d,
+        len_i, coef_d, 1, static_cast<FPTYPE>(0.0), result_d, 1);
 }
 
 // Explicit instantiations

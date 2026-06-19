@@ -14,20 +14,12 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 
 // Full GPU-resident mixing path
 // Re-enabled after fixing the complex vector_axpy_op aliasing bug
-#if __CUDA || __ROCM
+#if __CUDA
     // Full GPU-resident mixing path for nspin=1 with Broyden or Pulay mixing
     // This path keeps all mixing history and operations on GPU
     if (device_ == "gpu" && chr->get_device() == "gpu" &&
         nspin == 1 && (mixing_mode == "broyden" || mixing_mode == "pulay") && !PARAM.globalv.double_grid)
     {
-        // Debug output to verify GPU mixing path is used
-        static bool first_call = true;
-        if (first_call)
-        {
-            GlobalV::ofs_running << " DEBUG: Using full GPU-resident " << mixing_mode << " mixing path" << std::endl;
-            first_call = false;
-        }
-
         // Restore timer context for GPU path
         ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip");
 

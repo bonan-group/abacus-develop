@@ -4123,4 +4123,263 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_vnl_op_gpu)
     delmem_complex_op()(d_sk);
     delmem_complex_op()(d_vkb);
 }
+
+#if __CUDA || __UT_USE_CUDA
+TEST_F(TestSrcPWVnlMultiDevice, cal_vkb1_cache_materializes_vnl_gpu)
+{
+    std::vector<std::complex<double>> vkb(expected_vkb.size(), 0);
+    std::vector<int> iat2it(atom_na[0], 0);
+    int *d_atom_nb = nullptr, *d_atom_nh = nullptr, *d_iat2it = nullptr;
+    double *d_gk = nullptr, *d_ylm = nullptr, *d_indv = nullptr, *d_nhtol = nullptr, *d_nhtolm = nullptr,
+           *d_tab = nullptr, *d_vkb1_cache = nullptr;
+    std::complex<double>*d_sk = nullptr, *d_vkb = nullptr;
+
+    resmem_int_op()(d_atom_nb, atom_nb.size());
+    resmem_int_op()(d_atom_nh, atom_nh.size());
+    resmem_int_op()(d_iat2it, iat2it.size());
+    syncmem_int_h2d_op()(d_atom_nb, atom_nb.data(), atom_nb.size());
+    syncmem_int_h2d_op()(d_atom_nh, atom_nh.data(), atom_nh.size());
+    syncmem_int_h2d_op()(d_iat2it, iat2it.data(), iat2it.size());
+
+    resmem_var_op()(d_gk, gk.size());
+    resmem_var_op()(d_ylm, ylm.size());
+    resmem_var_op()(d_indv, indv.size());
+    resmem_var_op()(d_nhtol, nhtol.size());
+    resmem_var_op()(d_nhtolm, nhtolm.size());
+    resmem_var_op()(d_tab, tab.size());
+    resmem_var_op()(d_vkb1_cache, ntype * nhm * npw);
+
+    syncmem_var_h2d_op()(d_gk, gk.data(), gk.size());
+    syncmem_var_h2d_op()(d_ylm, ylm.data(), ylm.size());
+    syncmem_var_h2d_op()(d_indv, indv.data(), indv.size());
+    syncmem_var_h2d_op()(d_nhtol, nhtol.data(), nhtol.size());
+    syncmem_var_h2d_op()(d_nhtolm, nhtolm.data(), nhtolm.size());
+    syncmem_var_h2d_op()(d_tab, tab.data(), tab.size());
+
+    resmem_complex_op()(d_sk, sk.size());
+    resmem_complex_op()(d_vkb, vkb.size());
+    syncmem_complex_h2d_op()(d_sk, sk.data(), sk.size());
+    syncmem_complex_h2d_op()(d_vkb, vkb.data(), vkb.size());
+
+    hamilt::cal_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                 ntype,
+                                                                 npw,
+                                                                 nhm,
+                                                                 tab_2,
+                                                                 tab_3,
+                                                                 d_atom_nb,
+                                                                 d_atom_nh,
+                                                                 DQ,
+                                                                 tpiba,
+                                                                 d_gk,
+                                                                 d_ylm,
+                                                                 d_indv,
+                                                                 d_nhtolm,
+                                                                 d_tab,
+                                                                 d_vkb1_cache);
+    hamilt::cal_vnl_from_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                          npw,
+                                                                          npwx,
+                                                                          nhm,
+                                                                          d_atom_nh,
+                                                                          0,
+                                                                          atom_na[0],
+                                                                          d_nhtol,
+                                                                          d_vkb1_cache,
+                                                                          d_sk,
+                                                                          d_iat2it,
+                                                                          d_vkb);
+
+    syncmem_complex_d2h_op()(vkb.data(), d_vkb, vkb.size());
+    for (int ii = 0; ii < vkb.size(); ii++)
+    {
+        EXPECT_LT(fabs(vkb[ii] - expected_vkb[ii]), 6e-5);
+    }
+
+    delmem_int_op()(d_atom_nh);
+    delmem_int_op()(d_atom_nb);
+    delmem_int_op()(d_iat2it);
+
+    delmem_var_op()(d_gk);
+    delmem_var_op()(d_ylm);
+    delmem_var_op()(d_indv);
+    delmem_var_op()(d_nhtol);
+    delmem_var_op()(d_nhtolm);
+    delmem_var_op()(d_tab);
+    delmem_var_op()(d_vkb1_cache);
+
+    delmem_complex_op()(d_sk);
+    delmem_complex_op()(d_vkb);
+}
+
+TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
+{
+    const int nbands = 2;
+    const int nkb = atom_na[0] * atom_nh[0];
+    std::vector<int> iat2it(atom_na[0], 0);
+    std::vector<int> jkb_to_iat(nkb), jkb_to_it(nkb, 0), jkb_to_ih(nkb);
+    std::vector<double> jkb_pref_sign(2 * nkb);
+    int jkb = 0;
+    for (int iat = 0; iat < atom_na[0]; ++iat)
+    {
+        for (int ih = 0; ih < atom_nh[0]; ++ih)
+        {
+            jkb_to_iat[jkb] = iat;
+            jkb_to_ih[jkb] = ih;
+            const int lmod = static_cast<int>(nhtol[ih]) % 4;
+            const double pref_re[4] = {1, 0, -1, 0};
+            const double pref_im[4] = {0, -1, 0, 1};
+            jkb_pref_sign[2 * jkb] = pref_re[lmod];
+            jkb_pref_sign[2 * jkb + 1] = pref_im[lmod];
+            ++jkb;
+        }
+    }
+
+    std::vector<std::complex<double>> psi(nbands * npwx, {0, 0});
+    std::vector<std::complex<double>> ps(nkb * nbands, {0, 0});
+    for (int ib = 0; ib < nbands; ++ib)
+    {
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            psi[ib * npwx + ig] = {0.01 * (ig + 1), -0.02 * (ib + 1)};
+        }
+        for (int ikb = 0; ikb < nkb; ++ikb)
+        {
+            ps[ikb * nbands + ib] = {0.03 * (ikb + 1), 0.04 * (ib + 1)};
+        }
+    }
+
+    std::vector<std::complex<double>> expected_becp(nkb * nbands, {0, 0});
+    std::vector<std::complex<double>> initial_hpsi(nbands * npwx, {0.125, -0.25});
+    std::vector<std::complex<double>> expected_hpsi = initial_hpsi;
+    for (int ib = 0; ib < nbands; ++ib)
+    {
+        for (int ikb = 0; ikb < nkb; ++ikb)
+        {
+            for (int ig = 0; ig < npw; ++ig)
+            {
+                expected_becp[ib * nkb + ikb] += std::conj(expected_vkb[ikb * npwx + ig]) * psi[ib * npwx + ig];
+                expected_hpsi[ib * npwx + ig] += expected_vkb[ikb * npwx + ig] * ps[ikb * nbands + ib];
+            }
+        }
+    }
+
+    int *d_atom_nb = nullptr, *d_atom_nh = nullptr, *d_jkb_to_iat = nullptr, *d_jkb_to_it = nullptr,
+        *d_jkb_to_ih = nullptr;
+    double *d_gk = nullptr, *d_ylm = nullptr, *d_indv = nullptr, *d_nhtolm = nullptr, *d_tab = nullptr,
+           *d_vkb1_cache = nullptr, *d_jkb_pref_sign = nullptr;
+    std::complex<double> *d_sk = nullptr, *d_psi = nullptr, *d_ps = nullptr, *d_becp = nullptr, *d_hpsi = nullptr;
+
+    resmem_int_op()(d_atom_nb, atom_nb.size());
+    resmem_int_op()(d_atom_nh, atom_nh.size());
+    resmem_int_op()(d_jkb_to_iat, jkb_to_iat.size());
+    resmem_int_op()(d_jkb_to_it, jkb_to_it.size());
+    resmem_int_op()(d_jkb_to_ih, jkb_to_ih.size());
+    syncmem_int_h2d_op()(d_atom_nb, atom_nb.data(), atom_nb.size());
+    syncmem_int_h2d_op()(d_atom_nh, atom_nh.data(), atom_nh.size());
+    syncmem_int_h2d_op()(d_jkb_to_iat, jkb_to_iat.data(), jkb_to_iat.size());
+    syncmem_int_h2d_op()(d_jkb_to_it, jkb_to_it.data(), jkb_to_it.size());
+    syncmem_int_h2d_op()(d_jkb_to_ih, jkb_to_ih.data(), jkb_to_ih.size());
+
+    resmem_var_op()(d_gk, gk.size());
+    resmem_var_op()(d_ylm, ylm.size());
+    resmem_var_op()(d_indv, indv.size());
+    resmem_var_op()(d_nhtolm, nhtolm.size());
+    resmem_var_op()(d_tab, tab.size());
+    resmem_var_op()(d_vkb1_cache, ntype * nhm * npw);
+    resmem_var_op()(d_jkb_pref_sign, jkb_pref_sign.size());
+    syncmem_var_h2d_op()(d_gk, gk.data(), gk.size());
+    syncmem_var_h2d_op()(d_ylm, ylm.data(), ylm.size());
+    syncmem_var_h2d_op()(d_indv, indv.data(), indv.size());
+    syncmem_var_h2d_op()(d_nhtolm, nhtolm.data(), nhtolm.size());
+    syncmem_var_h2d_op()(d_tab, tab.data(), tab.size());
+    syncmem_var_h2d_op()(d_jkb_pref_sign, jkb_pref_sign.data(), jkb_pref_sign.size());
+
+    resmem_complex_op()(d_sk, sk.size());
+    resmem_complex_op()(d_psi, psi.size());
+    resmem_complex_op()(d_ps, ps.size());
+    resmem_complex_op()(d_becp, expected_becp.size());
+    resmem_complex_op()(d_hpsi, expected_hpsi.size());
+    syncmem_complex_h2d_op()(d_sk, sk.data(), sk.size());
+    syncmem_complex_h2d_op()(d_psi, psi.data(), psi.size());
+    syncmem_complex_h2d_op()(d_ps, ps.data(), ps.size());
+    syncmem_complex_h2d_op()(d_hpsi, initial_hpsi.data(), initial_hpsi.size());
+
+    hamilt::cal_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                 ntype,
+                                                                 npw,
+                                                                 nhm,
+                                                                 tab_2,
+                                                                 tab_3,
+                                                                 d_atom_nb,
+                                                                 d_atom_nh,
+                                                                 DQ,
+                                                                 tpiba,
+                                                                 d_gk,
+                                                                 d_ylm,
+                                                                 d_indv,
+                                                                 d_nhtolm,
+                                                                 d_tab,
+                                                                 d_vkb1_cache);
+    hamilt::cal_becp_from_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                           npw,
+                                                                           npwx,
+                                                                           nbands,
+                                                                           nkb,
+                                                                           nhm,
+                                                                           d_jkb_to_iat,
+                                                                           d_jkb_to_it,
+                                                                           d_jkb_to_ih,
+                                                                           d_jkb_pref_sign,
+                                                                           d_vkb1_cache,
+                                                                           d_sk,
+                                                                           d_psi,
+                                                                           d_becp);
+    hamilt::cal_hpsi_from_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                           npw,
+                                                                           npwx,
+                                                                           nbands,
+                                                                           nkb,
+                                                                           nhm,
+                                                                           d_jkb_to_iat,
+                                                                           d_jkb_to_it,
+                                                                           d_jkb_to_ih,
+                                                                           d_jkb_pref_sign,
+                                                                           d_vkb1_cache,
+                                                                           d_sk,
+                                                                           d_ps,
+                                                                           d_hpsi);
+
+    std::vector<std::complex<double>> becp(expected_becp.size());
+    std::vector<std::complex<double>> hpsi(expected_hpsi.size());
+    syncmem_complex_d2h_op()(becp.data(), d_becp, becp.size());
+    syncmem_complex_d2h_op()(hpsi.data(), d_hpsi, hpsi.size());
+    for (int ii = 0; ii < becp.size(); ii++)
+    {
+        EXPECT_LT(fabs(becp[ii] - expected_becp[ii]), 6e-5);
+    }
+    for (int ii = 0; ii < hpsi.size(); ii++)
+    {
+        EXPECT_LT(fabs(hpsi[ii] - expected_hpsi[ii]), 6e-5);
+    }
+
+    delmem_int_op()(d_atom_nb);
+    delmem_int_op()(d_atom_nh);
+    delmem_int_op()(d_jkb_to_iat);
+    delmem_int_op()(d_jkb_to_it);
+    delmem_int_op()(d_jkb_to_ih);
+    delmem_var_op()(d_gk);
+    delmem_var_op()(d_ylm);
+    delmem_var_op()(d_indv);
+    delmem_var_op()(d_nhtolm);
+    delmem_var_op()(d_tab);
+    delmem_var_op()(d_vkb1_cache);
+    delmem_var_op()(d_jkb_pref_sign);
+    delmem_complex_op()(d_sk);
+    delmem_complex_op()(d_psi);
+    delmem_complex_op()(d_ps);
+    delmem_complex_op()(d_becp);
+    delmem_complex_op()(d_hpsi);
+}
+#endif
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM

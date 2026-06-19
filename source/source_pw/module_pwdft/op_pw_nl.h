@@ -81,6 +81,14 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
                      const int ngk_ik,
                      const bool is_first_node) const;
 
+    void act_matrix_free(const int nbands,
+                         const int nbasis,
+                         const int npol,
+                         const T* tmpsi_in,
+                         T* tmhpsi,
+                         const int ngk_ik,
+                         const bool is_first_node) const;
+
     int calculate_optimal_chunk_size(int npw, int nkb, int nbands) const;
 
     void ensure_chunk_buffers(int chunk_nkb, int npw, int nbands) const;
@@ -102,6 +110,7 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
 
     void ensure_kpoint_caches(int ik, int npw) const;
     void invalidate_kpoint_caches() const;
+    void ensure_type_metadata_cache() const;
 
     mutable int max_npw = 0;
 
@@ -109,7 +118,8 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
 
     mutable int npol = 0;
 
-    mutable size_t nkb_m = 0;
+    mutable size_t ps_capacity = 0;
+    mutable size_t becp_capacity = 0;
 
     const int* isk = nullptr;
 
@@ -125,16 +135,31 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     mutable T* vkb_chunk = nullptr;
     mutable T* becp_chunk = nullptr;
     mutable T* ps_chunk = nullptr;
+    mutable bool full_vkb_ready = false;
+    mutable int full_vkb_ready_ik = -1;
     mutable int chunk_buffer_capacity = 0;
     mutable int chunk_npw_capacity = 0;
     mutable int chunk_nbands_capacity = 0;
 
     mutable Real* cached_gk = nullptr;
     mutable Real* cached_ylm = nullptr;
+    mutable Real* cached_vkb1 = nullptr;
     mutable T* cached_sk = nullptr;
+    mutable int* cached_atom_nh = nullptr;
+    mutable int* cached_atom_nb = nullptr;
+    mutable int* cached_iat2it = nullptr;
+    mutable int* cached_jkb_to_iat = nullptr;
+    mutable int* cached_jkb_to_it = nullptr;
+    mutable int* cached_jkb_to_ih = nullptr;
+    mutable Real* cached_jkb_pref_sign = nullptr;
     mutable int cached_ik = -1;
     mutable int cached_npw = 0;
     mutable int cached_ylm_size = 0;
+    mutable int cached_vkb1_ntype = 0;
+    mutable int cached_vkb1_nhm = 0;
+    mutable int cached_metadata_ntype = 0;
+    mutable int cached_metadata_nat = 0;
+    mutable int cached_metadata_nkb = 0;
 
     Device* ctx = {};
     base_device::DEVICE_CPU* cpu_ctx = {};
@@ -156,6 +181,8 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     using syncmem_complex_h2d_op = base_device::memory::synchronize_memory_op<T, Device, base_device::DEVICE_CPU>;
     using resmem_real_op = base_device::memory::resize_memory_op<Real, Device>;
     using delmem_real_op = base_device::memory::delete_memory_op<Real, Device>;
+    using resmem_int_op = base_device::memory::resize_memory_op<int, Device>;
+    using delmem_int_op = base_device::memory::delete_memory_op<int, Device>;
 
     T one{1, 0};
     T zero{0, 0};

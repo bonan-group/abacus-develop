@@ -27,7 +27,7 @@ Charge_Mixing::~Charge_Mixing()
         this->mixing_highf = nullptr;
 	}
 
-#if __CUDA || __ROCM
+#if __CUDA
     free_mixing_gpu();
 #endif
 }
@@ -115,6 +115,10 @@ void Charge_Mixing::init_mixing()
 
     ModuleBase::TITLE("Charge_Mixing", "init_mixing");
     ModuleBase::timer::start("Charge_Mixing", "init_mixing");
+
+#if __CUDA
+    free_mixing_gpu();
+#endif
 
     // (re)construct mixing object
     if (this->mixing_mode == "broyden")
@@ -204,6 +208,24 @@ void Charge_Mixing::mix_reset()
 {
     this->mixing->reset();
     this->rho_mdata.reset();
+#if __CUDA
+    if (this->mixing_gpu != nullptr)
+    {
+        this->mixing_gpu->reset();
+    }
+    if (this->mixing_pulay_gpu != nullptr)
+    {
+        this->mixing_pulay_gpu->reset();
+    }
+    if (this->rho_mdata_gpu != nullptr)
+    {
+        this->rho_mdata_gpu->reset();
+    }
+    if (this->tau_mdata_gpu != nullptr)
+    {
+        this->tau_mdata_gpu->reset();
+    }
+#endif
     // initailize tau_mdata
     if ((XC_Functional::get_ked_flag()) && mixing_tau)
     {

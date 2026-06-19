@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+#include <cuda_runtime.h>
+#endif
 #ifdef __LCAO
 #include "source_basis/module_ao/ORB_gaunt_table.h"
 #endif
@@ -32,7 +35,58 @@ inline int get_vnl_chunk_size_override()
     return env == nullptr ? 0 : std::max(0, std::atoi(env));
 }
 
-constexpr size_t VKB_SIZE_THRESHOLD_BYTES = 4ULL * 1024 * 1024 * 1024;
+inline bool vnl_matrix_free_enabled()
+{
+    const char* env = std::getenv("ABACUS_VNL_MATRIX_FREE");
+    return env == nullptr || std::string(env) != "0";
+}
+
+inline size_t get_vnl_chunk_memory_budget_override()
+{
+    const char* env = std::getenv("ABACUS_VNL_CHUNK_BUDGET_MB");
+    if (env == nullptr)
+    {
+        return 0;
+    }
+    const long budget_mb = std::atol(env);
+    return budget_mb > 0 ? static_cast<size_t>(budget_mb) * 1024ULL * 1024ULL : 0;
+}
+
+inline size_t vnl_chunking_memory_budget_bytes()
+{
+    const size_t override_budget = get_vnl_chunk_memory_budget_override();
+    if (override_budget > 0)
+    {
+        return override_budget;
+    }
+
+    const size_t gib = 1024ULL * 1024ULL * 1024ULL;
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && free_bytes > 0)
+    {
+        return std::max<size_t>(gib, free_bytes / 2);
+    }
+#endif
+    return 4ULL * gib;
+}
+
+inline bool vnl_matrix_free_memory_available(const int nkb, const int nbands, const size_t element_size)
+{
+#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
+    return false;
+#else
+    const size_t coeff_bytes = 2ULL * static_cast<size_t>(nkb) * static_cast<size_t>(nbands) * element_size;
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && free_bytes > 0)
+    {
+        return coeff_bytes < free_bytes / 4;
+    }
+    return coeff_bytes < vnl_chunking_memory_budget_bytes() / 4;
+#endif
+}
 
 inline bool vnl_chunking_enabled(const int nkb, const int npwx, const size_t element_size)
 {
@@ -49,7 +103,7 @@ inline bool vnl_chunking_enabled(const int nkb, const int npwx, const size_t ele
         return false;
     }
     const size_t vkb_size = static_cast<size_t>(nkb) * static_cast<size_t>(npwx) * element_size;
-    return vkb_size > VKB_SIZE_THRESHOLD_BYTES;
+    return vkb_size > vnl_chunking_memory_budget_bytes();
 #endif
 }
 
@@ -164,6 +218,13 @@ class pseudopot_cell_vnl
     int vkbnc = 0;
     bool has_full_float_vkb = false;
     bool has_full_double_vkb = false;
+
+    mutable double* cached_vkb1_double = nullptr;
+    mutable float* cached_vkb1_float = nullptr;
+    mutable int cached_vkb1_double_nhm = 0;
+    mutable int cached_vkb1_double_npw = 0;
+    mutable int cached_vkb1_float_nhm = 0;
+    mutable int cached_vkb1_float_npw = 0;
 
     // other variables
     std::complex<double> Cal_C(int alpha, int lu, int mu, int L, int M);

@@ -5,6 +5,13 @@
 #include "../broyden_mixing.h"
 #include "../plain_mixing.h"
 #include "../pulay_mixing.h"
+#if __UT_USE_CUDA || __UT_USE_ROCM
+#include "../broyden_mixing_gpu.h"
+#include "../mixing_data_gpu.h"
+#include "../pulay_mixing_gpu.h"
+#include "source_base/module_device/device.h"
+#include "source_base/module_device/memory_op.h"
+#endif
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -307,3 +314,172 @@ TEST_F(Mixing_Test, OtherCover)
 
     clear();
 }
+
+#if __UT_USE_CUDA || __UT_USE_ROCM
+namespace
+{
+template <typename FPTYPE>
+double gpu_inner_product(const FPTYPE* a, const FPTYPE* b, const int length, FPTYPE* workspace)
+{
+    return mixing::inner_product_op<FPTYPE, base_device::DEVICE_GPU>()(
+        nullptr, a, b, length, workspace);
+}
+
+template <>
+double gpu_inner_product<std::complex<double>>(const std::complex<double>* a,
+                                               const std::complex<double>* b,
+                                               const int length,
+                                               std::complex<double>* workspace)
+{
+    return mixing::inner_product_op<std::complex<double>, base_device::DEVICE_GPU>()(
+        nullptr, a, b, length, workspace).real();
+}
+
+template <typename FPTYPE>
+double cpu_inner_product(const FPTYPE* a, const FPTYPE* b, const int length)
+{
+    double result = 0.0;
+    for (int i = 0; i < length; ++i)
+    {
+        result += a[i] * b[i];
+    }
+    return result;
+}
+
+template <>
+double cpu_inner_product<std::complex<double>>(const std::complex<double>* a,
+                                               const std::complex<double>* b,
+                                               const int length)
+{
+    double result = 0.0;
+    for (int i = 0; i < length; ++i)
+    {
+        result += (std::conj(a[i]) * b[i]).real();
+    }
+    return result;
+}
+
+template <typename FPTYPE>
+void expect_near_value(const FPTYPE& actual, const FPTYPE& expected, const double tol)
+{
+    EXPECT_NEAR(actual, expected, tol);
+}
+
+template <>
+void expect_near_value<std::complex<double>>(const std::complex<double>& actual,
+                                             const std::complex<double>& expected,
+                                             const double tol)
+{
+    EXPECT_NEAR(actual.real(), expected.real(), tol);
+    EXPECT_NEAR(actual.imag(), expected.imag(), tol);
+}
+
+template <typename MixerCpu, typename MixerGpu, typename FPTYPE>
+void compare_cpu_gpu_mixing_history()
+{
+    constexpr int length = 4;
+    constexpr int mixing_ndim = 3;
+    constexpr double mixing_beta = 0.6;
+    const std::vector<std::vector<FPTYPE>> inputs = {
+        {FPTYPE(0.1), FPTYPE(-0.2), FPTYPE(0.3), FPTYPE(0.7)},
+        {FPTYPE(0.4), FPTYPE(0.1), FPTYPE(-0.5), FPTYPE(0.2)},
+        {FPTYPE(-0.3), FPTYPE(0.6), FPTYPE(0.8), FPTYPE(-0.4)},
+        {FPTYPE(0.9), FPTYPE(-0.7), FPTYPE(0.2), FPTYPE(0.5)},
+        {FPTYPE(-0.6), FPTYPE(0.3), FPTYPE(-0.1), FPTYPE(0.4)},
+    };
+    const std::vector<std::vector<FPTYPE>> outputs = {
+        {FPTYPE(0.6), FPTYPE(0.0), FPTYPE(0.1), FPTYPE(1.1)},
+        {FPTYPE(0.2), FPTYPE(0.8), FPTYPE(-0.1), FPTYPE(-0.3)},
+        {FPTYPE(0.5), FPTYPE(0.2), FPTYPE(1.0), FPTYPE(0.1)},
+        {FPTYPE(1.2), FPTYPE(-0.4), FPTYPE(-0.6), FPTYPE(0.9)},
+        {FPTYPE(-0.2), FPTYPE(0.9), FPTYPE(0.4), FPTYPE(-0.8)},
+    };
+
+    MixerCpu cpu_mixer(mixing_ndim, mixing_beta);
+    Base_Mixing::Mixing_Data cpu_data;
+    cpu_mixer.init_mixing_data(cpu_data, length, sizeof(FPTYPE));
+
+    MixerGpu gpu_mixer(mixing_ndim, static_cast<FPTYPE>(mixing_beta));
+    Base_Mixing::Mixing_Data_GPU<FPTYPE> gpu_data(gpu_mixer.get_data_ndim(), length);
+    gpu_mixer.init(length);
+
+    FPTYPE* input_d = nullptr;
+    FPTYPE* output_d = nullptr;
+    FPTYPE* mixed_d = nullptr;
+    const int max_blocks = (length + 255) / 256;
+    FPTYPE* workspace_d = nullptr;
+    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(input_d, length, "mixing_test_in");
+    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(output_d, length, "mixing_test_out");
+    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(mixed_d, length, "mixing_test_mix");
+    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(
+        workspace_d, 2 * max_blocks, "mixing_test_workspace");
+
+    std::vector<FPTYPE> cpu_mixed(length);
+    std::vector<FPTYPE> gpu_mixed(length);
+    auto cpu_mix = [](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
+        for (int i = 0; i < length; ++i)
+        {
+            out[i] = in[i] + static_cast<FPTYPE>(mixing_beta) * residual[i];
+        }
+    };
+    for (std::size_t step = 0; step < inputs.size(); ++step)
+    {
+        cpu_mixer.push_data(cpu_data, inputs[step].data(), outputs[step].data(), nullptr, cpu_mix, true);
+        cpu_mixer.cal_coef(cpu_data,
+                           [](FPTYPE* a, FPTYPE* b) { return cpu_inner_product(a, b, length); });
+        cpu_mixer.mix_data(cpu_data, cpu_mixed.data());
+
+        base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+            input_d, inputs[step].data(), length);
+        base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+            output_d, outputs[step].data(), length);
+        gpu_mixer.push_data(gpu_data, input_d, output_d, nullptr, true);
+        gpu_mixer.cal_coef(gpu_data,
+                           [workspace_d](const FPTYPE* a, const FPTYPE* b) {
+                               return gpu_inner_product(a, b, length, workspace_d);
+                           });
+        gpu_mixer.mix_data(gpu_data, mixed_d);
+        base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(
+            gpu_mixed.data(), mixed_d, length);
+
+        for (int i = 0; i < length; ++i)
+        {
+            expect_near_value(gpu_mixed[i], cpu_mixed[i], 1e-8);
+        }
+    }
+
+    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(input_d);
+    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(output_d);
+    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(mixed_d);
+    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(workspace_d);
+}
+} // namespace
+
+TEST(MixingGpuTest, PulayMatchesCpuAcrossHistoryWrap)
+{
+    if (!base_device::information::probe_gpu_availability())
+    {
+        GTEST_SKIP() << "No GPU device is available for CUDA/ROCm mixing parity tests.";
+    }
+    compare_cpu_gpu_mixing_history<Base_Mixing::Pulay_Mixing,
+                                   Base_Mixing::Pulay_Mixing_GPU<double>,
+                                   double>();
+    compare_cpu_gpu_mixing_history<Base_Mixing::Pulay_Mixing,
+                                   Base_Mixing::Pulay_Mixing_GPU<std::complex<double>>,
+                                   std::complex<double>>();
+}
+
+TEST(MixingGpuTest, BroydenMatchesCpuAcrossHistoryWrap)
+{
+    if (!base_device::information::probe_gpu_availability())
+    {
+        GTEST_SKIP() << "No GPU device is available for CUDA/ROCm mixing parity tests.";
+    }
+    compare_cpu_gpu_mixing_history<Base_Mixing::Broyden_Mixing,
+                                   Base_Mixing::Broyden_Mixing_GPU<double>,
+                                   double>();
+    compare_cpu_gpu_mixing_history<Base_Mixing::Broyden_Mixing,
+                                   Base_Mixing::Broyden_Mixing_GPU<std::complex<double>>,
+                                   std::complex<double>>();
+}
+#endif // __UT_USE_CUDA || __UT_USE_ROCM

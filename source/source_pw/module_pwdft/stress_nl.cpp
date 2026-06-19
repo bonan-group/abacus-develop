@@ -51,6 +51,11 @@ void Stress_Func<FPTYPE, Device>::stress_nl(ModuleBase::matrix& sigma,
         }
         const int npm = nbands_occ;
 
+        if (nl_tools.use_chunked_vnl()
+            && nl_tools.cal_stress_chunked(ik, npm, true, stress_device, &psi_in[0](ik,0,0)))
+        {
+            continue;
+        }
         nl_tools.cal_vkb(ik, max_nbands);
         // calculate becp = <psi|beta> for all beta functions
         nl_tools.cal_becp(ik, npm, &psi_in[0](ik,0,0));

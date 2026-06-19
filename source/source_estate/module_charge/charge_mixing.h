@@ -7,7 +7,7 @@
 #include "source_base/module_device/types.h"
 #include <string>
 
-#if __CUDA || __ROCM
+#if __CUDA
 #include "source_base/module_mixing/mixing_data_gpu.h"
 #include "source_base/module_mixing/broyden_mixing_gpu.h"
 #include "source_base/module_mixing/pulay_mixing_gpu.h"
@@ -180,13 +180,16 @@ class Charge_Mixing
     /// Runtime device selection: "cpu" or "gpu"
     std::string device_ = "cpu";
 
-#if __CUDA || __ROCM
+#if __CUDA
     //==========================================================
     // GPU Mixing (Full GPU-Resident Path)
     //==========================================================
 
     /// GPU-resident mixing data for charge density
     Base_Mixing::Mixing_Data_GPU<std::complex<double>>* rho_mdata_gpu = nullptr;
+
+    /// GPU-resident mixing data for kinetic energy density
+    Base_Mixing::Mixing_Data_GPU<std::complex<double>>* tau_mdata_gpu = nullptr;
 
     /// GPU Broyden mixing instance
     Base_Mixing::Broyden_Mixing_GPU<std::complex<double>>* mixing_gpu = nullptr;
@@ -196,6 +199,12 @@ class Charge_Mixing
 
     /// GPU workspace for inner products
     double* gpu_workspace_d = nullptr;
+    double* gpu_batch_workspace_d = nullptr;
+    double* gpu_batch_result_d = nullptr;
+
+    /// GPU workspace for tau reciprocal data
+    std::complex<double>* tau_g_d = nullptr;
+    std::complex<double>* tau_g_save_d = nullptr;
 
     /// Initialize GPU mixing resources
     void init_mixing_gpu();
@@ -209,6 +218,14 @@ class Charge_Mixing
     /// GPU inner product with Hartree-like weighting
     double inner_product_recip_hartree_gpu(const std::complex<double>* rhog1_d,
                                             const std::complex<double>* rhog2_d);
+    void build_recip_hartree_beta_row_gpu(const std::complex<double>* vectors_d,
+                                           int nvec,
+                                           int row,
+                                           ModuleBase::matrix& beta);
+    void build_recip_hartree_gamma_gpu(const std::complex<double>* vectors_d,
+                                        const std::complex<double>* rhs_d,
+                                        int nvec,
+                                        std::vector<double>& gamma);
 #endif
 
     /**

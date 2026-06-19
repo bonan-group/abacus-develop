@@ -6,6 +6,7 @@
 #include <thrust/complex.h>
 
 #include <complex>
+#include <mutex>
 #include <type_traits>
 #include <unordered_map>
 
@@ -18,6 +19,7 @@ namespace memory
 namespace
 {
 std::unordered_map<const void*, size_t> gpu_allocation_sizes;
+std::mutex gpu_allocation_sizes_mutex;
 }
 
 template <typename FPTYPE_out, typename FPTYPE_in>
@@ -55,7 +57,10 @@ void resize_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE*& arr,
     }
     const size_t bytes = sizeof(FPTYPE) * size;
     hipErrcheck(hipMalloc((void**)&arr, bytes));
-    gpu_allocation_sizes[arr] = bytes;
+    {
+        std::lock_guard<std::mutex> lock(gpu_allocation_sizes_mutex);
+        gpu_allocation_sizes[arr] = bytes;
+    }
     const std::string record_string = record_in == nullptr ? "no_record" : record_in;
     ModuleBase::Memory::record_gpu_alloc(record_string, bytes);
 }
@@ -167,6 +172,7 @@ void delete_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE* arr, 
     size_t free_bytes = bytes;
     if (free_bytes == 0)
     {
+        std::lock_guard<std::mutex> lock(gpu_allocation_sizes_mutex);
         const auto it = gpu_allocation_sizes.find(arr);
         if (it != gpu_allocation_sizes.end())
         {
@@ -174,7 +180,10 @@ void delete_memory_op<FPTYPE, base_device::DEVICE_GPU>::operator()(FPTYPE* arr, 
         }
     }
     hipErrcheck(hipFree(arr));
-    gpu_allocation_sizes.erase(arr);
+    {
+        std::lock_guard<std::mutex> lock(gpu_allocation_sizes_mutex);
+        gpu_allocation_sizes.erase(arr);
+    }
     if (free_bytes > 0)
     {
         ModuleBase::Memory::record_gpu_free(free_bytes);

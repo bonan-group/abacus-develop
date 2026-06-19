@@ -233,6 +233,16 @@ void Charge::sync_kin_r_to_host<base_device::DEVICE_GPU>()
 }
 
 template <>
+void Charge::sync_kin_r_save_to_device<base_device::DEVICE_GPU>()
+{
+    if (device_ != "gpu" || kin_r_save_d_ == nullptr || _space_kin_r_save == nullptr)
+    {
+        return;
+    }
+    syncmem_d_h2d_op()(kin_r_save_d_, _space_kin_r_save, nspin * nrxx);
+}
+
+template <>
 void Charge::sync_rho_save_to_device<base_device::DEVICE_GPU>()
 {
     if (device_ != "gpu" || rho_save_d_ == nullptr || _space_rho_save == nullptr)

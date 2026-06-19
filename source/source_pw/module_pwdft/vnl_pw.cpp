@@ -45,7 +45,9 @@ void pseudopot_cell_vnl::release_memory()
         delmem_cd_op()(this->c_qq_so);
         delmem_zd_op()(this->z_deeq_nc);
         delmem_zd_op()(this->z_qq_so);
+        delmem_sd_op()(this->cached_vkb1_float);
         delmem_dd_op()(this->d_deeq);
+        delmem_dd_op()(this->cached_vkb1_double);
         delmem_zd_op()(this->z_vkb);
         delmem_dd_op()(this->d_tab);
         delmem_dd_op()(this->d_indv);
@@ -64,6 +66,7 @@ void pseudopot_cell_vnl::release_memory()
         delmem_ch_op()(this->c_deeq_nc);
         delmem_ch_op()(this->c_vkb);
         delmem_ch_op()(this->c_qq_so);
+        delmem_sh_op()(this->cached_vkb1_float);
 #ifdef __DSP
         if (this->z_vkb != nullptr)
         {
@@ -72,7 +75,13 @@ void pseudopot_cell_vnl::release_memory()
         }
 #endif
         // There's no need to delete double precision pointers while in a CPU environment.
+        this->cached_vkb1_double = nullptr;
     }
+    this->cached_vkb1_float = nullptr;
+    this->cached_vkb1_double_nhm = 0;
+    this->cached_vkb1_double_npw = 0;
+    this->cached_vkb1_float_nhm = 0;
+    this->cached_vkb1_float_npw = 0;
     memory_released = true;
 }
 
@@ -507,7 +516,35 @@ void pseudopot_cell_vnl::getvnl_atoms_cached(Device* ctx,
     FPTYPE* _indv = this->get_indv_data<FPTYPE>();
     FPTYPE* _nhtol = this->get_nhtol_data<FPTYPE>();
     FPTYPE* _nhtolm = this->get_nhtolm_data<FPTYPE>();
-    resmem_var_op()(vkb1, nhm * npw, "VNL::vkb1");
+    const bool use_cached_vkb1 = this->use_gpu_;
+    if (use_cached_vkb1 && std::is_same<FPTYPE, double>::value)
+    {
+        if (this->cached_vkb1_double == nullptr || this->cached_vkb1_double_nhm < nhm
+            || this->cached_vkb1_double_npw < npw)
+        {
+            delmem_dd_op()(this->cached_vkb1_double);
+            resmem_dd_op()(this->cached_vkb1_double, nhm * npw, "VNL::vkb1_chunk");
+            this->cached_vkb1_double_nhm = nhm;
+            this->cached_vkb1_double_npw = npw;
+        }
+        vkb1 = reinterpret_cast<FPTYPE*>(this->cached_vkb1_double);
+    }
+    else if (use_cached_vkb1)
+    {
+        if (this->cached_vkb1_float == nullptr || this->cached_vkb1_float_nhm < nhm
+            || this->cached_vkb1_float_npw < npw)
+        {
+            delmem_sd_op()(this->cached_vkb1_float);
+            resmem_sd_op()(this->cached_vkb1_float, nhm * npw, "VNL::vkb1_chunk");
+            this->cached_vkb1_float_nhm = nhm;
+            this->cached_vkb1_float_npw = npw;
+        }
+        vkb1 = reinterpret_cast<FPTYPE*>(this->cached_vkb1_float);
+    }
+    else
+    {
+        resmem_var_op()(vkb1, nhm * npw, "VNL::vkb1");
+    }
 
     if (this->use_gpu_)
     {
@@ -557,7 +594,10 @@ void pseudopot_cell_vnl::getvnl_atoms_cached(Device* ctx,
     delete[] h_atom_nh;
     delete[] h_atom_na;
     delete[] h_atom_nb;
-    delmem_var_op()(vkb1);
+    if (!use_cached_vkb1)
+    {
+        delmem_var_op()(vkb1);
+    }
     if (this->use_gpu_)
     {
         delmem_int_op()(atom_nh);

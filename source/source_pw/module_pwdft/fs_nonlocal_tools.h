@@ -132,6 +132,18 @@ class FS_Nonlocal_tools
     /// @brief revert the 0-value dvkbs for calculating the dbecp_i in the force calculation
     void revert_vkb(const int& ik, const int& ipol);
 
+    bool use_chunked_vnl() const;
+    bool cal_force_chunked(const int& ik,
+                           const int& npm,
+                           const bool& occ,
+                           FPTYPE* force,
+                           const std::complex<FPTYPE>* ppsi);
+    bool cal_stress_chunked(const int& ik,
+                            const int& npm,
+                            const bool& occ,
+                            FPTYPE* stress,
+                            const std::complex<FPTYPE>* ppsi);
+
   private:
     /**
      * @brief allocate the memory for the variables
@@ -141,6 +153,21 @@ class FS_Nonlocal_tools
      * @brief delete the memory for the variables
      */
     void delete_memory();
+    void ensure_full_vkb_scratch();
+    int calculate_chunk_size() const;
+    void ensure_chunk_memory(const int chunk_nkb, const int nbands_npol, const bool force_mode);
+    void cal_vkb_type_chunk(const int ik,
+                            const int it,
+                            const int ia_begin,
+                            const int ia_end,
+                            std::complex<FPTYPE>* vkb_out);
+    void cal_vkb_deri_type_chunk(const int ik,
+                                 const int it,
+                                 const int ia_begin,
+                                 const int ia_end,
+                                 const int ipol,
+                                 const int jpol,
+                                 std::complex<FPTYPE>* vkb_out);
 
   private:
     /// pointers to access the data without memory arrangement
@@ -176,6 +203,7 @@ class FS_Nonlocal_tools
     std::complex<FPTYPE>* vkb_save = nullptr;
     /// @brief count zero gcar indexes and prepare zero_indexes, do gcar_y /= gcar_x, gcar_z /= gcar_y
     void transfer_gcar(const int& npw, const int& npw_max, const FPTYPE* gcar_in);
+    void transfer_gcar(const int& npw, const int& npw_max, const FPTYPE* gcar_in, const bool allocate_vkb_save);
     /// @brief save the 0-value dvkbs for calculating the dbecp_i in the force calculation
     void save_vkb(const int& npw, const int& ipol);
     /// ---------------------------------------------------------------------
@@ -214,6 +242,14 @@ class FS_Nonlocal_tools
     /// becp and dbecp:
     std::complex<FPTYPE>* dbecp = nullptr; // nbands * nkb (for stress) or nbands * nkb * 3 (for force)
     std::complex<FPTYPE>* becp = nullptr;  // nbands * nkb
+    std::complex<FPTYPE>* vkb_chunk = nullptr;
+    std::complex<FPTYPE>* becp_chunk = nullptr;
+    std::complex<FPTYPE>* dbecp_chunk = nullptr;
+    std::complex<FPTYPE>* vkb_save_chunk = nullptr;
+    int chunk_nkb_capacity = 0;
+    int chunk_bands_capacity = 0;
+    int chunk_dbecp_factor_capacity = 0;
+    int chunk_vkb_save_capacity = 0;
 
     /// @brief rename the operators for CPU/GPU device
     using gemm_op = ModuleBase::gemm_op<std::complex<FPTYPE>, Device>;

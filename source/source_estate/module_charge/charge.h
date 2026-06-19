@@ -260,6 +260,16 @@ class Charge
               typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
     void sync_kin_r_to_host() {} // No-op for CPU
 
+    /// @brief Sync kin_r_save from host to device (GPU specialization)
+    template <typename Device,
+              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
+    void sync_kin_r_save_to_device();
+
+    /// @brief Sync kin_r_save from host to device (CPU no-op)
+    template <typename Device,
+              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
+    void sync_kin_r_save_to_device() {} // No-op for CPU
+
     /// @brief Sync rho_save from host to device (GPU specialization)
     template <typename Device,
               typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>

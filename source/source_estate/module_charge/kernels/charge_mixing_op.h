@@ -36,6 +36,24 @@ struct inner_product_recip_hartree_op {
         FPTYPE* workspace);                  // GPU reduction workspace [num_blocks]
 };
 
+/// Batched inner products with 1/G^2 weight for Hartree-like functional.
+/// Computes result[i, j] = <lhs_i, rhs_j> for contiguous vector slots.
+template <typename FPTYPE, typename Device>
+struct inner_product_recip_hartree_batch_op {
+    void operator()(
+        const Device* ctx,
+        const std::complex<FPTYPE>* lhs,      // [nlhs * npw] - left vector slots
+        const std::complex<FPTYPE>* rhs,      // [nrhs * npw] - right vector slots
+        const FPTYPE* gg,                     // [npw] - |G|^2 values
+        const int npw,                        // Number of plane waves
+        const int nlhs,                       // Number of left vector slots
+        const int nrhs,                       // Number of right vector slots
+        const int ig_gge0,                    // Index of G=0 (to skip)
+        const FPTYPE tpiba2,                  // (2*pi/a)^2 prefactor
+        FPTYPE* result,                       // [nlhs * nrhs] output on device
+        FPTYPE* workspace);                   // [nlhs * nrhs * num_blocks]
+};
+
 // CPU specializations
 template <typename FPTYPE>
 struct kerker_screen_recip_op<FPTYPE, base_device::DEVICE_CPU> {
@@ -88,6 +106,24 @@ struct inner_product_recip_hartree_op<FPTYPE, base_device::DEVICE_GPU> {
         const FPTYPE tpiba2,
         FPTYPE* workspace);
 };
+
+#if __CUDA || __UT_USE_CUDA
+template <typename FPTYPE>
+struct inner_product_recip_hartree_batch_op<FPTYPE, base_device::DEVICE_GPU> {
+    void operator()(
+        const base_device::DEVICE_GPU* ctx,
+        const std::complex<FPTYPE>* lhs,
+        const std::complex<FPTYPE>* rhs,
+        const FPTYPE* gg,
+        const int npw,
+        const int nlhs,
+        const int nrhs,
+        const int ig_gge0,
+        const FPTYPE tpiba2,
+        FPTYPE* result,
+        FPTYPE* workspace);
+};
+#endif
 #endif
 
 } // namespace elecstate

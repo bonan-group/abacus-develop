@@ -30,7 +30,7 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
     	resize_tmp = 2;
     }
 
-#if __CUDA || __ROCM
+#if __CUDA
     // GPU path for simple case: nspin=1 or when all spins use same parameters
     // For nspin=2/4 with different mag parameters, fall back to CPU for correct handling
     if (device_ == "gpu" && this->rhopw->get_gg_d() != nullptr && resize_tmp == 1)

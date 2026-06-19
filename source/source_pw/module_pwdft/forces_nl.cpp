@@ -48,6 +48,11 @@ void Forces<FPTYPE, Device>::cal_force_nl(ModuleBase::matrix& forcenl,
             }
         }
         const int npm = nbands_occ;
+        if (nl_tools.use_chunked_vnl()
+            && nl_tools.cal_force_chunked(ik, npm, true, force, &psi_in[0](ik,0,0)))
+        {
+            continue;
+        }
         nl_tools.cal_vkb(ik, max_nbands);
         // calculate becp = <psi|beta> for all beta functions
         nl_tools.cal_becp(ik, npm, &psi_in[0](ik,0,0));
