@@ -10,7 +10,6 @@
 #include "source_cell/klist.h"
 #include "source_lcao/module_ri/conv_coulomb_pot_k.h"
 #include "source_pw/module_pwdft/kernels/exx_q_state_op.h"
-#include "source_pw/module_pwdft/exx_wave_redistributor.h"
 #include "source_psi/psi.h"
 #include "source_base/module_container/ATen/kernels/lapack.h"
 
@@ -31,6 +30,25 @@ enum class ExxSingularCorrectionMode
     SmoothTarget
 };
 
+template <typename T>
+class ExxWaveRedistributorCpu;
+
+struct ExxOperatorOptions
+{
+    int batch_fft_size = 1;
+    int band_tile_size = 1;
+    int q_tile_size = 1;
+    int nspin = 1;
+    double ecutexx = 0.0;
+    double ecutrho = 0.0;
+    bool gamma_extrapolation = false;
+    bool exxace = false;
+    bool separate_loop = false;
+    double hybrid_alpha = 0.0;
+    std::vector<std::map<std::string, std::string>> fock_params;
+    std::vector<std::map<std::string, std::string>> erfc_params;
+};
+
 template <typename T, typename Device>
 class OperatorEXXPW : public OperatorPW<T, Device>
 {
@@ -42,7 +60,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                   const ModulePW::PW_Basis_K* wfcpw_in,
                   const ModulePW::PW_Basis* rhopw_in,
                   K_Vectors* kv_in,
-                  const UnitCell* ucell);
+                  const UnitCell* ucell,
+                  const ExxOperatorOptions& options_in);
 
     template <typename T_in, typename Device_in = Device>
     explicit OperatorEXXPW(const OperatorEXXPW<T_in, Device_in> *op_exx);
@@ -50,7 +69,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     OperatorEXXPW(const OperatorEXXPW<T, Device>* source_op,
                   const int* target_isk,
                   const ModulePW::PW_Basis_K* target_wfcpw,
-                  const K_Vectors* target_kv);
+                  const K_Vectors* target_kv,
+                  const ExxOperatorOptions& options_in);
 
     virtual ~OperatorEXXPW();
 
@@ -137,12 +157,12 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                       const int npol,
                       const T* tmpsi_in,
                       T* tmhpsi,
-                      const int ngk_ik = 0,
-                      const bool is_first_node = false,
-                      bool accumulate_hpsi = true,
-                      int ispin_override = -1,
-                      const K_Vectors::ExxFullKPoint* target_kpoint_override = nullptr,
-                      int target_ik_override = -1) const;
+                      const int ngk_ik,
+                      const bool is_first_node,
+                      bool accumulate_hpsi,
+                      int ispin_override,
+                      const K_Vectors::ExxFullKPoint* target_kpoint_override,
+                      int target_ik_override) const;
     void process_qtile_apply_tile(const K_Vectors::ExxFullKPoint& local_kpoint,
                                   const K_Vectors::ExxFullQPoint& qpoint,
                                   const T* target_real,
@@ -170,7 +190,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                                      int ispin,
                                      const T* full_real,
                                      T* rep_recip,
-                                     Real factor = 1.0) const;
+                                     Real factor) const;
 
     void multiply_potential(T *density_recip, int ik, int iq) const;
 
@@ -187,20 +207,20 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                           const int npol,
                           const T *tmpsi_in,
                           T *tmhpsi,
-                          const int ngk_ik = 0,
-                          const bool is_first_node = false,
-                          bool accumulate_hpsi = true,
-                          int ispin_override = -1) const;
+                          const int ngk_ik,
+                          const bool is_first_node,
+                          bool accumulate_hpsi,
+                          int ispin_override) const;
 
     void act_op_qtile_gpu(const int nbands,
                           const int nbasis,
                           const int npol,
                           const T *tmpsi_in,
                           T *tmhpsi,
-                          const int ngk_ik = 0,
-                          const bool is_first_node = false,
-                          bool accumulate_hpsi = true,
-                          int ispin_override = -1) const;
+                          const int ngk_ik,
+                          const bool is_first_node,
+                          bool accumulate_hpsi,
+                          int ispin_override) const;
 
     void act_op_ace(const int nbands,
                     const int nbasis,
@@ -223,7 +243,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                                  int ik,
                                  double omega) const;
 
-    void rho_recip2real(const T* rho_recip, T* rho_real, bool add = false, Real factor = 1.0) const;
+    void rho_recip2real(const T* rho_recip, T* rho_real, bool add, Real factor) const;
 
     mutable int cnt = 0;
 
@@ -234,6 +254,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
 
     // k vectors
     K_Vectors *kv = nullptr;
+    ExxOperatorOptions options;
 
     // psi
     mutable psi::Psi<T, Device> psi;
@@ -353,7 +374,7 @@ void get_exx_potential(const K_Vectors* kv,
                        double ucell_omega,
                        int ik,
                        int iq,
-                       bool is_stress = false);
+                       bool is_stress);
 
 template <typename Real, typename Device>
 void get_exx_potential(const K_Vectors* kv,
@@ -367,7 +388,7 @@ void get_exx_potential(const K_Vectors* kv,
                        double ucell_omega,
                        const K_Vectors::ExxFullKPoint& kpoint,
                        const K_Vectors::ExxFullQPoint& qpoint,
-                       bool is_stress = false);
+                       bool is_stress);
 
 template <typename Real, typename Device>
 void get_exx_stress_potential(const K_Vectors* kv,

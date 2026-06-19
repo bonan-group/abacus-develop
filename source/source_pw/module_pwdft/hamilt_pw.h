@@ -8,11 +8,13 @@
 #include "source_hamilt/hamilt.h"
 #include "source_lcao/module_dftu/dftu.h" // mohan add 2025-11-06
 #include "source_pw/module_pwdft/exx_helper.h"
-#include "source_pw/module_pwdft/op_pw_exx.h"
 #include "source_pw/module_pwdft/vnl_pw.h"
 
 namespace hamilt
 {
+
+template <typename T, typename Device>
+class OperatorEXXPW;
 
 template <typename T, typename Device = base_device::DEVICE_CPU>
 class HamiltPW : public Hamilt<T, Device>
@@ -29,8 +31,15 @@ class HamiltPW : public Hamilt<T, Device>
              K_Vectors* p_kv,
              pseudopot_cell_vnl* nlpp,
              Plus_U* p_dftu, // mohan add 2025-11-06
+             const UnitCell* ucell);
+
+    HamiltPW(elecstate::Potential* pot_in,
+             ModulePW::PW_Basis_K* wfc_basis,
+             K_Vectors* p_kv,
+             pseudopot_cell_vnl* nlpp,
+             Plus_U* p_dftu, // mohan add 2025-11-06
              const UnitCell* ucell,
-             OperatorEXXPW<T, Device>* source_exx = nullptr);
+             OperatorEXXPW<T, Device>* source_exx);
 
     ~HamiltPW();
 

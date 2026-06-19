@@ -3,6 +3,7 @@
 #include "source_pw/module_pwdft/kernels/cal_density_real_op.h"
 #include "source_pw/module_pwdft/kernels/exx_q_state_op.h"
 #include "source_pw/module_pwdft/kernels/exx_stress_op.h"
+#include "source_pw/module_pwdft/exx_wave_redistributor.h"
 #include "source_base/parallel_common.h"
 #include "source_base/parallel_device.h"
 #include "source_base/parallel_reduce.h"
@@ -21,19 +22,20 @@
 
 namespace
 {
-int exx_batch_fft_size()
+hamilt::ExxOperatorOptions make_stress_exx_options()
 {
-    return std::max(1, PARAM.inp.exx_batch_fft_size);
-}
-
-int exx_band_tile_size()
-{
-    return std::max(1, PARAM.inp.exx_band_tile_size);
-}
-
-int exx_q_tile_size()
-{
-    return std::max(1, PARAM.inp.exx_q_tile_size);
+    hamilt::ExxOperatorOptions options;
+    options.batch_fft_size = std::max(1, PARAM.inp.exx_batch_fft_size);
+    options.band_tile_size = std::max(1, PARAM.inp.exx_band_tile_size);
+    options.q_tile_size = std::max(1, PARAM.inp.exx_q_tile_size);
+    options.nspin = PARAM.inp.nspin;
+    options.ecutexx = PARAM.inp.ecutexx;
+    options.ecutrho = PARAM.inp.ecutrho;
+    options.gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
+    options.exxace = PARAM.inp.exxace;
+    options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
+    options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    return options;
 }
 } // namespace
 
@@ -45,7 +47,8 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                            const K_Vectors *p_kv,
                                            const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in, const UnitCell& ucell)
 {
-    bool gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
+    const hamilt::ExxOperatorOptions exx_options = make_stress_exx_options();
+    bool gamma_extrapolation = exx_options.gamma_extrapolation;
     bool is_mp = p_kv->get_is_mp();
 #ifdef __MPI
     Parallel_Common::bcast_bool(is_mp);
@@ -68,7 +71,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     using syncmem_real_h2d_op = base_device::memory::synchronize_memory_op<Real, Device, base_device::DEVICE_CPU>;
     using syncmem_real_d2h_op = base_device::memory::synchronize_memory_op<Real, base_device::DEVICE_CPU, Device>;
 
-    if (GlobalV::KPAR != 1 && !(PARAM.inp.exxace && GlobalC::exx_info.info_global.separate_loop))
+    if (GlobalV::KPAR != 1 && !(exx_options.exxace && exx_options.separate_loop))
     {
         ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
                                  "PW EXX KPAR stress is supported only with exxace=1 and exx_separate_loop=1");
@@ -80,8 +83,8 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                  "intra-pool MPI distribution");
     }
 
-    const int nspin_fac = PARAM.inp.nspin == 2 ? 2 : 1;
-    const Real k_spin_degeneracy = PARAM.inp.nspin == 1 ? 2.0 : 1.0;
+    const int nspin_fac = exx_options.nspin == 2 ? 2 : 1;
+    const Real k_spin_degeneracy = exx_options.nspin == 1 ? 2.0 : 1.0;
     double omega = ucell.omega;
     double tpiba = ucell.tpiba;
     double tpiba2 = ucell.tpiba2;
@@ -106,10 +109,10 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                              "GPU q-tile PW EXX stress path is not implemented for ROCm yet");
 #endif
     {
-        double ecut_exx = PARAM.inp.ecutexx;
+        double ecut_exx = exx_options.ecutexx;
         if (ecut_exx == 0.0)
         {
-            ecut_exx = PARAM.inp.ecutrho;
+            ecut_exx = exx_options.ecutrho;
         }
         const std::string exx_precision = std::is_same<FPTYPE, float>::value ? "single" : "double";
         rhopw_exx_owned = new ModulePW::PW_Basis(wfcpw->get_device(), exx_precision);
@@ -135,7 +138,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                   wfcpw->kvec_d,
                                   wfcpw->distribution_type,
                                   wfcpw->xprime);
-        wfcpw_exx->setuptransform(exx_batch_fft_size());
+        wfcpw_exx->setuptransform(exx_options.batch_fft_size);
         wfcpw_exx->collect_local_pw();
         if (rhopw_exx->nrxx != wfcpw_exx->nrxx)
         {
@@ -243,7 +246,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                              static_cast<int>(remap.rep_igl.size()),
                                                              remap.rep_igl.data(),
                                                              remap.fft_isz.data(),
-                                                             remap.phase.data());
+                                                             remap.phase.data(),
+                                                             false,
+                                                             Real(1.0));
                 }
                 else
                 {
@@ -252,7 +257,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                    static_cast<int>(remap.rep_igl.size()),
                                                    remap.rep_igl.data(),
                                                    remap.fft_isz.data(),
-                                                   remap.phase.data());
+                                                   remap.phase.data(),
+                                                   false,
+                                                   Real(1.0));
                 }
             }
             else
@@ -265,7 +272,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                              static_cast<int>(remap.rep_igl.size()),
                                                              remap.rep_igl.data(),
                                                              remap.fft_isz.data(),
-                                                             remap.phase.data());
+                                                             remap.phase.data(),
+                                                             false,
+                                                             Real(1.0));
                 }
                 else
                 {
@@ -274,7 +283,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                    static_cast<int>(remap.rep_igl.size()),
                                                    remap.rep_igl.data(),
                                                    remap.fft_isz.data(),
-                                                   remap.phase.data());
+                                                   remap.phase.data(),
+                                                   false,
+                                                   Real(1.0));
                 }
             }
         }
@@ -305,7 +316,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                              static_cast<int>(remap.rep_igl.size()),
                                                              remap.rep_igl.data(),
                                                              remap.fft_isz.data(),
-                                                             remap.phase.data());
+                                                             remap.phase.data(),
+                                                             false,
+                                                             Real(1.0));
                 }
                 else
                 {
@@ -314,7 +327,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                    static_cast<int>(remap.rep_igl.size()),
                                                    remap.rep_igl.data(),
                                                    remap.fft_isz.data(),
-                                                   remap.phase.data());
+                                                   remap.phase.data(),
+                                                   false,
+                                                   Real(1.0));
                 }
             }
             else
@@ -327,7 +342,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                              static_cast<int>(remap.rep_igl.size()),
                                                              remap.rep_igl.data(),
                                                              remap.fft_isz.data(),
-                                                             remap.phase.data());
+                                                             remap.phase.data(),
+                                                             false,
+                                                             Real(1.0));
                 }
                 else
                 {
@@ -336,7 +353,9 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                    static_cast<int>(remap.rep_igl.size()),
                                                    remap.rep_igl.data(),
                                                    remap.fft_isz.data(),
-                                                   remap.phase.data());
+                                                   remap.phase.data(),
+                                                   false,
+                                                   Real(1.0));
                 }
             }
         }
@@ -355,10 +374,10 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     }();
 
     const int nbands_psi = d_psi_in->get_nbands();
-    const int target_tile_size = std::max(1, std::min(exx_band_tile_size(), nbands_psi));
+    const int target_tile_size = std::max(1, std::min(exx_options.band_tile_size, nbands_psi));
     const int source_tile_size = target_tile_size;
     const int q_tile_size = q_points.empty() ? 1
-                                             : std::max(1, std::min(exx_q_tile_size(),
+                                             : std::max(1, std::min(exx_options.q_tile_size,
                                                                     static_cast<int>(q_points.size())));
     T* target_real_tile = nullptr;
     T* q_real_tile = nullptr;
@@ -584,7 +603,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                         rhopw_exx->template real_to_recip<T, T, Device>(density_real, density_recip);
 
                                         // 0.5 in the scalar is caused by 2x in the potential.
-                                        const Real scalar = static_cast<Real>(-GlobalC::exx_info.info_global.hybrid_alpha
+                                        const Real scalar = static_cast<Real>(-exx_options.hybrid_alpha
                                                                               * 0.25 * k_occ * kpoint.weight
                                                                               * k_spin_degeneracy * q_weight);
                                         hamilt::exx_stress_accumulate_op<T, Device>()(

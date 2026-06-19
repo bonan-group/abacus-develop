@@ -15,6 +15,38 @@
 namespace hamilt
 {
 
+namespace
+{
+ExxOperatorOptions make_exx_operator_options()
+{
+    ExxOperatorOptions options;
+    options.batch_fft_size = std::max(1, PARAM.inp.exx_batch_fft_size);
+    options.band_tile_size = std::max(1, PARAM.inp.exx_band_tile_size);
+    options.q_tile_size = std::max(1, PARAM.inp.exx_q_tile_size);
+    options.nspin = PARAM.inp.nspin;
+    options.ecutexx = PARAM.inp.ecutexx;
+    options.ecutrho = PARAM.inp.ecutrho;
+    options.gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
+    options.exxace = PARAM.inp.exxace;
+    options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
+    options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    options.fock_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock];
+    options.erfc_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Erfc];
+    return options;
+}
+} // namespace
+
+template <typename T, typename Device>
+HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
+                              ModulePW::PW_Basis_K* wfc_basis,
+                              K_Vectors* pkv,
+                              pseudopot_cell_vnl* nlpp,
+                              Plus_U* p_dftu,
+                              const UnitCell* ucell)
+    : HamiltPW(pot_in, wfc_basis, pkv, nlpp, p_dftu, ucell, nullptr)
+{
+}
+
 template <typename T, typename Device>
 HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
                               ModulePW::PW_Basis_K* wfc_basis,
@@ -133,9 +165,10 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
     }
     if (GlobalC::exx_info.info_global.cal_exx)
     {
+        const ExxOperatorOptions exx_options = make_exx_operator_options();
         auto exx = source_exx == nullptr
-                       ? new OperatorEXXPW<T, Device>(isk, wfc_basis, pot_in->get_rho_basis(), pkv, ucell)
-                       : new OperatorEXXPW<T, Device>(source_exx, isk, wfc_basis, pkv);
+                       ? new OperatorEXXPW<T, Device>(isk, wfc_basis, pot_in->get_rho_basis(), pkv, ucell, exx_options)
+                       : new OperatorEXXPW<T, Device>(source_exx, isk, wfc_basis, pkv, exx_options);
         if (this->ops == nullptr)
         {
             this->ops = exx;

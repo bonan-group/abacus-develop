@@ -58,6 +58,11 @@ PW_Basis:: ~PW_Basis()
 /// set up maps for fft and create arrays for MPI_Alltoall
 /// set up ffts
 ///
+void PW_Basis::setuptransform()
+{
+    this->setuptransform(1);
+}
+
 void PW_Basis::setuptransform(const int batch_fft_size)
 {
     ModuleBase::timer::start(this->classname, "setuptransform");
