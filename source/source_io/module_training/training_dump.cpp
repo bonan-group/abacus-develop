@@ -203,6 +203,26 @@ std::vector<double> matrix_to_vector(const ModuleBase::matrix& matrix)
     return out;
 }
 
+std::vector<double> compute_sigma_local(const int nspin,
+                                        const int nsigma,
+                                        const int nrxx,
+                                        const std::vector<double>& rho_interleaved,
+                                        const double tpiba,
+                                        const Charge& chr)
+{
+    const auto gdr = XC_Functional_Libxc::cal_gdr(nspin, nrxx, rho_interleaved, tpiba, &chr);
+    const auto sigma_interleaved = XC_Functional_Libxc::convert_sigma(gdr);
+    std::vector<double> sigma_local(nsigma * nrxx, 0.0);
+    for (int isig = 0; isig < nsigma; ++isig)
+    {
+        for (int ir = 0; ir < nrxx; ++ir)
+        {
+            sigma_local[isig * nrxx + ir] = sigma_interleaved[ir * nsigma + isig];
+        }
+    }
+    return sigma_local;
+}
+
 std::vector<double> ry_matrix_to_ha_vector(const ModuleBase::matrix& matrix)
 {
     std::vector<double> out = matrix_to_vector(matrix);
@@ -363,6 +383,7 @@ void write_training_dump(const UnitCell& ucell,
 
     std::vector<double> rho_valence_local(nspin * nrxx, 0.0);
     std::vector<double> rho_total_local(nspin * nrxx, 0.0);
+    std::vector<double> rho_valence_interleaved(nspin * nrxx, 0.0);
     std::vector<double> rho_interleaved(nspin * nrxx, 0.0);
     for (int is = 0; is < nspin; ++is)
     {
@@ -372,6 +393,7 @@ void write_training_dump(const UnitCell& ucell,
             const double rho_total = rho_valence + chr.rho_core[ir] / static_cast<double>(nspin);
             rho_valence_local[is * nrxx + ir] = rho_valence;
             rho_total_local[is * nrxx + ir] = rho_total;
+            rho_valence_interleaved[ir * nspin + is] = rho_valence;
             rho_interleaved[ir * nspin + is] = rho_total;
         }
     }
@@ -382,21 +404,17 @@ void write_training_dump(const UnitCell& ucell,
         rho_core_local[ir] = chr.rho_core[ir];
     }
 
-    const auto gdr = XC_Functional_Libxc::cal_gdr(nspin, nrxx, rho_interleaved, ucell.tpiba, &chr);
-    const auto sigma_interleaved = XC_Functional_Libxc::convert_sigma(gdr);
-    std::vector<double> sigma_local(nsigma * nrxx, 0.0);
-    for (int isig = 0; isig < nsigma; ++isig)
-    {
-        for (int ir = 0; ir < nrxx; ++ir)
-        {
-            sigma_local[isig * nrxx + ir] = sigma_interleaved[ir * nsigma + isig];
-        }
-    }
+    const std::vector<double> sigma_valence_local =
+        compute_sigma_local(nspin, nsigma, nrxx, rho_valence_interleaved, ucell.tpiba, chr);
+    const std::vector<double> sigma_local =
+        compute_sigma_local(nspin, nsigma, nrxx, rho_interleaved, ucell.tpiba, chr);
 
     std::vector<double> tau_local;
+    std::vector<double> tau_valence_local;
     if (chr.kin_r != nullptr)
     {
         tau_local.assign(nspin * nrxx, 0.0);
+        tau_valence_local.assign(nspin * nrxx, 0.0);
         const double pi = std::acos(-1.0);
         const double tf_factor = (3.0 / 10.0) * std::pow(3.0 * pi * pi, 2.0 / 3.0);
         for (int is = 0; is < nspin; ++is)
@@ -404,6 +422,7 @@ void write_training_dump(const UnitCell& ucell,
             for (int ir = 0; ir < nrxx; ++ir)
             {
                 double tau = chr.kin_r[is][ir] / 2.0;
+                tau_valence_local[is * nrxx + ir] = tau;
                 if (PARAM.inp.cider_tf_tau)
                 {
                     const double rho_cps = std::max(chr.rho_core[ir] / static_cast<double>(nspin), 0.0);
@@ -418,8 +437,16 @@ void write_training_dump(const UnitCell& ucell,
     const std::vector<double> rho_total = gather_spin_major_to_global(rho_basis, rho_total_local, nspin);
     const std::vector<double> rho_core = gather_spin_major_to_global(rho_basis, rho_core_local, 1);
     const std::vector<double> sigma = gather_spin_major_to_global(rho_basis, sigma_local, nsigma);
+    const std::vector<double> sigma_valence = gather_spin_major_to_global(rho_basis, sigma_valence_local, nsigma);
     const std::vector<double> tau = tau_local.empty() ? std::vector<double>()
                                                       : gather_spin_major_to_global(rho_basis, tau_local, nspin);
+    const std::vector<double> tau_valence = tau_valence_local.empty()
+                                                ? std::vector<double>()
+                                                : gather_spin_major_to_global(rho_basis, tau_valence_local, nspin);
+
+    double vbm = 0.0;
+    double cbm = 0.0;
+    compute_frontier(elec, vbm, cbm);
 
 #ifdef __MPI
     if (GlobalV::MY_RANK != 0)
@@ -444,11 +471,17 @@ void write_training_dump(const UnitCell& ucell,
     write_npy(dump_dir + "/sigma_xg.npy",
               {static_cast<unsigned long>(nsigma), static_cast<unsigned long>(nxyz)},
               sigma);
+    write_npy(dump_dir + "/sigma_valence_xg.npy",
+              {static_cast<unsigned long>(nsigma), static_cast<unsigned long>(nxyz)},
+              sigma_valence);
     if (!tau.empty())
     {
         write_npy(dump_dir + "/tau_sg.npy",
                   {static_cast<unsigned long>(nspin), static_cast<unsigned long>(nxyz)},
                   tau);
+        write_npy(dump_dir + "/tau_valence_sg.npy",
+                  {static_cast<unsigned long>(nspin), static_cast<unsigned long>(nxyz)},
+                  tau_valence);
     }
 
     write_npy(dump_dir + "/ekb_kb.npy",
@@ -470,10 +503,6 @@ void write_training_dump(const UnitCell& ucell,
         write_npy(dump_dir + "/wk_k.npy", {static_cast<unsigned long>(nks)}, kweights(elec));
         write_npy(dump_dir + "/kspin_k.npy", {static_cast<unsigned long>(nks)}, kspins(elec));
     }
-
-    double vbm = 0.0;
-    double cbm = 0.0;
-    compute_frontier(elec, vbm, cbm);
 
     std::ofstream js((dump_dir + "/record.json").c_str());
     if (!js)
@@ -557,9 +586,11 @@ void write_training_dump(const UnitCell& ucell,
     js << "    \"rho_sg\": \"rho_sg.npy\",\n";
     js << "    \"rho_core_g\": \"rho_core_g.npy\",\n";
     js << "    \"sigma_xg\": \"sigma_xg.npy\",\n";
+    js << "    \"sigma_valence_xg\": \"sigma_valence_xg.npy\",\n";
     if (!tau.empty())
     {
         js << "    \"tau_sg\": \"tau_sg.npy\",\n";
+        js << "    \"tau_valence_sg\": \"tau_valence_sg.npy\",\n";
     }
     js << "    \"ekb_kb\": \"ekb_kb.npy\",\n";
     js << "    \"occ_kb\": \"occ_kb.npy\",\n";
