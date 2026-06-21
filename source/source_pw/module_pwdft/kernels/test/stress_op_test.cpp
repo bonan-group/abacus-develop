@@ -1,8 +1,13 @@
 #include "source_pw/module_pwdft/kernels/stress_op.h"
 
+#include "source_base/constants.h"
+#include "source_base/kernels/math_kernel_op.h"
+#include "source_base/math_ylmreal.h"
 #include "source_base/module_device/memory_op.h"
+#include "source_pw/module_pwdft/nonlocal_maths.hpp"
 
 #include <complex>
+#include <cmath>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -116,6 +121,112 @@ TEST(TestSrcPWStressMultiDevice, cal_stress_nl_op_cpu)
 }
 
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestSrcPWStressMultiDevice, cal_kinetic_stress_op_gpu)
+{
+    using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using delmem_complex_op = base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using syncmem_complex_h2d_op
+        = base_device::memory::synchronize_memory_op<std::complex<double>, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_double_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_double_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const int npw = 5;
+    const int npwk_max = 7;
+    const int npol = 2;
+    const int nbands = 3;
+    const double k_weight = 0.25;
+    const bool occ = true;
+
+    std::vector<double> gk = {
+        0.10, -0.20, 0.35, 0.50, -0.40, 0.00, 0.00,
+        0.30, 0.45, -0.25, 0.15, 0.20, 0.00, 0.00,
+        -0.50, 0.10, 0.20, -0.30, 0.60, 0.00, 0.00};
+    std::vector<double> kfac = {1.00, 1.10, 0.95, 1.25, 0.85, 0.0, 0.0};
+    std::vector<double> wg = {0.50, 0.00, 0.75};
+    std::vector<std::complex<double>> psi(nbands * npol * npwk_max);
+    for (int ib = 0; ib < nbands; ++ib)
+    {
+        for (int ipol = 0; ipol < npol; ++ipol)
+        {
+            for (int ig = 0; ig < npw; ++ig)
+            {
+                const double re = 0.1 * (ib + 1) + 0.03 * (ipol + 1) + 0.02 * ig;
+                const double im = -0.04 * (ib + 1) + 0.05 * ipol - 0.01 * ig;
+                psi[(ib * npol + ipol) * npwk_max + ig] = {re, im};
+            }
+        }
+    }
+
+    std::vector<double> expected(9, 0.0);
+    for (int ib = 0; ib < nbands; ++ib)
+    {
+        if (wg[ib] == 0.0)
+        {
+            continue;
+        }
+        for (int ipol = 0; ipol < npol; ++ipol)
+        {
+            const std::complex<double>* band_psi = psi.data() + (ib * npol + ipol) * npwk_max;
+            for (int l = 0; l < 3; ++l)
+            {
+                for (int m = 0; m <= l; ++m)
+                {
+                    for (int ig = 0; ig < npw; ++ig)
+                    {
+                        expected[l * 3 + m] += wg[ib] * gk[l * npwk_max + ig] * gk[m * npwk_max + ig]
+                                                * kfac[ig] * std::norm(band_psi[ig]);
+                    }
+                }
+            }
+        }
+    }
+
+    std::complex<double>* d_psi = nullptr;
+    double* d_gk = nullptr;
+    double* d_kfac = nullptr;
+    double* d_wg = nullptr;
+    double* d_stress = nullptr;
+    resmem_complex_op()(d_psi, psi.size());
+    resmem_double_op()(d_gk, gk.size());
+    resmem_double_op()(d_kfac, kfac.size());
+    resmem_double_op()(d_wg, wg.size());
+    resmem_double_op()(d_stress, expected.size());
+    syncmem_complex_h2d_op()(d_psi, psi.data(), psi.size());
+    syncmem_double_h2d_op()(d_gk, gk.data(), gk.size());
+    syncmem_double_h2d_op()(d_kfac, kfac.data(), kfac.size());
+    syncmem_double_h2d_op()(d_wg, wg.data(), wg.size());
+
+    hamilt::cal_kinetic_stress_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                     npw,
+                                                                     npwk_max,
+                                                                     npol,
+                                                                     nbands,
+                                                                     d_wg,
+                                                                     occ,
+                                                                     k_weight,
+                                                                     d_gk,
+                                                                     d_kfac,
+                                                                     d_psi,
+                                                                     d_stress);
+
+    std::vector<double> stress(expected.size(), 0.0);
+    syncmem_double_d2h_op()(stress.data(), d_stress, stress.size());
+    for (int i = 0; i < stress.size(); ++i)
+    {
+        EXPECT_NEAR(stress[i], expected[i], 1e-12);
+    }
+
+    delmem_complex_op()(d_psi);
+    delmem_double_op()(d_gk);
+    delmem_double_op()(d_kfac);
+    delmem_double_op()(d_wg);
+    delmem_double_op()(d_stress);
+}
+
 TEST(TestSrcPWStressMultiDevice, cal_dbecp_noevc_nl_op_gpu)
 {
     const int ipol = 0, jpol = 0, nkb = 8, npw = 59, npwx = 70, ik = 0;
@@ -302,4 +413,652 @@ TEST(TestSrcPWStressMultiDevice, cal_stress_nl_op_gpu)
     delmem_int_op()(d_atom_nh);
     delmem_int_op()(d_atom_na);
 }
+
+#if __CUDA || __UT_USE_CUDA
+TEST(TestSrcPWStressMultiDevice, cal_stress_nl_reordered_chunk_gpu)
+{
+    using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using delmem_complex_op = base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using syncmem_complex_h2d_op
+        = base_device::memory::synchronize_memory_op<std::complex<double>, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_double_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_double_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const base_device::DEVICE_GPU* gpu_ctx = {};
+    constexpr int chunk_nkb = 4;
+    constexpr int nproj = 2;
+    constexpr int atom_count = 2;
+    constexpr int atom_start = 1;
+    constexpr int nbands_occ = 3;
+    constexpr int npw = 5;
+    constexpr int spin = 0;
+    constexpr int deeq_2 = 4;
+    constexpr int deeq_3 = 2;
+    constexpr int deeq_4 = 2;
+    constexpr int it = 0;
+    constexpr int ipol = 2;
+    constexpr int jpol = 1;
+    constexpr bool occ = true;
+    constexpr bool nondiagonal = true;
+
+    std::vector<double> wg = {0.7, 1.1, 0.3};
+    std::vector<double> ekb = {0.2, -0.1, 0.05};
+    std::vector<double> qq_nt = {0.11, -0.03, 0.07, 0.19};
+    std::vector<double> deeq(deeq_2 * deeq_3 * deeq_4, 0.0);
+    for (int iat = 0; iat < deeq_2; ++iat)
+    {
+        for (int ip1 = 0; ip1 < deeq_3; ++ip1)
+        {
+            for (int ip2 = 0; ip2 < deeq_4; ++ip2)
+            {
+                deeq[(iat * deeq_3 + ip1) * deeq_4 + ip2]
+                    = 0.2 + 0.13 * iat + 0.05 * ip1 - 0.02 * ip2;
+            }
+        }
+    }
+
+    std::vector<std::complex<double>> becp(nbands_occ * chunk_nkb);
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        for (int ip = 0; ip < chunk_nkb; ++ip)
+        {
+            becp[ib * chunk_nkb + ip] = {0.04 * (ib + 1) + 0.03 * ip,
+                                         -0.02 * (ip + 1) + 0.01 * ib};
+        }
+    }
+
+    std::vector<std::complex<double>> psi(nbands_occ * npw);
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            psi[ib * npw + ig] = {0.05 * (ig + 1) - 0.03 * ib,
+                                  0.02 * (ib + 1) + 0.04 * ig};
+        }
+    }
+
+    std::vector<std::complex<double>> vkb_deri(chunk_nkb * npw);
+    for (int ip = 0; ip < chunk_nkb; ++ip)
+    {
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            vkb_deri[ip * npw + ig] = {-0.04 * (ip + 1) + 0.01 * ig,
+                                       0.03 * (ig + 1) - 0.02 * ip};
+        }
+    }
+
+    std::vector<std::complex<double>> dbecp(nbands_occ * chunk_nkb, {0.0, 0.0});
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        for (int ip = 0; ip < chunk_nkb; ++ip)
+        {
+            for (int ig = 0; ig < npw; ++ig)
+            {
+                dbecp[ib * chunk_nkb + ip] += std::conj(vkb_deri[ip * npw + ig]) * psi[ib * npw + ig];
+            }
+        }
+    }
+
+    std::vector<double> expected(9, 0.0);
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        const double fac = wg[ib];
+        for (int ia = 0; ia < atom_count; ++ia)
+        {
+            const int iat = atom_start + ia;
+            const int sum = ia * nproj;
+            for (int ip1 = 0; ip1 < nproj; ++ip1)
+            {
+                for (int ip2 = 0; ip2 < nproj; ++ip2)
+                {
+                    const double ps = deeq[(iat * deeq_3 + ip1) * deeq_4 + ip2]
+                                      - ekb[ib] * qq_nt[ip1 * deeq_4 + ip2];
+                    const int inkb1 = sum + ip1;
+                    const int inkb2 = sum + ip2;
+                    const double dbb = (std::conj(dbecp[ib * chunk_nkb + inkb1])
+                                        * becp[ib * chunk_nkb + inkb2]).real();
+                    expected[ipol * 3 + jpol] -= ps * fac * dbb;
+                }
+            }
+        }
+    }
+
+    std::complex<double>* d_becp = nullptr;
+    std::complex<double>* d_psi = nullptr;
+    std::complex<double>* d_vkb_deri = nullptr;
+    std::complex<double>* d_r = nullptr;
+    std::complex<double>* d_y = nullptr;
+    double* d_wg = nullptr;
+    double* d_ekb = nullptr;
+    double* d_qq_nt = nullptr;
+    double* d_deeq = nullptr;
+    double* d_stress = nullptr;
+    resmem_complex_op()(d_becp, becp.size());
+    resmem_complex_op()(d_psi, psi.size());
+    resmem_complex_op()(d_vkb_deri, vkb_deri.size());
+    resmem_complex_op()(d_r, becp.size());
+    resmem_complex_op()(d_y, vkb_deri.size());
+    resmem_double_op()(d_wg, wg.size());
+    resmem_double_op()(d_ekb, ekb.size());
+    resmem_double_op()(d_qq_nt, qq_nt.size());
+    resmem_double_op()(d_deeq, deeq.size());
+    resmem_double_op()(d_stress, expected.size());
+    syncmem_complex_h2d_op()(d_becp, becp.data(), becp.size());
+    syncmem_complex_h2d_op()(d_psi, psi.data(), psi.size());
+    syncmem_complex_h2d_op()(d_vkb_deri, vkb_deri.data(), vkb_deri.size());
+    syncmem_double_h2d_op()(d_wg, wg.data(), wg.size());
+    syncmem_double_h2d_op()(d_ekb, ekb.data(), ekb.size());
+    syncmem_double_h2d_op()(d_qq_nt, qq_nt.data(), qq_nt.size());
+    syncmem_double_h2d_op()(d_deeq, deeq.data(), deeq.size());
+    std::vector<double> stress(expected.size(), 0.0);
+    syncmem_double_h2d_op()(d_stress, stress.data(), stress.size());
+
+    hamilt::build_stress_nl_reordered_r_op<double, base_device::DEVICE_GPU>().chunk(gpu_ctx,
+                                                                                   nondiagonal,
+                                                                                   chunk_nkb,
+                                                                                   nbands_occ,
+                                                                                   spin,
+                                                                                   deeq_2,
+                                                                                   deeq_3,
+                                                                                   deeq_4,
+                                                                                   it,
+                                                                                   atom_start,
+                                                                                   atom_count,
+                                                                                   nproj,
+                                                                                   d_wg,
+                                                                                   occ,
+                                                                                   d_ekb,
+                                                                                   d_qq_nt,
+                                                                                   d_deeq,
+                                                                                   d_becp,
+                                                                                   d_r);
+    const std::complex<double> one(1.0, 0.0);
+    const std::complex<double> zero(0.0, 0.0);
+    ModuleBase::gemm_op<std::complex<double>, base_device::DEVICE_GPU>()('N',
+                                                                         'C',
+                                                                         npw,
+                                                                         chunk_nkb,
+                                                                         nbands_occ,
+                                                                         &one,
+                                                                         d_psi,
+                                                                         npw,
+                                                                         d_r,
+                                                                         chunk_nkb,
+                                                                         &zero,
+                                                                         d_y,
+                                                                         npw);
+    hamilt::cal_stress_nl_reordered_op<double, base_device::DEVICE_GPU>().chunk(gpu_ctx,
+                                                                                ipol,
+                                                                                jpol,
+                                                                                npw,
+                                                                                chunk_nkb,
+                                                                                d_y,
+                                                                                d_vkb_deri,
+                                                                                d_stress);
+
+    syncmem_double_d2h_op()(stress.data(), d_stress, stress.size());
+    for (int ii = 0; ii < stress.size(); ++ii)
+    {
+        EXPECT_NEAR(stress[ii], expected[ii], 1e-12);
+    }
+
+    delmem_complex_op()(d_becp);
+    delmem_complex_op()(d_psi);
+    delmem_complex_op()(d_vkb_deri);
+    delmem_complex_op()(d_r);
+    delmem_complex_op()(d_y);
+    delmem_double_op()(d_wg);
+    delmem_double_op()(d_ekb);
+    delmem_double_op()(d_qq_nt);
+    delmem_double_op()(d_deeq);
+    delmem_double_op()(d_stress);
+}
+
+TEST(TestSrcPWStressMultiDevice, cal_stress_nl_reordered_chunk_nc_gpu)
+{
+    using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using delmem_complex_op = base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using syncmem_complex_h2d_op
+        = base_device::memory::synchronize_memory_op<std::complex<double>, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_double_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_double_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const base_device::DEVICE_GPU* gpu_ctx = {};
+    constexpr int chunk_nkb = 4;
+    constexpr int nproj = 2;
+    constexpr int atom_count = 2;
+    constexpr int atom_start = 1;
+    constexpr int atom_offset_in_type = 1;
+    constexpr int nbands_occ = 3;
+    constexpr int npol = 2;
+    constexpr int npw = 5;
+    constexpr int deeq_2 = 4;
+    constexpr int deeq_3 = 2;
+    constexpr int deeq_4 = 2;
+    constexpr int it = 0;
+    constexpr int ipol = 1;
+    constexpr int jpol = 0;
+    constexpr bool occ = true;
+
+    std::vector<double> wg = {0.9, 0.4, 1.2};
+    std::vector<double> ekb = {0.13, -0.07, 0.21};
+    std::vector<double> qq_nt = {0.17, -0.04, 0.06, 0.23};
+    std::vector<std::complex<double>> deeq_nc(4 * deeq_2 * deeq_3 * deeq_4);
+    for (int block = 0; block < 4; ++block)
+    {
+        for (int iat = 0; iat < deeq_2; ++iat)
+        {
+            for (int ip1 = 0; ip1 < deeq_3; ++ip1)
+            {
+                for (int ip2 = 0; ip2 < deeq_4; ++ip2)
+                {
+                    const double re = 0.15 * (block + 1) + 0.04 * iat + 0.03 * ip1 - 0.02 * ip2;
+                    const double im = 0.01 * (block + 1) - 0.015 * iat + 0.02 * ip2;
+                    deeq_nc[((block * deeq_2 + iat) * deeq_3 + ip1) * deeq_4 + ip2] = {re, im};
+                }
+            }
+        }
+    }
+
+    std::vector<std::complex<double>> becp(nbands_occ * npol * chunk_nkb);
+    std::vector<std::complex<double>> psi(nbands_occ * npol * npw);
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        for (int is = 0; is < npol; ++is)
+        {
+            for (int ip = 0; ip < chunk_nkb; ++ip)
+            {
+                becp[(ib * npol + is) * chunk_nkb + ip]
+                    = {0.03 * (ib + 1) + 0.02 * is + 0.04 * ip,
+                       -0.01 * (ip + 1) + 0.025 * is - 0.015 * ib};
+            }
+            for (int ig = 0; ig < npw; ++ig)
+            {
+                psi[(ib * npol + is) * npw + ig]
+                    = {0.02 * (ig + 1) - 0.01 * ib + 0.03 * is,
+                       0.04 * (ib + 1) + 0.015 * ig - 0.02 * is};
+            }
+        }
+    }
+
+    std::vector<std::complex<double>> vkb_deri(chunk_nkb * npw);
+    for (int ip = 0; ip < chunk_nkb; ++ip)
+    {
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            vkb_deri[ip * npw + ig] = {-0.02 * (ip + 1) + 0.015 * ig,
+                                       0.025 * (ig + 1) - 0.01 * ip};
+        }
+    }
+
+    std::vector<std::complex<double>> dbecp(nbands_occ * npol * chunk_nkb, {0.0, 0.0});
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        for (int is = 0; is < npol; ++is)
+        {
+            for (int ip = 0; ip < chunk_nkb; ++ip)
+            {
+                for (int ig = 0; ig < npw; ++ig)
+                {
+                    dbecp[(ib * npol + is) * chunk_nkb + ip]
+                        += std::conj(vkb_deri[ip * npw + ig]) * psi[(ib * npol + is) * npw + ig];
+                }
+            }
+        }
+    }
+
+    std::vector<double> expected(9, 0.0);
+    for (int ib = 0; ib < nbands_occ; ++ib)
+    {
+        const double fac = wg[ib];
+        const int ib2 = ib * npol;
+        const int chunk_type_start = atom_start - atom_offset_in_type;
+        int sum = 0;
+        for (int ia = 0; ia < atom_count; ++ia)
+        {
+            const int deeq_iat = chunk_type_start + atom_offset_in_type + ia;
+            for (int ip1 = 0; ip1 < nproj; ++ip1)
+            {
+                for (int ip2 = 0; ip2 < nproj; ++ip2)
+                {
+                    const std::complex<double> ps_qq(-ekb[ib] * qq_nt[it * deeq_3 * deeq_4 + ip1 * deeq_4 + ip2],
+                                                     0.0);
+                    const std::complex<double> ps0
+                        = deeq_nc[((0 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2] + ps_qq;
+                    const std::complex<double> ps1
+                        = deeq_nc[((1 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2];
+                    const std::complex<double> ps2
+                        = deeq_nc[((2 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2];
+                    const std::complex<double> ps3
+                        = deeq_nc[((3 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2] + ps_qq;
+                    const int inkb1 = sum + ip1;
+                    const int inkb2 = sum + ip2;
+                    const std::complex<double> dbb0
+                        = std::conj(dbecp[ib2 * chunk_nkb + inkb1]) * becp[ib2 * chunk_nkb + inkb2];
+                    const std::complex<double> dbb1
+                        = std::conj(dbecp[ib2 * chunk_nkb + inkb1]) * becp[(ib2 + 1) * chunk_nkb + inkb2];
+                    const std::complex<double> dbb2
+                        = std::conj(dbecp[(ib2 + 1) * chunk_nkb + inkb1]) * becp[ib2 * chunk_nkb + inkb2];
+                    const std::complex<double> dbb3
+                        = std::conj(dbecp[(ib2 + 1) * chunk_nkb + inkb1])
+                          * becp[(ib2 + 1) * chunk_nkb + inkb2];
+                    expected[ipol * 3 + jpol] -= fac * (ps0 * dbb0 + ps1 * dbb1 + ps2 * dbb2 + ps3 * dbb3).real();
+                }
+            }
+            sum += nproj;
+        }
+    }
+
+    std::complex<double>* d_becp = nullptr;
+    std::complex<double>* d_psi = nullptr;
+    std::complex<double>* d_vkb_deri = nullptr;
+    std::complex<double>* d_deeq_nc = nullptr;
+    std::complex<double>* d_r = nullptr;
+    std::complex<double>* d_y = nullptr;
+    double* d_wg = nullptr;
+    double* d_ekb = nullptr;
+    double* d_qq_nt = nullptr;
+    double* d_stress = nullptr;
+    resmem_complex_op()(d_becp, becp.size());
+    resmem_complex_op()(d_psi, psi.size());
+    resmem_complex_op()(d_vkb_deri, vkb_deri.size());
+    resmem_complex_op()(d_deeq_nc, deeq_nc.size());
+    resmem_complex_op()(d_r, becp.size());
+    resmem_complex_op()(d_y, vkb_deri.size());
+    resmem_double_op()(d_wg, wg.size());
+    resmem_double_op()(d_ekb, ekb.size());
+    resmem_double_op()(d_qq_nt, qq_nt.size());
+    resmem_double_op()(d_stress, expected.size());
+    syncmem_complex_h2d_op()(d_becp, becp.data(), becp.size());
+    syncmem_complex_h2d_op()(d_psi, psi.data(), psi.size());
+    syncmem_complex_h2d_op()(d_vkb_deri, vkb_deri.data(), vkb_deri.size());
+    syncmem_complex_h2d_op()(d_deeq_nc, deeq_nc.data(), deeq_nc.size());
+    syncmem_double_h2d_op()(d_wg, wg.data(), wg.size());
+    syncmem_double_h2d_op()(d_ekb, ekb.data(), ekb.size());
+    syncmem_double_h2d_op()(d_qq_nt, qq_nt.data(), qq_nt.size());
+    std::vector<double> stress(expected.size(), 0.0);
+    syncmem_double_h2d_op()(d_stress, stress.data(), stress.size());
+
+    hamilt::build_stress_nl_reordered_r_op<double, base_device::DEVICE_GPU>().chunk(gpu_ctx,
+                                                                                   chunk_nkb,
+                                                                                   nbands_occ,
+                                                                                   deeq_2,
+                                                                                   deeq_3,
+                                                                                   deeq_4,
+                                                                                   it,
+                                                                                   atom_start,
+                                                                                   atom_offset_in_type,
+                                                                                   atom_count,
+                                                                                   nproj,
+                                                                                   d_wg,
+                                                                                   occ,
+                                                                                   d_ekb,
+                                                                                   d_qq_nt,
+                                                                                   d_deeq_nc,
+                                                                                   d_becp,
+                                                                                   d_r);
+    const std::complex<double> one(1.0, 0.0);
+    const std::complex<double> zero(0.0, 0.0);
+    ModuleBase::gemm_op<std::complex<double>, base_device::DEVICE_GPU>()('N',
+                                                                         'C',
+                                                                         npw,
+                                                                         chunk_nkb,
+                                                                         nbands_occ * npol,
+                                                                         &one,
+                                                                         d_psi,
+                                                                         npw,
+                                                                         d_r,
+                                                                         chunk_nkb,
+                                                                         &zero,
+                                                                         d_y,
+                                                                         npw);
+    hamilt::cal_stress_nl_reordered_op<double, base_device::DEVICE_GPU>().chunk(gpu_ctx,
+                                                                                ipol,
+                                                                                jpol,
+                                                                                npw,
+                                                                                chunk_nkb,
+                                                                                d_y,
+                                                                                d_vkb_deri,
+                                                                                d_stress);
+
+    syncmem_double_d2h_op()(stress.data(), d_stress, stress.size());
+    for (int ii = 0; ii < stress.size(); ++ii)
+    {
+        EXPECT_NEAR(stress[ii], expected[ii], 1e-12);
+    }
+
+    delmem_complex_op()(d_becp);
+    delmem_complex_op()(d_psi);
+    delmem_complex_op()(d_vkb_deri);
+    delmem_complex_op()(d_deeq_nc);
+    delmem_complex_op()(d_r);
+    delmem_complex_op()(d_y);
+    delmem_double_op()(d_wg);
+    delmem_double_op()(d_ekb);
+    delmem_double_op()(d_qq_nt);
+    delmem_double_op()(d_stress);
+}
+#endif // __CUDA || __UT_USE_CUDA
+
+#if __CUDA || __UT_USE_CUDA
+TEST(TestSrcPWStressMultiDevice, cal_ylm_deri_op_gpu)
+{
+    const base_device::DEVICE_GPU* gpu_ctx = {};
+    constexpr int lmax = 3;
+    constexpr int nylm = (lmax + 1) * (lmax + 1);
+    constexpr int npw = 5;
+
+    const std::vector<double> gk = {0.2,  -0.4,  0.7,
+                                    1.0,   0.3, -0.5,
+                                    -0.6,  0.8,  0.1,
+                                    0.0,   0.0,  0.0,
+                                    1.2,  -1.1,  0.4};
+    std::vector<double> expected(3 * nylm * npw, 0.0);
+    for (int ipol = 0; ipol < 3; ++ipol)
+    {
+        hamilt::Nonlocal_maths<double, base_device::DEVICE_CPU>::dylmr2(nylm,
+                                                                        npw,
+                                                                        gk.data(),
+                                                                        expected.data() + ipol * nylm * npw,
+                                                                        ipol);
+    }
+
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_double_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_double_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    double* d_gk = nullptr;
+    double* d_ylm_deri = nullptr;
+    resmem_double_op()(d_gk, gk.size());
+    resmem_double_op()(d_ylm_deri, expected.size());
+    syncmem_double_h2d_op()(d_gk, gk.data(), gk.size());
+
+    hamilt::cal_ylm_deri_op<double, base_device::DEVICE_GPU>()(gpu_ctx, nylm, npw, d_gk, d_ylm_deri);
+
+    std::vector<double> actual(expected.size(), 0.0);
+    syncmem_double_d2h_op()(actual.data(), d_ylm_deri, actual.size());
+
+    for (size_t ii = 0; ii < actual.size(); ++ii)
+    {
+        EXPECT_NEAR(actual[ii], expected[ii], 1e-8);
+    }
+
+    delmem_double_op()(d_gk);
+    delmem_double_op()(d_ylm_deri);
+}
+#endif // __CUDA || __UT_USE_CUDA
+
+#if __CUDA || __UT_USE_CUDA
+TEST(TestSrcPWStressMultiDevice, cal_stress_ewa_op_gpu)
+{
+    const base_device::DEVICE_GPU* gpu_ctx = {};
+    const int nat = 3;
+    const int npw = 5;
+    const int ig0 = 0;
+    const double alpha = 1.2;
+    const double omega = 40.0;
+    const double tpiba2 = 0.75;
+    const double lat0 = 2.0;
+    const double fact = 2.0;
+    const double rmax = 2.1;
+    const int nm1 = 1;
+    const int nm2 = 1;
+    const int nm3 = 1;
+    const int do_real_space = 1;
+
+    const std::vector<double> tau = {0.0, 0.0, 0.0, 0.25, 0.25, 0.0, 0.5, 0.0, 0.25};
+    const std::vector<double> atom_z = {4.0, 4.0, 4.0};
+    const std::vector<double> gcar = {0.0, 0.0, 0.0,
+                                      1.0, 0.0, 0.0,
+                                      0.0, 1.0, 0.0,
+                                      0.0, 0.0, 1.0,
+                                      1.0, 1.0, 0.0};
+    const std::vector<double> gg = {0.0, 1.0, 1.0, 1.0, 2.0};
+    const std::vector<double> latvec = {1.0, 0.0, 0.0,
+                                        0.0, 1.0, 0.0,
+                                        0.0, 0.0, 1.0};
+
+    std::vector<double> expected(7, 0.0);
+    const double charge = 12.0;
+    expected[6] = ModuleBase::TWO_PI * ModuleBase::e2 / 4.0 / alpha * std::pow(charge / omega, 2);
+    for (int ig = 0; ig < npw; ++ig)
+    {
+        if (ig == ig0)
+        {
+            continue;
+        }
+        const double g2 = gg[ig] * tpiba2;
+        const double g2a = g2 / 4.0 / alpha;
+        std::complex<double> rhostar(0.0, 0.0);
+        for (int iat = 0; iat < nat; ++iat)
+        {
+            const double arg = ModuleBase::TWO_PI * (gcar[ig * 3] * tau[iat * 3]
+                                                     + gcar[ig * 3 + 1] * tau[iat * 3 + 1]
+                                                     + gcar[ig * 3 + 2] * tau[iat * 3 + 2]);
+            rhostar += std::complex<double>(atom_z[iat] * std::cos(arg), atom_z[iat] * std::sin(arg));
+        }
+        rhostar /= omega;
+        const double sewald = fact * ModuleBase::TWO_PI * ModuleBase::e2 * std::exp(-g2a) / g2
+                              * std::norm(rhostar);
+        expected[6] -= sewald;
+        int idx = 0;
+        for (int l = 0; l < 3; ++l)
+        {
+            for (int m = 0; m <= l; ++m)
+            {
+                expected[idx++] += sewald * tpiba2 * 2.0 * gcar[ig * 3 + l] * gcar[ig * 3 + m] / g2
+                                   * (g2a + 1.0);
+            }
+        }
+    }
+
+    const double sqa = std::sqrt(alpha);
+    const double sq8a_2pi = std::sqrt(8.0 * alpha / ModuleBase::TWO_PI);
+    for (int iat = 0; iat < nat; ++iat)
+    {
+        for (int jat = 0; jat < nat; ++jat)
+        {
+            const double dtau[3] = {tau[iat * 3] - tau[jat * 3],
+                                    tau[iat * 3 + 1] - tau[jat * 3 + 1],
+                                    tau[iat * 3 + 2] - tau[jat * 3 + 2]};
+            for (int ia = -nm1; ia <= nm1; ++ia)
+            {
+                for (int ib = -nm2; ib <= nm2; ++ib)
+                {
+                    for (int ic = -nm3; ic <= nm3; ++ic)
+                    {
+                        double r[3] = {ia * latvec[0] + ib * latvec[3] + ic * latvec[6] - dtau[0],
+                                       ia * latvec[1] + ib * latvec[4] + ic * latvec[7] - dtau[1],
+                                       ia * latvec[2] + ib * latvec[5] + ic * latvec[8] - dtau[2]};
+                        const double r2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+                        if (r2 > rmax * rmax || std::abs(r2) <= 1.0e-10)
+                        {
+                            continue;
+                        }
+                        const double rr = std::sqrt(r2) * lat0;
+                        const double fac = -ModuleBase::e2 / 2.0 / omega * std::pow(lat0, 2)
+                                           * atom_z[iat] * atom_z[jat] / std::pow(rr, 3)
+                                           * (std::erfc(sqa * rr)
+                                              + rr * sq8a_2pi * std::exp(-alpha * std::pow(rr, 2)));
+                        int idx = 0;
+                        for (int l = 0; l < 3; ++l)
+                        {
+                            for (int m = 0; m <= l; ++m)
+                            {
+                                expected[idx++] += fac * r[l] * r[m];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    double* d_tau = nullptr;
+    double* d_atom_z = nullptr;
+    double* d_gcar = nullptr;
+    double* d_gg = nullptr;
+    double* d_latvec = nullptr;
+    double* d_stress = nullptr;
+    resmem_dd_op()(d_tau, tau.size());
+    resmem_dd_op()(d_atom_z, atom_z.size());
+    resmem_dd_op()(d_gcar, gcar.size());
+    resmem_dd_op()(d_gg, gg.size());
+    resmem_dd_op()(d_latvec, latvec.size());
+    resmem_dd_op()(d_stress, 7);
+    syncmem_d2d_h2d_op()(d_tau, tau.data(), tau.size());
+    syncmem_d2d_h2d_op()(d_atom_z, atom_z.data(), atom_z.size());
+    syncmem_d2d_h2d_op()(d_gcar, gcar.data(), gcar.size());
+    syncmem_d2d_h2d_op()(d_gg, gg.data(), gg.size());
+    syncmem_d2d_h2d_op()(d_latvec, latvec.data(), latvec.size());
+
+    hamilt::cal_stress_ewa_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                 nat,
+                                                                 npw,
+                                                                 ig0,
+                                                                 do_real_space,
+                                                                 nm1,
+                                                                 nm2,
+                                                                 nm3,
+                                                                 alpha,
+                                                                 omega,
+                                                                 tpiba2,
+                                                                 lat0,
+                                                                 fact,
+                                                                 rmax,
+                                                                 charge,
+                                                                 d_tau,
+                                                                 d_atom_z,
+                                                                 d_gcar,
+                                                                 d_gg,
+                                                                 d_latvec,
+                                                                 d_stress);
+
+    std::vector<double> stress(7, 0.0);
+    syncmem_d2d_d2h_op()(stress.data(), d_stress, stress.size());
+
+    for (int i = 0; i < 7; ++i)
+    {
+        EXPECT_NEAR(stress[i], expected[i], 1.0e-10);
+    }
+
+    delmem_dd_op()(d_tau);
+    delmem_dd_op()(d_atom_z);
+    delmem_dd_op()(d_gcar);
+    delmem_dd_op()(d_gg);
+    delmem_dd_op()(d_latvec);
+    delmem_dd_op()(d_stress);
+}
+#endif
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM

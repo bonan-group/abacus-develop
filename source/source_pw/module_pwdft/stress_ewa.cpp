@@ -10,6 +10,33 @@
 #include <omp.h>
 #endif
 
+namespace
+{
+template <typename FPTYPE>
+void finalize_ewa_stress(ModuleBase::matrix& sigma, FPTYPE sdewald)
+{
+    for (int l = 0; l < 3; l++)
+    {
+        sigma(l, l) += sdewald;
+    }
+    for (int l = 0; l < 3; l++)
+    {
+        for (int m = 0; m < l + 1; m++)
+        {
+            sigma(l, m) = -sigma(l, m);
+            Parallel_Reduce::reduce_pool(sigma(l, m));
+        }
+    }
+    for (int l = 0; l < 3; l++)
+    {
+        for (int m = 0; m < l + 1; m++)
+        {
+            sigma(m, l) = sigma(l, m);
+        }
+    }
+}
+} // namespace
+
 //calcualte the Ewald stress term in PW and LCAO
 template<typename FPTYPE, typename Device>
 void Stress_Func<FPTYPE, Device>::stress_ewa(const UnitCell& ucell,
@@ -64,6 +91,126 @@ void Stress_Func<FPTYPE, Device>::stress_ewa(const UnitCell& ucell,
 		fact=2.0;
 	}
 //    else fact=1.0;
+
+#if ((defined __CUDA) || (defined __UT_USE_CUDA))
+    this->device = base_device::get_device_type(this->ctx);
+    if (this->device == base_device::GpuDevice)
+    {
+        std::vector<FPTYPE> tau(ucell.nat * 3);
+        std::vector<FPTYPE> atom_z(ucell.nat);
+        int iat = 0;
+        for (int it = 0; it < ucell.ntype; ++it)
+        {
+            const FPTYPE zv = ucell.atoms[it].ncpp.zv;
+            for (int ia = 0; ia < ucell.atoms[it].na; ++ia)
+            {
+                tau[iat * 3] = ucell.atoms[it].tau[ia].x;
+                tau[iat * 3 + 1] = ucell.atoms[it].tau[ia].y;
+                tau[iat * 3 + 2] = ucell.atoms[it].tau[ia].z;
+                atom_z[iat] = zv;
+                ++iat;
+            }
+        }
+        std::vector<FPTYPE> gcar(rho_basis->npw * 3);
+        std::vector<FPTYPE> gg(rho_basis->npw);
+        for (int ig = 0; ig < rho_basis->npw; ++ig)
+        {
+            gcar[ig * 3] = rho_basis->gcar[ig].x;
+            gcar[ig * 3 + 1] = rho_basis->gcar[ig].y;
+            gcar[ig * 3 + 2] = rho_basis->gcar[ig].z;
+            gg[ig] = rho_basis->gg[ig];
+        }
+        FPTYPE rmax = 0.0;
+        int nm1 = 0;
+        int nm2 = 0;
+        int nm3 = 0;
+        const int do_real_space = ig0 >= 0 ? 1 : 0;
+        if (do_real_space)
+        {
+            const FPTYPE sqa = sqrt(alpha);
+            rmax = 4.0 / sqa / ucell.lat0;
+            FPTYPE bg1[3] = {ucell.G.e11, ucell.G.e12, ucell.G.e13};
+            nm1 = static_cast<int>(sqrt(bg1[0] * bg1[0] + bg1[1] * bg1[1] + bg1[2] * bg1[2]) * rmax + 2);
+            bg1[0] = ucell.G.e21;
+            bg1[1] = ucell.G.e22;
+            bg1[2] = ucell.G.e23;
+            nm2 = static_cast<int>(sqrt(bg1[0] * bg1[0] + bg1[1] * bg1[1] + bg1[2] * bg1[2]) * rmax + 2);
+            bg1[0] = ucell.G.e31;
+            bg1[1] = ucell.G.e32;
+            bg1[2] = ucell.G.e33;
+            nm3 = static_cast<int>(sqrt(bg1[0] * bg1[0] + bg1[1] * bg1[1] + bg1[2] * bg1[2]) * rmax + 2);
+        }
+        std::vector<FPTYPE> latvec = {ucell.latvec.e11,
+                                      ucell.latvec.e12,
+                                      ucell.latvec.e13,
+                                      ucell.latvec.e21,
+                                      ucell.latvec.e22,
+                                      ucell.latvec.e23,
+                                      ucell.latvec.e31,
+                                      ucell.latvec.e32,
+                                      ucell.latvec.e33};
+
+        FPTYPE* tau_d = nullptr;
+        FPTYPE* atom_z_d = nullptr;
+        FPTYPE* gcar_d = nullptr;
+        FPTYPE* gg_d = nullptr;
+        FPTYPE* latvec_d = nullptr;
+        FPTYPE* stress_d = nullptr;
+        resmem_var_op()(tau_d, tau.size());
+        resmem_var_op()(atom_z_d, atom_z.size());
+        resmem_var_op()(gcar_d, gcar.size());
+        resmem_var_op()(gg_d, gg.size());
+        resmem_var_op()(latvec_d, latvec.size());
+        resmem_var_op()(stress_d, 7);
+        syncmem_var_h2d_op()(tau_d, tau.data(), tau.size());
+        syncmem_var_h2d_op()(atom_z_d, atom_z.data(), atom_z.size());
+        syncmem_var_h2d_op()(gcar_d, gcar.data(), gcar.size());
+        syncmem_var_h2d_op()(gg_d, gg.data(), gg.size());
+        syncmem_var_h2d_op()(latvec_d, latvec.data(), latvec.size());
+
+        hamilt::cal_stress_ewa_op<FPTYPE, Device>()(this->ctx,
+                                                    ucell.nat,
+                                                    rho_basis->npw,
+                                                    ig0,
+                                                    do_real_space,
+                                                    nm1,
+                                                    nm2,
+                                                    nm3,
+                                                    alpha,
+                                                    ucell.omega,
+                                                    ucell.tpiba2,
+                                                    ucell.lat0,
+                                                    fact,
+                                                    rmax,
+                                                    charge,
+                                                    tau_d,
+                                                    atom_z_d,
+                                                    gcar_d,
+                                                    gg_d,
+                                                    latvec_d,
+                                                    stress_d);
+        std::vector<FPTYPE> stress_h(7, 0.0);
+        syncmem_var_d2h_op()(stress_h.data(), stress_d, stress_h.size());
+        sigma(0, 0) += stress_h[0];
+        sigma(1, 0) += stress_h[1];
+        sigma(1, 1) += stress_h[2];
+        sigma(2, 0) += stress_h[3];
+        sigma(2, 1) += stress_h[4];
+        sigma(2, 2) += stress_h[5];
+        sdewald = stress_h[6];
+
+        delmem_var_op()(tau_d);
+        delmem_var_op()(atom_z_d);
+        delmem_var_op()(gcar_d);
+        delmem_var_op()(gg_d);
+        delmem_var_op()(latvec_d);
+        delmem_var_op()(stress_d);
+
+        finalize_ewa_stress(sigma, sdewald);
+        ModuleBase::timer::end("Stress", "stress_ewa");
+        return;
+    }
+#endif
 
 #pragma omp parallel
 {
@@ -180,25 +327,7 @@ void Stress_Func<FPTYPE, Device>::stress_ewa(const UnitCell& ucell,
 	}
 }
 
-	for(int l=0;l<3;l++)
-	{
-		sigma(l,l) +=sdewald;
-	}
-	for(int l=0;l<3;l++)
-	{
-		for(int m=0;m<l+1;m++)
-		{
-			sigma(l,m)=-sigma(l,m);
-            Parallel_Reduce::reduce_pool(sigma(l, m));
-		}
-	}
-	for(int l=0;l<3;l++)
-	{
-		for(int m=0;m<l+1;m++)
-		{
-			sigma(m,l)=sigma(l,m);
-		}
-	}
+    finalize_ewa_stress(sigma, sdewald);
 
 	ModuleBase::timer::end("Stress","stress_ewa");
 

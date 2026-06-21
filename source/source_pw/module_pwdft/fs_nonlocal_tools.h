@@ -168,6 +168,7 @@ class FS_Nonlocal_tools
                                  const int ipol,
                                  const int jpol,
                                  std::complex<FPTYPE>* vkb_out);
+    void ensure_vq_type_chunk(const int ik, const int it, const bool with_derivative);
 
   private:
     /// pointers to access the data without memory arrangement
@@ -245,11 +246,16 @@ class FS_Nonlocal_tools
     std::complex<FPTYPE>* vkb_chunk = nullptr;
     std::complex<FPTYPE>* becp_chunk = nullptr;
     std::complex<FPTYPE>* dbecp_chunk = nullptr;
+    std::complex<FPTYPE>* stress_r_chunk = nullptr;
+    std::complex<FPTYPE>* stress_y_chunk = nullptr;
     std::complex<FPTYPE>* vkb_save_chunk = nullptr;
     int chunk_nkb_capacity = 0;
     int chunk_bands_capacity = 0;
     int chunk_dbecp_factor_capacity = 0;
     int chunk_vkb_save_capacity = 0;
+    int prepared_vq_ik = -1;
+    int prepared_vq_it = -1;
+    bool prepared_vq_has_derivative = false;
 
     /// @brief rename the operators for CPU/GPU device
     using gemm_op = ModuleBase::gemm_op<std::complex<FPTYPE>, Device>;

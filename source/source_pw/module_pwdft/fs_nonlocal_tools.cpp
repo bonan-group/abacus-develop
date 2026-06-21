@@ -153,6 +153,8 @@ void FS_Nonlocal_tools<FPTYPE, Device>::delete_memory()
         delmem_complex_op()(this->vkb_chunk);
         delmem_complex_op()(this->becp_chunk);
         delmem_complex_op()(this->dbecp_chunk);
+        delmem_complex_op()(this->stress_r_chunk);
+        delmem_complex_op()(this->stress_y_chunk);
         delmem_complex_op()(this->vkb_save_chunk);
     }
 
@@ -179,7 +181,11 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::use_chunked_vnl() const
 #if !defined(__CUDA) && !defined(__UT_USE_CUDA)
     return false;
 #else
-    return this->device == base_device::GpuDevice && this->ppcell_vkb == nullptr && this->nkb > 0;
+    if (get_chunked_vnl_override() == 0)
+    {
+        return false;
+    }
+    return this->device == base_device::GpuDevice && this->nkb > 0;
 #endif
 }
 
@@ -218,9 +224,13 @@ void FS_Nonlocal_tools<FPTYPE, Device>::ensure_chunk_memory(const int chunk_nkb,
         delmem_complex_op()(this->vkb_chunk);
         delmem_complex_op()(this->becp_chunk);
         delmem_complex_op()(this->dbecp_chunk);
+        delmem_complex_op()(this->stress_r_chunk);
+        delmem_complex_op()(this->stress_y_chunk);
         this->vkb_chunk = nullptr;
         this->becp_chunk = nullptr;
         this->dbecp_chunk = nullptr;
+        this->stress_r_chunk = nullptr;
+        this->stress_y_chunk = nullptr;
         this->chunk_nkb_capacity = std::max(chunk_nkb, this->chunk_nkb_capacity);
         this->chunk_bands_capacity = std::max(nbands_npol, this->chunk_bands_capacity);
         this->chunk_dbecp_factor_capacity = std::max(dbecp_factor, this->chunk_dbecp_factor_capacity);
@@ -234,17 +244,24 @@ void FS_Nonlocal_tools<FPTYPE, Device>::ensure_chunk_memory(const int chunk_nkb,
                             static_cast<std::size_t>(this->chunk_dbecp_factor_capacity) * this->chunk_nkb_capacity
                                 * this->chunk_bands_capacity,
                             "FS_Nonlocal_tools::dbecp_chunk");
+        resmem_complex_op()(this->stress_r_chunk,
+                            static_cast<std::size_t>(this->chunk_nkb_capacity) * this->chunk_bands_capacity,
+                            "FS_Nonlocal_tools::stress_r_chunk");
+        resmem_complex_op()(this->stress_y_chunk,
+                            static_cast<std::size_t>(this->chunk_nkb_capacity) * this->max_npw,
+                            "FS_Nonlocal_tools::stress_y_chunk");
     }
 }
 
 template <typename FPTYPE, typename Device>
-void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb_type_chunk(const int ik,
-                                                           const int it,
-                                                           const int ia_begin,
-                                                           const int ia_end,
-                                                           std::complex<FPTYPE>* vkb_out)
+void FS_Nonlocal_tools<FPTYPE, Device>::ensure_vq_type_chunk(const int ik, const int it, const bool with_derivative)
 {
-    Nonlocal_maths<FPTYPE, Device> maths(this->nlpp_, this->ucell_);
+    if (this->prepared_vq_ik == ik && this->prepared_vq_it == it
+        && (!with_derivative || this->prepared_vq_has_derivative))
+    {
+        return;
+    }
+
     const int npw = this->wfc_basis_->npwk[ik];
     FPTYPE* gk = this->device == base_device::GpuDevice ? this->d_g_plus_k : this->g_plus_k.data();
     FPTYPE* vq_tb = this->device == base_device::GpuDevice ? this->d_vq_tab : this->nlpp_->tab.ptr;
@@ -258,6 +275,34 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb_type_chunk(const int ik,
                 PARAM.globalv.dq,
                 this->ucell_->atoms[it].ncpp.nbeta,
                 hd_vq);
+    if (with_derivative)
+    {
+        cal_vq_deri_op()(this->ctx,
+                         vq_tb,
+                         it,
+                         gk,
+                         npw,
+                         this->nlpp_->tab.getBound2(),
+                         this->nlpp_->tab.getBound3(),
+                         PARAM.globalv.dq,
+                         this->ucell_->atoms[it].ncpp.nbeta,
+                         hd_vq_deri);
+    }
+    this->prepared_vq_ik = ik;
+    this->prepared_vq_it = it;
+    this->prepared_vq_has_derivative = with_derivative;
+}
+
+template <typename FPTYPE, typename Device>
+void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb_type_chunk(const int ik,
+                                                           const int it,
+                                                           const int ia_begin,
+                                                           const int ia_end,
+                                                           std::complex<FPTYPE>* vkb_out)
+{
+    Nonlocal_maths<FPTYPE, Device> maths(this->nlpp_, this->ucell_);
+    const int npw = this->wfc_basis_->npwk[ik];
+    this->ensure_vq_type_chunk(ik, it, false);
 
     const int nh = this->ucell_->atoms[it].ncpp.nh;
     std::vector<std::complex<double>> pref = maths.cal_pref(it, nh);
@@ -303,27 +348,7 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb_deri_type_chunk(const int ik,
     Nonlocal_maths<FPTYPE, Device> maths(this->nlpp_, this->ucell_);
     const int npw = this->wfc_basis_->npwk[ik];
     FPTYPE* gk = this->device == base_device::GpuDevice ? this->d_g_plus_k : this->g_plus_k.data();
-    FPTYPE* vq_tb = this->device == base_device::GpuDevice ? this->d_vq_tab : this->nlpp_->tab.ptr;
-    cal_vq_op()(this->ctx,
-                vq_tb,
-                it,
-                gk,
-                npw,
-                this->nlpp_->tab.getBound2(),
-                this->nlpp_->tab.getBound3(),
-                PARAM.globalv.dq,
-                this->ucell_->atoms[it].ncpp.nbeta,
-                hd_vq);
-    cal_vq_deri_op()(this->ctx,
-                     vq_tb,
-                     it,
-                     gk,
-                     npw,
-                     this->nlpp_->tab.getBound2(),
-                     this->nlpp_->tab.getBound3(),
-                     PARAM.globalv.dq,
-                     this->ucell_->atoms[it].ncpp.nbeta,
-                     hd_vq_deri);
+    this->ensure_vq_type_chunk(ik, it, true);
 
     const int nh = this->ucell_->atoms[it].ncpp.nh;
     std::vector<std::complex<double>> pref = maths.cal_pref(it, nh);
@@ -1072,6 +1097,9 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
     const int target_chunk = this->calculate_chunk_size();
 
     this->g_plus_k = maths.cal_gk(ik, this->wfc_basis_);
+    this->prepared_vq_ik = -1;
+    this->prepared_vq_it = -1;
+    this->prepared_vq_has_derivative = false;
     resmem_complex_op()(hd_sk, this->ucell_->nat * npw);
     this->sf_->get_sk(ctx, ik, this->wfc_basis_, hd_sk);
     maths.cal_ylm(this->nlpp_->lmaxkb, npw, this->g_plus_k.data(), hd_ylm);
@@ -1300,15 +1328,19 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
     const int target_chunk = this->calculate_chunk_size();
 
     this->g_plus_k = maths.cal_gk(ik, this->wfc_basis_);
-    resmem_complex_op()(hd_sk, this->ucell_->nat * npw);
-    this->sf_->get_sk(ctx, ik, this->wfc_basis_, hd_sk);
-    maths.cal_ylm(this->nlpp_->lmaxkb, npw, this->g_plus_k.data(), hd_ylm);
-    maths.cal_ylm_deri(this->nlpp_->lmaxkb, npw, this->g_plus_k.data(), hd_ylm_deri);
+    this->prepared_vq_ik = -1;
+    this->prepared_vq_it = -1;
+    this->prepared_vq_has_derivative = false;
     if (this->device == base_device::GpuDevice)
     {
         syncmem_var_h2d_op()(d_g_plus_k, g_plus_k.data(), g_plus_k.size());
         syncmem_var_h2d_op()(d_vq_tab, this->nlpp_->tab.ptr, this->nlpp_->tab.getSize());
     }
+    resmem_complex_op()(hd_sk, this->ucell_->nat * npw);
+    this->sf_->get_sk(ctx, ik, this->wfc_basis_, hd_sk);
+    const FPTYPE* ylm_gk = this->device == base_device::GpuDevice ? d_g_plus_k : this->g_plus_k.data();
+    maths.cal_ylm_device(this->nlpp_->lmaxkb, npw, ylm_gk, hd_ylm);
+    maths.cal_ylm_deri_device(this->nlpp_->lmaxkb, npw, ylm_gk, hd_ylm_deri);
 
     FPTYPE* d_ekb_ik = nullptr;
     if (d_ekb != nullptr)
@@ -1355,6 +1387,77 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
                 Parallel_Common::reduce_data(this->becp_chunk, chunk_nkb * npm_npol, POOL_WORLD);
             }
 #endif
+            if (npol == 1)
+            {
+                const int current_spin = this->kv_->isk[ik];
+                hamilt::build_stress_nl_reordered_r_op<FPTYPE, Device>().chunk(this->ctx,
+                                                                               nondiagonal,
+                                                                               chunk_nkb,
+                                                                               npm,
+                                                                               current_spin,
+                                                                               this->nlpp_->deeq.getBound2(),
+                                                                               this->nlpp_->deeq.getBound3(),
+                                                                               this->nlpp_->deeq.getBound4(),
+                                                                               it,
+                                                                               atom_type_start + ia_begin,
+                                                                               atom_count,
+                                                                               nh,
+                                                                               d_wg_ik,
+                                                                               occ,
+                                                                               d_ekb_ik,
+                                                                               qq_nt,
+                                                                               deeq,
+                                                                               this->becp_chunk,
+                                                                               this->stress_r_chunk);
+                gemm_op()('N',
+                          'C',
+                          npw,
+                          chunk_nkb,
+                          npm,
+                          &ModuleBase::ONE,
+                          ppsi,
+                          this->max_npw,
+                          this->stress_r_chunk,
+                          chunk_nkb,
+                          &ModuleBase::ZERO,
+                          this->stress_y_chunk,
+                          npw);
+            }
+            else
+            {
+                hamilt::build_stress_nl_reordered_r_op<FPTYPE, Device>().chunk(
+                    this->ctx,
+                    chunk_nkb,
+                    npm,
+                    this->nlpp_->deeq_nc.getBound2(),
+                    this->nlpp_->deeq_nc.getBound3(),
+                    this->nlpp_->deeq_nc.getBound4(),
+                    it,
+                    atom_type_start + ia_begin,
+                    ia_begin,
+                    atom_count,
+                    nh,
+                    d_wg_ik,
+                    occ,
+                    d_ekb_ik,
+                    qq_nt,
+                    this->nlpp_->template get_deeq_nc_data<FPTYPE>(),
+                    this->becp_chunk,
+                    this->stress_r_chunk);
+                gemm_op()('N',
+                          'C',
+                          npw,
+                          chunk_nkb,
+                          npm_npol,
+                          &ModuleBase::ONE,
+                          ppsi,
+                          this->max_npw,
+                          this->stress_r_chunk,
+                          chunk_nkb,
+                          &ModuleBase::ZERO,
+                          this->stress_y_chunk,
+                          npw);
+            }
 
             for (int ipol = 0; ipol < 3; ipol++)
             {
@@ -1367,69 +1470,14 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
                                                   ipol,
                                                   jpol,
                                                   this->vkb_chunk);
-                    gemm_op()(transa,
-                              transb,
-                              chunk_nkb,
-                              npm_npol,
-                              npw,
-                              &ModuleBase::ONE,
-                              this->vkb_chunk,
-                              npw,
-                              ppsi,
-                              this->max_npw,
-                              &ModuleBase::ZERO,
-                              this->dbecp_chunk,
-                              chunk_nkb);
-                    if (npol == 1)
-                    {
-                        const int current_spin = this->kv_->isk[ik];
-                        hamilt::cal_stress_nl_op<FPTYPE, Device>().chunk(this->ctx,
-                                                                         nondiagonal,
-                                                                         ipol,
-                                                                         jpol,
-                                                                         chunk_nkb,
-                                                                         npm,
-                                                                         current_spin,
-                                                                         this->nlpp_->deeq.getBound2(),
-                                                                         this->nlpp_->deeq.getBound3(),
-                                                                         this->nlpp_->deeq.getBound4(),
-                                                                         it,
-                                                                         atom_type_start + ia_begin,
-                                                                         atom_count,
-                                                                         nh,
-                                                                         d_wg_ik,
-                                                                         occ,
-                                                                         d_ekb_ik,
-                                                                         qq_nt,
-                                                                         deeq,
-                                                                         this->becp_chunk,
-                                                                         this->dbecp_chunk,
-                                                                         stress);
-                    }
-                    else
-                    {
-                        hamilt::cal_stress_nl_op<FPTYPE, Device>().chunk(this->ctx,
-                                                                         ipol,
-                                                                         jpol,
-                                                                         chunk_nkb,
-                                                                         npm,
-                                                                         this->nlpp_->deeq_nc.getBound2(),
-                                                                         this->nlpp_->deeq_nc.getBound3(),
-                                                                         this->nlpp_->deeq_nc.getBound4(),
-                                                                         it,
-                                                                         atom_type_start + ia_begin,
-                                                                         ia_begin,
-                                                                         atom_count,
-                                                                         nh,
-                                                                         d_wg_ik,
-                                                                         occ,
-                                                                         d_ekb_ik,
-                                                                         qq_nt,
-                                                                         this->nlpp_->template get_deeq_nc_data<FPTYPE>(),
-                                                                         this->becp_chunk,
-                                                                         this->dbecp_chunk,
-                                                                         stress);
-                    }
+                    hamilt::cal_stress_nl_reordered_op<FPTYPE, Device>().chunk(this->ctx,
+                                                                               ipol,
+                                                                               jpol,
+                                                                               npw,
+                                                                               chunk_nkb,
+                                                                               this->stress_y_chunk,
+                                                                               this->vkb_chunk,
+                                                                               stress);
                 }
             }
             ia_begin += atom_count;

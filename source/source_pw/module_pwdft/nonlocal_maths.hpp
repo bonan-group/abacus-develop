@@ -9,6 +9,8 @@
 #include "source_pw/module_pwdft/kernels/stress_op.h"
 #include "source_base/kernels/math_kernel_op.h"
 
+#include <type_traits>
+
 namespace hamilt
 {
 
@@ -65,6 +67,10 @@ class Nonlocal_maths
     void cal_ylm(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm);
     /// calculate the derivate of the sperical bessel function for projections
     void cal_ylm_deri(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm_deri);
+    /// calculate spherical harmonics from device-resident G+k data when running on GPU.
+    void cal_ylm_device(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm);
+    /// calculate spherical-harmonic derivatives from device-resident G+k data when running on GPU.
+    void cal_ylm_deri_device(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm_deri);
     /// calculate the (-i)^l factors
     std::vector <std::complex<FPTYPE>> cal_pref(int it, const int nh);
     /// calculate the vkb matrix for this atom
@@ -123,6 +129,12 @@ class Nonlocal_maths
                                               const int& dim2,
                                               const FPTYPE& table_interval,
                                               const FPTYPE& x);
+
+  private:
+    void cal_ylm_device_impl(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm, std::false_type);
+    void cal_ylm_device_impl(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm, std::true_type);
+    void cal_ylm_deri_device_impl(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm_deri, std::false_type);
+    void cal_ylm_deri_device_impl(int lmax, int npw, const FPTYPE* gk_in, FPTYPE* ylm_deri, std::true_type);
 };
 
 // prepare a memory block containing information of vector G+k, this function can be named as eval_q or eval_gk
@@ -174,6 +186,38 @@ void Nonlocal_maths<FPTYPE, Device>::cal_ylm(int lmax, int npw, const FPTYPE* q,
     return;
 }
 
+template <typename FPTYPE, typename Device>
+void Nonlocal_maths<FPTYPE, Device>::cal_ylm_device(int lmax, int npw, const FPTYPE* q, FPTYPE* ylm)
+{
+    this->cal_ylm_device_impl(lmax, npw, q, ylm, typename std::is_same<Device, base_device::DEVICE_GPU>::type());
+}
+
+template <typename FPTYPE, typename Device>
+void Nonlocal_maths<FPTYPE, Device>::cal_ylm_device_impl(int lmax,
+                                                         int npw,
+                                                         const FPTYPE* q,
+                                                         FPTYPE* ylm,
+                                                         std::false_type)
+{
+    this->cal_ylm(lmax, npw, q, ylm);
+}
+
+template <typename FPTYPE, typename Device>
+void Nonlocal_maths<FPTYPE, Device>::cal_ylm_device_impl(int lmax,
+                                                         int npw,
+                                                         const FPTYPE* q,
+                                                         FPTYPE* ylm,
+                                                         std::true_type)
+{
+    const int ntot_ylm = (lmax + 1) * (lmax + 1);
+    if (this->device == base_device::GpuDevice)
+    {
+        ModuleBase::YlmReal::Ylm_Real(this->ctx, ntot_ylm, npw, q, ylm);
+        return;
+    }
+    this->cal_ylm(lmax, npw, q, ylm);
+}
+
 // this function calculate the numerical derivate of the spherical harmonic functions respect to the G vector...
 // maybe called eval_dylmdq_cpu2gpu?
 template <typename FPTYPE, typename Device>
@@ -204,6 +248,38 @@ void Nonlocal_maths<FPTYPE, Device>::cal_ylm_deri(int lmax, int npw, const FPTYP
     }
 
     return;
+}
+
+template <typename FPTYPE, typename Device>
+void Nonlocal_maths<FPTYPE, Device>::cal_ylm_deri_device(int lmax, int npw, const FPTYPE* q, FPTYPE* out)
+{
+    this->cal_ylm_deri_device_impl(lmax, npw, q, out, typename std::is_same<Device, base_device::DEVICE_GPU>::type());
+}
+
+template <typename FPTYPE, typename Device>
+void Nonlocal_maths<FPTYPE, Device>::cal_ylm_deri_device_impl(int lmax,
+                                                              int npw,
+                                                              const FPTYPE* q,
+                                                              FPTYPE* out,
+                                                              std::false_type)
+{
+    this->cal_ylm_deri(lmax, npw, q, out);
+}
+
+template <typename FPTYPE, typename Device>
+void Nonlocal_maths<FPTYPE, Device>::cal_ylm_deri_device_impl(int lmax,
+                                                              int npw,
+                                                              const FPTYPE* q,
+                                                              FPTYPE* out,
+                                                              std::true_type)
+{
+    const int ntot_ylm = (lmax + 1) * (lmax + 1);
+    if (this->device == base_device::GpuDevice)
+    {
+        hamilt::cal_ylm_deri_op<FPTYPE, Device>()(this->ctx, ntot_ylm, npw, q, out);
+        return;
+    }
+    this->cal_ylm_deri(lmax, npw, q, out);
 }
 // cal_pref
 template <typename FPTYPE, typename Device>

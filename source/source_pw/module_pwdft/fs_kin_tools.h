@@ -51,6 +51,8 @@ class FS_Kin_tools
     std::vector<FPTYPE> s_kin;
     FPTYPE* d_gk = nullptr;
     FPTYPE* d_kfac = nullptr;
+    FPTYPE* d_stress = nullptr;
+    std::vector<FPTYPE> stress_buffer;
     const FPTYPE* wg = nullptr;
     const FPTYPE* wk = nullptr;
     const ModulePW::PW_Basis_K* wfc_basis_ = nullptr;
@@ -65,6 +67,7 @@ class FS_Kin_tools
     using syncmem_var_h2d_op = base_device::memory::synchronize_memory_op<FPTYPE, Device, base_device::DEVICE_CPU>;
     using syncmem_var_d2h_op = base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_CPU, Device>;
     using cal_multi_dot_op = hamilt::cal_multi_dot_op<FPTYPE, Device>;
+    using cal_kinetic_stress_op = hamilt::cal_kinetic_stress_op<FPTYPE, Device>;
 };
 
 } // namespace hamilt

@@ -700,6 +700,51 @@ struct cal_multi_dot_op<FPTYPE, base_device::DEVICE_CPU> {
     }
 };
 
+template <typename FPTYPE, typename Device>
+void cal_kinetic_stress_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                       const int& npw,
+                                                       const int& npwk_max,
+                                                       const int& npol,
+                                                       const int& nbands,
+                                                       const FPTYPE* band_weight,
+                                                       const bool& occ,
+                                                       const FPTYPE& k_weight,
+                                                       const FPTYPE* gk,
+                                                       const FPTYPE* kfac,
+                                                       const std::complex<FPTYPE>* psi,
+                                                       FPTYPE* stress)
+{
+    for (int ib = 0; ib < nbands; ++ib)
+    {
+        const FPTYPE fac = occ ? band_weight[ib] : k_weight;
+        if (fac == 0.0)
+        {
+            continue;
+        }
+        for (int ipol = 0; ipol < npol; ++ipol)
+        {
+            const std::complex<FPTYPE>* ppsi = psi + (ib * npol + ipol) * npwk_max;
+            for (int l = 0; l < 3; ++l)
+            {
+                const FPTYPE* gkl = gk + l * npwk_max;
+                for (int m = 0; m <= l; ++m)
+                {
+                    const FPTYPE* gkm = gk + m * npwk_max;
+                    FPTYPE sum = 0.0;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+ : sum)
+#endif
+                    for (int ig = 0; ig < npw; ++ig)
+                    {
+                        sum += fac * gkl[ig] * gkm[ig] * kfac[ig] * std::norm(ppsi[ig]);
+                    }
+                    stress[l * 3 + m] += sum;
+                }
+            }
+        }
+    }
+}
+
 // // cpu version first, gpu version later
 // template <typename FPTYPE>
 // struct prepare_vkb_deri_ptr_op<FPTYPE, base_device::DEVICE_CPU>{
@@ -778,6 +823,36 @@ template struct cal_stress_drhoc_aux_op<double, base_device::DEVICE_CPU>;
 template struct cal_multi_dot_op<float, base_device::DEVICE_CPU>;
 template struct cal_multi_dot_op<double, base_device::DEVICE_CPU>;
 
+template struct cal_kinetic_stress_op<float, base_device::DEVICE_CPU>;
+template struct cal_kinetic_stress_op<double, base_device::DEVICE_CPU>;
+
+template <typename FPTYPE, typename Device>
+void cal_stress_ewa_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                   const int nat,
+                                                   const int npw,
+                                                   const int ig0,
+                                                   const int do_real_space,
+                                                   const int nm1,
+                                                   const int nm2,
+                                                   const int nm3,
+                                                   const FPTYPE alpha,
+                                                   const FPTYPE omega,
+                                                   const FPTYPE tpiba2,
+                                                   const FPTYPE lat0,
+                                                   const FPTYPE fact,
+                                                   const FPTYPE rmax,
+                                                   const FPTYPE charge,
+                                                   const FPTYPE* tau,
+                                                   const FPTYPE* atom_z,
+                                                   const FPTYPE* gcar,
+                                                   const FPTYPE* gg,
+                                                   const FPTYPE* latvec,
+                                                   FPTYPE* stress)
+{
+}
+
+template struct cal_stress_ewa_op<float, base_device::DEVICE_CPU>;
+template struct cal_stress_ewa_op<double, base_device::DEVICE_CPU>;
 
 // template struct prepare_vkb_deri_ptr_op<float, base_device::DEVICE_CPU>;
 // template struct prepare_vkb_deri_ptr_op<double, base_device::DEVICE_CPU>;

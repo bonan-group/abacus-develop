@@ -24,11 +24,13 @@ FS_Kin_tools<FPTYPE, Device>::FS_Kin_tools(const UnitCell& ucell_in,
     }
     this->kfac.resize(npwk_max);
     this->s_kin.resize(9, 0.0);
+    this->stress_buffer.resize(9, 0.0);
 
     if (this->device == base_device::GpuDevice)
     {
         resmem_var_op()(d_gk, 3 * npwk_max);
         resmem_var_op()(d_kfac, npwk_max);
+        resmem_var_op()(d_stress, 9);
     }
     else
     {
@@ -44,6 +46,7 @@ FS_Kin_tools<FPTYPE, Device>::~FS_Kin_tools()
     {
         delmem_var_op()(d_gk);
         delmem_var_op()(d_kfac);
+        delmem_var_op()(d_stress);
     }
 }
 
@@ -90,6 +93,28 @@ void FS_Kin_tools<FPTYPE, Device>::cal_stress_kin(const int& ik,
     const int npw = wfc_basis_->npwk[ik];
     const int npwk_max = wfc_basis_->npwk_max;
     const int npol = this->ucell_.get_npol();
+    if (this->device == base_device::GpuDevice)
+    {
+        const FPTYPE* band_weight = occ ? wg + ik * this->nksbands_ : nullptr;
+        cal_kinetic_stress_op()(this->ctx,
+                                npw,
+                                npwk_max,
+                                npol,
+                                npm,
+                                band_weight,
+                                occ,
+                                wk[ik],
+                                d_gk,
+                                d_kfac,
+                                psi,
+                                d_stress);
+        syncmem_var_d2h_op()(this->stress_buffer.data(), d_stress, 9);
+        for (int i = 0; i < 9; ++i)
+        {
+            this->s_kin[i] += this->stress_buffer[i];
+        }
+        return;
+    }
     for (int ib = 0; ib < npm; ib++)
     {
         const std::complex<FPTYPE>* ppsi = psi + ib * npwk_max * npol;

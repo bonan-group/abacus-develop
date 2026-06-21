@@ -365,6 +365,60 @@ __global__ void cal_multi_dot(const int npw,
 }
 
 template <typename FPTYPE>
+__global__ void cal_kinetic_stress(const int npw,
+                                   const int npwk_max,
+                                   const int npol,
+                                   const int nbands,
+                                   const FPTYPE* band_weight,
+                                   const bool occ,
+                                   const FPTYPE k_weight,
+                                   const FPTYPE* gk,
+                                   const FPTYPE* kfac,
+                                   const thrust::complex<FPTYPE>* psi,
+                                   FPTYPE* stress)
+{
+    const int component = blockIdx.x;
+    const int ib = blockIdx.y;
+    const int pairs_l[6] = {0, 1, 1, 2, 2, 2};
+    const int pairs_m[6] = {0, 0, 1, 0, 1, 2};
+    const int l = pairs_l[component];
+    const int m = pairs_m[component];
+    const FPTYPE fac = occ ? band_weight[ib] : k_weight;
+    if (fac == 0.0)
+    {
+        return;
+    }
+
+    __shared__ FPTYPE s_sum[THREADS_PER_BLOCK];
+    FPTYPE local_sum = 0;
+    const FPTYPE* gkl = gk + l * npwk_max;
+    const FPTYPE* gkm = gk + m * npwk_max;
+    for (int ipol = 0; ipol < npol; ++ipol)
+    {
+        const thrust::complex<FPTYPE>* ppsi = psi + (ib * npol + ipol) * npwk_max;
+        for (int ig = threadIdx.x; ig < npw; ig += blockDim.x)
+        {
+            local_sum += fac * gkl[ig] * gkm[ig] * kfac[ig] * thrust::norm(ppsi[ig]);
+        }
+    }
+    s_sum[threadIdx.x] = local_sum;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (threadIdx.x < s)
+        {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+    {
+        atomicAdd(stress + l * 3 + m, s_sum[0]);
+    }
+}
+
+template <typename FPTYPE>
 void cal_stress_nl_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
                                                                    const int& ipol,
                                                                    const int& jpol,
@@ -882,6 +936,46 @@ FPTYPE cal_multi_dot_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const int& 
     return sum;
 }
 
+template <typename FPTYPE>
+void cal_kinetic_stress_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                        const int& npw,
+                                                                        const int& npwk_max,
+                                                                        const int& npol,
+                                                                        const int& nbands,
+                                                                        const FPTYPE* band_weight,
+                                                                        const bool& occ,
+                                                                        const FPTYPE& k_weight,
+                                                                        const FPTYPE* gk,
+                                                                        const FPTYPE* kfac,
+                                                                        const std::complex<FPTYPE>* psi,
+                                                                        FPTYPE* stress)
+{
+    hipMemset(stress, 0, sizeof(FPTYPE) * 9);
+    if (npw == 0 || nbands == 0)
+    {
+        return;
+    }
+    const dim3 grid(6, nbands);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(cal_kinetic_stress<FPTYPE>),
+                       dim3(grid),
+                       dim3(THREADS_PER_BLOCK),
+                       0,
+                       0,
+                       npw,
+                       npwk_max,
+                       npol,
+                       nbands,
+                       band_weight,
+                       occ,
+                       k_weight,
+                       gk,
+                       kfac,
+                       reinterpret_cast<const thrust::complex<FPTYPE>*>(psi),
+                       stress);
+
+    hipCheckOnDebug();
+}
+
 template struct cal_vq_op<double, base_device::DEVICE_GPU>;
 template struct cal_vq_op<float, base_device::DEVICE_GPU>;
 
@@ -1178,4 +1272,7 @@ template struct cal_force_npw_op<float, base_device::DEVICE_GPU>;
 
 template struct cal_multi_dot_op<double, base_device::DEVICE_GPU>;
 template struct cal_multi_dot_op<float, base_device::DEVICE_GPU>;
+
+template struct cal_kinetic_stress_op<double, base_device::DEVICE_GPU>;
+template struct cal_kinetic_stress_op<float, base_device::DEVICE_GPU>;
 }  // namespace hamilt

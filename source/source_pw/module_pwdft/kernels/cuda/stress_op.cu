@@ -1,5 +1,6 @@
 #include "source_pw/module_pwdft/kernels/stress_op.h"
 #include "source_base/constants.h"
+#include "source_base/kernels/math_ylm_op.h"
 #include "source_base/module_device/device.h"
 #include "source_base/module_device/kernel_compat.h"
 #include "vnl_tools_cu.hpp"
@@ -48,6 +49,266 @@ __global__ void cal_stress_mgga(
                 * (gradwfc[ix * nrxx + idx].real() * gradwfc[iy*nrxx + idx].real()
                 +  gradwfc[ix * nrxx + idx].imag() * gradwfc[iy*nrxx + idx].imag());
             ipol += 1;
+        }
+    }
+}
+
+template <typename FPTYPE>
+__global__ void set_stress_ewa_diag_kernel(const FPTYPE charge, const FPTYPE alpha, const FPTYPE omega, FPTYPE* stress)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        for (int i = 0; i < 7; ++i)
+        {
+            stress[i] = 0.0;
+        }
+        stress[6] = ModuleBase::TWO_PI * ModuleBase::e2 / 4.0 / alpha * (charge / omega) * (charge / omega);
+    }
+}
+
+template <typename FPTYPE>
+__device__ void stress_ewa_add_lower_triangle(const FPTYPE fac,
+                                              const FPTYPE rx,
+                                              const FPTYPE ry,
+                                              const FPTYPE rz,
+                                              FPTYPE& xx,
+                                              FPTYPE& yx,
+                                              FPTYPE& yy,
+                                              FPTYPE& zx,
+                                              FPTYPE& zy,
+                                              FPTYPE& zz)
+{
+    xx += fac * rx * rx;
+    yx += fac * ry * rx;
+    yy += fac * ry * ry;
+    zx += fac * rz * rx;
+    zy += fac * rz * ry;
+    zz += fac * rz * rz;
+}
+
+template <typename FPTYPE>
+__global__ void stress_ewa_g_kernel(const int nat,
+                                    const int npw,
+                                    const int ig0,
+                                    const FPTYPE alpha,
+                                    const FPTYPE omega,
+                                    const FPTYPE tpiba2,
+                                    const FPTYPE fact,
+                                    const FPTYPE* tau,
+                                    const FPTYPE* atom_z,
+                                    const FPTYPE* gcar,
+                                    const FPTYPE* gg,
+                                    FPTYPE* partial)
+{
+    const int tid = threadIdx.x;
+    FPTYPE xx = 0.0;
+    FPTYPE yx = 0.0;
+    FPTYPE yy = 0.0;
+    FPTYPE zx = 0.0;
+    FPTYPE zy = 0.0;
+    FPTYPE zz = 0.0;
+    FPTYPE sdewald = 0.0;
+    for (int ig = blockIdx.x * blockDim.x + tid; ig < npw; ig += blockDim.x * gridDim.x)
+    {
+        if (ig == ig0)
+        {
+            continue;
+        }
+        const FPTYPE gx = gcar[ig * 3];
+        const FPTYPE gy = gcar[ig * 3 + 1];
+        const FPTYPE gz = gcar[ig * 3 + 2];
+        const FPTYPE g2 = gg[ig] * tpiba2;
+        const FPTYPE g2a = g2 / 4.0 / alpha;
+        FPTYPE rho_real = 0.0;
+        FPTYPE rho_imag = 0.0;
+        for (int iat = 0; iat < nat; ++iat)
+        {
+            const FPTYPE arg = ModuleBase::TWO_PI * (gx * tau[iat * 3] + gy * tau[iat * 3 + 1]
+                                                     + gz * tau[iat * 3 + 2]);
+            FPTYPE sinp = 0.0;
+            FPTYPE cosp = 0.0;
+            sincos(arg, &sinp, &cosp);
+            rho_real += atom_z[iat] * cosp;
+            rho_imag += atom_z[iat] * sinp;
+        }
+        rho_real /= omega;
+        rho_imag /= omega;
+        const FPTYPE sewald = fact * ModuleBase::TWO_PI * ModuleBase::e2 * exp(-g2a) / g2
+                              * (rho_real * rho_real + rho_imag * rho_imag);
+        sdewald -= sewald;
+        const FPTYPE tensor_fac = sewald * tpiba2 * 2.0 / g2 * (g2a + 1.0);
+        stress_ewa_add_lower_triangle(tensor_fac, gx, gy, gz, xx, yx, yy, zx, zy, zz);
+    }
+
+    warp_reduce(xx);
+    warp_reduce(yx);
+    warp_reduce(yy);
+    warp_reduce(zx);
+    warp_reduce(zy);
+    warp_reduce(zz);
+    warp_reduce(sdewald);
+
+    __shared__ FPTYPE warp_sums[7][THREADS_PER_BLOCK / WARP_SIZE];
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    if (lane_id == 0)
+    {
+        warp_sums[0][warp_id] = xx;
+        warp_sums[1][warp_id] = yx;
+        warp_sums[2][warp_id] = yy;
+        warp_sums[3][warp_id] = zx;
+        warp_sums[4][warp_id] = zy;
+        warp_sums[5][warp_id] = zz;
+        warp_sums[6][warp_id] = sdewald;
+    }
+    __syncthreads();
+    if (warp_id == 0)
+    {
+        FPTYPE vals[7];
+        for (int i = 0; i < 7; ++i)
+        {
+            vals[i] = lane_id < (blockDim.x / WARP_SIZE) ? warp_sums[i][lane_id] : 0.0;
+            warp_reduce(vals[i]);
+            if (lane_id == 0)
+            {
+                partial[blockIdx.x * 7 + i] = vals[i];
+            }
+        }
+    }
+}
+
+template <typename FPTYPE>
+__global__ void stress_ewa_r_kernel(const int nat,
+                                    const int nm1,
+                                    const int nm2,
+                                    const int nm3,
+                                    const FPTYPE alpha,
+                                    const FPTYPE omega,
+                                    const FPTYPE lat0,
+                                    const FPTYPE rmax,
+                                    const FPTYPE* tau,
+                                    const FPTYPE* atom_z,
+                                    const FPTYPE* latvec,
+                                    FPTYPE* partial)
+{
+    const int tid = threadIdx.x;
+    FPTYPE xx = 0.0;
+    FPTYPE yx = 0.0;
+    FPTYPE yy = 0.0;
+    FPTYPE zx = 0.0;
+    FPTYPE zy = 0.0;
+    FPTYPE zz = 0.0;
+    const long long npairs = static_cast<long long>(nat) * nat;
+    const FPTYPE sqa = sqrt(alpha);
+    const FPTYPE sq8a_2pi = sqrt(8.0 * alpha / ModuleBase::TWO_PI);
+    const FPTYPE rmax2 = rmax * rmax;
+    for (long long pair = blockIdx.x * blockDim.x + tid; pair < npairs; pair += blockDim.x * gridDim.x)
+    {
+        const int iat = pair / nat;
+        const int jat = pair - static_cast<long long>(iat) * nat;
+        const FPTYPE dtau_x = tau[iat * 3] - tau[jat * 3];
+        const FPTYPE dtau_y = tau[iat * 3 + 1] - tau[jat * 3 + 1];
+        const FPTYPE dtau_z = tau[iat * 3 + 2] - tau[jat * 3 + 2];
+        for (int ia = -nm1; ia <= nm1; ++ia)
+        {
+            for (int ib = -nm2; ib <= nm2; ++ib)
+            {
+                for (int ic = -nm3; ic <= nm3; ++ic)
+                {
+                    const FPTYPE rx = ia * latvec[0] + ib * latvec[3] + ic * latvec[6] - dtau_x;
+                    const FPTYPE ry = ia * latvec[1] + ib * latvec[4] + ic * latvec[7] - dtau_y;
+                    const FPTYPE rz = ia * latvec[2] + ib * latvec[5] + ic * latvec[8] - dtau_z;
+                    const FPTYPE r2 = rx * rx + ry * ry + rz * rz;
+                    if (r2 > rmax2 || fabs(r2) <= 1.0e-10)
+                    {
+                        continue;
+                    }
+                    const FPTYPE rr = sqrt(r2) * lat0;
+                    const FPTYPE fac = -ModuleBase::e2 / 2.0 / omega * lat0 * lat0 * atom_z[iat] * atom_z[jat]
+                                       / (rr * rr * rr)
+                                       * (erfc(sqa * rr) + rr * sq8a_2pi * exp(-alpha * rr * rr));
+                    stress_ewa_add_lower_triangle(fac, rx, ry, rz, xx, yx, yy, zx, zy, zz);
+                }
+            }
+        }
+    }
+
+    warp_reduce(xx);
+    warp_reduce(yx);
+    warp_reduce(yy);
+    warp_reduce(zx);
+    warp_reduce(zy);
+    warp_reduce(zz);
+
+    __shared__ FPTYPE warp_sums[6][THREADS_PER_BLOCK / WARP_SIZE];
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    if (lane_id == 0)
+    {
+        warp_sums[0][warp_id] = xx;
+        warp_sums[1][warp_id] = yx;
+        warp_sums[2][warp_id] = yy;
+        warp_sums[3][warp_id] = zx;
+        warp_sums[4][warp_id] = zy;
+        warp_sums[5][warp_id] = zz;
+    }
+    __syncthreads();
+    if (warp_id == 0)
+    {
+        FPTYPE vals[6];
+        for (int i = 0; i < 6; ++i)
+        {
+            vals[i] = lane_id < (blockDim.x / WARP_SIZE) ? warp_sums[i][lane_id] : 0.0;
+            warp_reduce(vals[i]);
+            if (lane_id == 0)
+            {
+                partial[blockIdx.x * 7 + i] = vals[i];
+            }
+        }
+        if (lane_id == 0)
+        {
+            partial[blockIdx.x * 7 + 6] = 0.0;
+        }
+    }
+}
+
+template <typename FPTYPE>
+__global__ void stress_ewa_final_reduce_kernel(const FPTYPE* partial, const int blocks, FPTYPE* stress)
+{
+    const int tid = threadIdx.x;
+    FPTYPE vals[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    for (int ib = tid; ib < blocks; ib += blockDim.x)
+    {
+        for (int i = 0; i < 7; ++i)
+        {
+            vals[i] += partial[ib * 7 + i];
+        }
+    }
+    for (int i = 0; i < 7; ++i)
+    {
+        warp_reduce(vals[i]);
+    }
+    __shared__ FPTYPE warp_sums[7][THREADS_PER_BLOCK / WARP_SIZE];
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    if (lane_id == 0)
+    {
+        for (int i = 0; i < 7; ++i)
+        {
+            warp_sums[i][warp_id] = vals[i];
+        }
+    }
+    __syncthreads();
+    if (warp_id == 0)
+    {
+        for (int i = 0; i < 7; ++i)
+        {
+            FPTYPE val = lane_id < (blockDim.x / WARP_SIZE) ? warp_sums[i][lane_id] : 0.0;
+            warp_reduce(val);
+            if (lane_id == 0)
+            {
+                stress[i] += val;
+            }
         }
     }
 }
@@ -206,6 +467,60 @@ __global__ void cal_multi_dot(const int npw,
     }
     if (cacheid == 0) {
         atomicAdd(sum, s_sum[0]);
+    }
+}
+
+template <typename FPTYPE>
+__global__ void cal_kinetic_stress(const int npw,
+                                   const int npwk_max,
+                                   const int npol,
+                                   const int nbands,
+                                   const FPTYPE* band_weight,
+                                   const bool occ,
+                                   const FPTYPE k_weight,
+                                   const FPTYPE* gk,
+                                   const FPTYPE* kfac,
+                                   const thrust::complex<FPTYPE>* psi,
+                                   FPTYPE* stress)
+{
+    const int component = blockIdx.x;
+    const int ib = blockIdx.y;
+    const int pairs_l[6] = {0, 1, 1, 2, 2, 2};
+    const int pairs_m[6] = {0, 0, 1, 0, 1, 2};
+    const int l = pairs_l[component];
+    const int m = pairs_m[component];
+    const FPTYPE fac = occ ? band_weight[ib] : k_weight;
+    if (fac == 0.0)
+    {
+        return;
+    }
+
+    __shared__ FPTYPE s_sum[THREADS_PER_BLOCK];
+    FPTYPE local_sum = 0;
+    const FPTYPE* gkl = gk + l * npwk_max;
+    const FPTYPE* gkm = gk + m * npwk_max;
+    for (int ipol = 0; ipol < npol; ++ipol)
+    {
+        const thrust::complex<FPTYPE>* ppsi = psi + (ib * npol + ipol) * npwk_max;
+        for (int ig = threadIdx.x; ig < npw; ig += blockDim.x)
+        {
+            local_sum += fac * gkl[ig] * gkm[ig] * kfac[ig] * thrust::norm(ppsi[ig]);
+        }
+    }
+    s_sum[threadIdx.x] = local_sum;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (threadIdx.x < s)
+        {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+    {
+        atomicAdd(stress + l * 3 + m, s_sum[0]);
     }
 }
 
@@ -407,6 +722,295 @@ void cal_stress_nl_op<FPTYPE, base_device::DEVICE_GPU>::chunk(const base_device:
         reinterpret_cast<const thrust::complex<FPTYPE>*>(dbecp),
         stress);
 
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+__global__ void build_stress_nl_reordered_r_chunk(
+        const bool nondiagonal,
+        const int chunk_nkb,
+        const int nbands_occ,
+        const int spin,
+        const int deeq_2,
+        const int deeq_3,
+        const int deeq_4,
+        const int it,
+        const int atom_start,
+        const int atom_count,
+        const int nproj,
+        const FPTYPE* d_wg,
+        const bool occ,
+        const FPTYPE* d_ekb,
+        const FPTYPE* qq_nt,
+        const FPTYPE* deeq,
+        const thrust::complex<FPTYPE>* becp,
+        thrust::complex<FPTYPE>* r_chunk)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    const int total = nbands_occ * chunk_nkb;
+    if (idx >= total)
+    {
+        return;
+    }
+
+    const int ib = idx / chunk_nkb;
+    const int inkb1 = idx - ib * chunk_nkb;
+    const int ia = inkb1 / nproj;
+    const int ip1 = inkb1 - ia * nproj;
+    if (ia >= atom_count)
+    {
+        r_chunk[idx] = thrust::complex<FPTYPE>(0.0, 0.0);
+        return;
+    }
+
+    const int iat = atom_start + ia;
+    const FPTYPE fac = occ ? d_wg[ib] : d_wg[0];
+    const FPTYPE ekb_now = d_ekb != nullptr ? d_ekb[ib] : 0.0;
+    thrust::complex<FPTYPE> sum(0.0, 0.0);
+    for (int ip2 = 0; ip2 < nproj; ++ip2)
+    {
+        if (!nondiagonal && ip1 != ip2)
+        {
+            continue;
+        }
+        FPTYPE ps_qq = 0.0;
+        if (ekb_now != 0.0)
+        {
+            ps_qq = -ekb_now * qq_nt[it * deeq_3 * deeq_4 + ip1 * deeq_4 + ip2];
+        }
+        const FPTYPE ps = deeq[((spin * deeq_2 + iat) * deeq_3 + ip1) * deeq_4 + ip2] + ps_qq;
+        const int inkb2 = ia * nproj + ip2;
+        sum += fac * ps * becp[ib * chunk_nkb + inkb2];
+    }
+    r_chunk[idx] = sum;
+}
+
+template <typename FPTYPE>
+void build_stress_nl_reordered_r_op<FPTYPE, base_device::DEVICE_GPU>::chunk(
+        const base_device::DEVICE_GPU* ctx,
+        const bool& nondiagonal,
+        const int& chunk_nkb,
+        const int& nbands_occ,
+        const int& spin,
+        const int& deeq_2,
+        const int& deeq_3,
+        const int& deeq_4,
+        const int& it,
+        const int& atom_start,
+        const int& atom_count,
+        const int& nproj,
+        const FPTYPE* d_wg,
+        const bool& occ,
+        const FPTYPE* d_ekb,
+        const FPTYPE* qq_nt,
+        const FPTYPE* deeq,
+        const std::complex<FPTYPE>* becp,
+        std::complex<FPTYPE>* r_chunk)
+{
+    const int total = chunk_nkb * nbands_occ;
+    const int blocks = (total + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    build_stress_nl_reordered_r_chunk<FPTYPE><<<blocks, THREADS_PER_BLOCK>>>(
+        nondiagonal,
+        chunk_nkb,
+        nbands_occ,
+        spin,
+        deeq_2,
+        deeq_3,
+        deeq_4,
+        it,
+        atom_start,
+        atom_count,
+        nproj,
+        d_wg,
+        occ,
+        d_ekb,
+        qq_nt,
+        deeq,
+        reinterpret_cast<const thrust::complex<FPTYPE>*>(becp),
+        reinterpret_cast<thrust::complex<FPTYPE>*>(r_chunk));
+
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+__global__ void build_stress_nl_reordered_r_chunk_nc(
+        const int chunk_nkb,
+        const int nbands_occ,
+        const int deeq_2,
+        const int deeq_3,
+        const int deeq_4,
+        const int it,
+        const int atom_start,
+        const int atom_offset_in_type,
+        const int atom_count,
+        const int nproj,
+        const FPTYPE* d_wg,
+        const bool occ,
+        const FPTYPE* d_ekb,
+        const FPTYPE* qq_nt,
+        const thrust::complex<FPTYPE>* deeq_nc,
+        const thrust::complex<FPTYPE>* becp,
+        thrust::complex<FPTYPE>* r_chunk)
+{
+    const int total = nbands_occ * 2 * chunk_nkb;
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= total)
+    {
+        return;
+    }
+
+    const int ib_spinor = idx / chunk_nkb;
+    const int ib = ib_spinor / 2;
+    const int is = ib_spinor - ib * 2;
+    const int inkb1 = idx - ib_spinor * chunk_nkb;
+    const int ia = inkb1 / nproj;
+    const int ip1 = inkb1 - ia * nproj;
+    if (ia >= atom_count)
+    {
+        r_chunk[idx] = thrust::complex<FPTYPE>(0.0, 0.0);
+        return;
+    }
+
+    const int chunk_type_start = atom_start - atom_offset_in_type;
+    const int deeq_iat = chunk_type_start + atom_offset_in_type + ia;
+    const FPTYPE fac = occ ? d_wg[ib] : d_wg[0];
+    const FPTYPE ekb_now = d_ekb != nullptr ? d_ekb[ib] : 0.0;
+    thrust::complex<FPTYPE> sum(0.0, 0.0);
+    for (int ip2 = 0; ip2 < nproj; ++ip2)
+    {
+        thrust::complex<FPTYPE> ps_qq(0.0, 0.0);
+        if (ekb_now != 0.0)
+        {
+            ps_qq = thrust::complex<FPTYPE>(
+                -ekb_now * qq_nt[it * deeq_3 * deeq_4 + ip1 * deeq_4 + ip2],
+                0.0);
+        }
+        const thrust::complex<FPTYPE> ps0
+            = deeq_nc[((0 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2] + ps_qq;
+        const thrust::complex<FPTYPE> ps1
+            = deeq_nc[((1 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2];
+        const thrust::complex<FPTYPE> ps2
+            = deeq_nc[((2 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2];
+        const thrust::complex<FPTYPE> ps3
+            = deeq_nc[((3 * deeq_2 + deeq_iat) * deeq_3 + ip1) * deeq_4 + ip2] + ps_qq;
+        const int inkb2 = ia * nproj + ip2;
+        const thrust::complex<FPTYPE> becp_up = becp[(ib * 2) * chunk_nkb + inkb2];
+        const thrust::complex<FPTYPE> becp_dn = becp[(ib * 2 + 1) * chunk_nkb + inkb2];
+        if (is == 0)
+        {
+            sum += fac * (ps0 * becp_up + ps1 * becp_dn);
+        }
+        else
+        {
+            sum += fac * (ps2 * becp_up + ps3 * becp_dn);
+        }
+    }
+    r_chunk[idx] = sum;
+}
+
+template <typename FPTYPE>
+void build_stress_nl_reordered_r_op<FPTYPE, base_device::DEVICE_GPU>::chunk(
+        const base_device::DEVICE_GPU* ctx,
+        const int& chunk_nkb,
+        const int& nbands_occ,
+        const int& deeq_2,
+        const int& deeq_3,
+        const int& deeq_4,
+        const int& it,
+        const int& atom_start,
+        const int& atom_offset_in_type,
+        const int& atom_count,
+        const int& nproj,
+        const FPTYPE* d_wg,
+        const bool& occ,
+        const FPTYPE* d_ekb,
+        const FPTYPE* qq_nt,
+        const std::complex<FPTYPE>* deeq_nc,
+        const std::complex<FPTYPE>* becp,
+        std::complex<FPTYPE>* r_chunk)
+{
+    const int total = chunk_nkb * nbands_occ * 2;
+    const int blocks = (total + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    build_stress_nl_reordered_r_chunk_nc<FPTYPE><<<blocks, THREADS_PER_BLOCK>>>(
+        chunk_nkb,
+        nbands_occ,
+        deeq_2,
+        deeq_3,
+        deeq_4,
+        it,
+        atom_start,
+        atom_offset_in_type,
+        atom_count,
+        nproj,
+        d_wg,
+        occ,
+        d_ekb,
+        qq_nt,
+        reinterpret_cast<const thrust::complex<FPTYPE>*>(deeq_nc),
+        reinterpret_cast<const thrust::complex<FPTYPE>*>(becp),
+        reinterpret_cast<thrust::complex<FPTYPE>*>(r_chunk));
+
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+__global__ void cal_stress_nl_reordered_chunk(const int ipol,
+                                              const int jpol,
+                                              const int npw,
+                                              const int chunk_nkb,
+                                              const thrust::complex<FPTYPE>* y_chunk,
+                                              const thrust::complex<FPTYPE>* vkb_deri_chunk,
+                                              FPTYPE* stress)
+{
+    __shared__ FPTYPE partial[THREADS_PER_BLOCK];
+    FPTYPE local = 0.0;
+    const long long total = static_cast<long long>(npw) * chunk_nkb;
+    for (long long idx = threadIdx.x + static_cast<long long>(blockIdx.x) * blockDim.x;
+         idx < total;
+         idx += static_cast<long long>(blockDim.x) * gridDim.x)
+    {
+        const thrust::complex<FPTYPE> y = y_chunk[idx];
+        const thrust::complex<FPTYPE> d = vkb_deri_chunk[idx];
+        local -= (d * thrust::conj(y)).real();
+    }
+    partial[threadIdx.x] = local;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIdx.x < stride)
+        {
+            partial[threadIdx.x] += partial[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+    {
+        atomicAdd(stress + ipol * 3 + jpol, partial[0]);
+    }
+}
+
+template <typename FPTYPE>
+void cal_stress_nl_reordered_op<FPTYPE, base_device::DEVICE_GPU>::chunk(
+        const base_device::DEVICE_GPU* ctx,
+        const int& ipol,
+        const int& jpol,
+        const int& npw,
+        const int& chunk_nkb,
+        const std::complex<FPTYPE>* y_chunk,
+        const std::complex<FPTYPE>* vkb_deri_chunk,
+        FPTYPE* stress)
+{
+    const long long total = static_cast<long long>(npw) * chunk_nkb;
+    const int blocks = std::min(4096LL, std::max(1LL, (total + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK));
+    cal_stress_nl_reordered_chunk<FPTYPE><<<blocks, THREADS_PER_BLOCK>>>(ipol,
+                                                                        jpol,
+                                                                        npw,
+                                                                        chunk_nkb,
+                                                                        reinterpret_cast<const thrust::complex<FPTYPE>*>(y_chunk),
+                                                                        reinterpret_cast<const thrust::complex<FPTYPE>*>(vkb_deri_chunk),
+                                                                        stress);
     CHECK_CUDA_SYNC();
 }
 
@@ -683,6 +1287,41 @@ FPTYPE cal_multi_dot_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const int& 
     return sum;
 }
 
+template <typename FPTYPE>
+void cal_kinetic_stress_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                        const int& npw,
+                                                                        const int& npwk_max,
+                                                                        const int& npol,
+                                                                        const int& nbands,
+                                                                        const FPTYPE* band_weight,
+                                                                        const bool& occ,
+                                                                        const FPTYPE& k_weight,
+                                                                        const FPTYPE* gk,
+                                                                        const FPTYPE* kfac,
+                                                                        const std::complex<FPTYPE>* psi,
+                                                                        FPTYPE* stress)
+{
+    cudaMemset(stress, 0, sizeof(FPTYPE) * 9);
+    if (npw == 0 || nbands == 0)
+    {
+        return;
+    }
+    dim3 grid(6, nbands);
+    cal_kinetic_stress<FPTYPE><<<grid, THREADS_PER_BLOCK>>>(npw,
+                                                            npwk_max,
+                                                            npol,
+                                                            nbands,
+                                                            band_weight,
+                                                            occ,
+                                                            k_weight,
+                                                            gk,
+                                                            kfac,
+                                                            reinterpret_cast<const thrust::complex<FPTYPE>*>(psi),
+                                                            stress);
+
+    CHECK_CUDA_SYNC();
+}
+
 template <typename T, typename Device>
 void cal_stress_mgga_op<T, Device>::operator()(
     const int& spin,
@@ -794,6 +1433,58 @@ __global__ void cal_vq_deri(
     const FPTYPE* gnorm = &gk[3 * npw];
     if(idx<npw) vq_ptr[idx] = _polynomial_interpolation_nl(
         tab, it, ib, tab_2, tab_3, table_interval, gnorm[idx]);
+}
+
+template <typename FPTYPE>
+__global__ void prepare_ylm_deri_g(
+        const int npw,
+        const int ipol,
+        const int sign,
+        const FPTYPE* gk,
+        FPTYPE* shifted_gk)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= npw)
+    {
+        return;
+    }
+
+    const int base = idx * 3;
+    const FPTYPE gx = gk[base];
+    const FPTYPE gy = gk[base + 1];
+    const FPTYPE gz = gk[base + 2];
+    const FPTYPE dg = static_cast<FPTYPE>(1e-6) * sqrt(gx * gx + gy * gy + gz * gz);
+
+    shifted_gk[base] = gx;
+    shifted_gk[base + 1] = gy;
+    shifted_gk[base + 2] = gz;
+    shifted_gk[base + ipol] += static_cast<FPTYPE>(sign) * dg;
+}
+
+template <typename FPTYPE>
+__global__ void cal_ylm_deri_from_pm(
+        const int npw,
+        const int nylm,
+        const FPTYPE* gk,
+        const FPTYPE* ylm_plus,
+        const FPTYPE* ylm_minus,
+        FPTYPE* ylm_deri)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    const int size = npw * nylm;
+    if (idx >= size)
+    {
+        return;
+    }
+
+    const int ig = idx % npw;
+    const int base = ig * 3;
+    const FPTYPE gx = gk[base];
+    const FPTYPE gy = gk[base + 1];
+    const FPTYPE gz = gk[base + 2];
+    const FPTYPE dg = static_cast<FPTYPE>(1e-6) * sqrt(gx * gx + gy * gy + gz * gz);
+    const FPTYPE scale = dg > static_cast<FPTYPE>(1e-15) ? static_cast<FPTYPE>(0.5) / dg : static_cast<FPTYPE>(0.0);
+    ylm_deri[idx] = (ylm_plus[idx] - ylm_minus[idx]) * scale;
 }
 
 template <typename FPTYPE>
@@ -1090,6 +1781,72 @@ void cal_vq_deri_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
     );
 
     return ;
+}
+
+template <typename FPTYPE>
+void cal_ylm_deri_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                  const int& nylm,
+                                                                  const int& npw,
+                                                                  const FPTYPE* gk,
+                                                                  FPTYPE* ylm_deri)
+{
+    const int lmax = static_cast<int>(sqrt(static_cast<double>(nylm))) - 1;
+    if ((lmax + 1) * (lmax + 1) != nylm)
+    {
+        return;
+    }
+
+    FPTYPE* shifted_gk = nullptr;
+    FPTYPE* ylm_scratch = nullptr;
+    FPTYPE* ylm_plus = nullptr;
+    FPTYPE* ylm_minus = nullptr;
+    CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&shifted_gk), static_cast<size_t>(npw) * 3 * sizeof(FPTYPE)));
+    CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&ylm_scratch), static_cast<size_t>(nylm) * npw * sizeof(FPTYPE)));
+    CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&ylm_plus), static_cast<size_t>(nylm) * npw * sizeof(FPTYPE)));
+    CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&ylm_minus), static_cast<size_t>(nylm) * npw * sizeof(FPTYPE)));
+
+    const int g_block = (npw + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    const int ylm_size = npw * nylm;
+    const int ylm_block = (ylm_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    for (int ipol = 0; ipol < 3; ++ipol)
+    {
+        prepare_ylm_deri_g<FPTYPE><<<g_block, THREADS_PER_BLOCK>>>(npw, ipol, 1, gk, shifted_gk);
+        ModuleBase::cal_ylm_real_op<FPTYPE, base_device::DEVICE_GPU>()(ctx,
+                                                                       npw,
+                                                                       lmax,
+                                                                       ModuleBase::SQRT2,
+                                                                       ModuleBase::PI,
+                                                                       ModuleBase::PI_HALF,
+                                                                       ModuleBase::FOUR_PI,
+                                                                       ModuleBase::SQRT_INVERSE_FOUR_PI,
+                                                                       shifted_gk,
+                                                                       ylm_scratch,
+                                                                       ylm_plus);
+        prepare_ylm_deri_g<FPTYPE><<<g_block, THREADS_PER_BLOCK>>>(npw, ipol, -1, gk, shifted_gk);
+        ModuleBase::cal_ylm_real_op<FPTYPE, base_device::DEVICE_GPU>()(ctx,
+                                                                       npw,
+                                                                       lmax,
+                                                                       ModuleBase::SQRT2,
+                                                                       ModuleBase::PI,
+                                                                       ModuleBase::PI_HALF,
+                                                                       ModuleBase::FOUR_PI,
+                                                                       ModuleBase::SQRT_INVERSE_FOUR_PI,
+                                                                       shifted_gk,
+                                                                       ylm_scratch,
+                                                                       ylm_minus);
+        cal_ylm_deri_from_pm<FPTYPE><<<ylm_block, THREADS_PER_BLOCK>>>(npw,
+                                                                       nylm,
+                                                                       gk,
+                                                                       ylm_plus,
+                                                                       ylm_minus,
+                                                                       ylm_deri + ipol * ylm_size);
+    }
+
+    CHECK_CUDA(cudaFree(shifted_gk));
+    CHECK_CUDA(cudaFree(ylm_scratch));
+    CHECK_CUDA(cudaFree(ylm_plus));
+    CHECK_CUDA(cudaFree(ylm_minus));
+    CHECK_CUDA_SYNC();
 }
 
 
@@ -1418,6 +2175,81 @@ void cal_stress_nl_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_de
     CHECK_CUDA_SYNC();
 }
 
+template <typename FPTYPE>
+void cal_stress_ewa_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                    const int nat,
+                                                                    const int npw,
+                                                                    const int ig0,
+                                                                    const int do_real_space,
+                                                                    const int nm1,
+                                                                    const int nm2,
+                                                                    const int nm3,
+                                                                    const FPTYPE alpha,
+                                                                    const FPTYPE omega,
+                                                                    const FPTYPE tpiba2,
+                                                                    const FPTYPE lat0,
+                                                                    const FPTYPE fact,
+                                                                    const FPTYPE rmax,
+                                                                    const FPTYPE charge,
+                                                                    const FPTYPE* tau,
+                                                                    const FPTYPE* atom_z,
+                                                                    const FPTYPE* gcar,
+                                                                    const FPTYPE* gg,
+                                                                    const FPTYPE* latvec,
+                                                                    FPTYPE* stress)
+{
+    if (nat <= 0 || npw <= 0)
+    {
+        return;
+    }
+
+    set_stress_ewa_diag_kernel<FPTYPE><<<1, 1>>>(charge, alpha, omega, stress);
+
+    const int g_blocks = std::min(1024, std::max(1, (npw + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK));
+    FPTYPE* partial = nullptr;
+    CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&partial), static_cast<size_t>(g_blocks) * 7 * sizeof(FPTYPE)));
+    stress_ewa_g_kernel<FPTYPE><<<g_blocks, THREADS_PER_BLOCK>>>(nat,
+                                                                 npw,
+                                                                 ig0,
+                                                                 alpha,
+                                                                 omega,
+                                                                 tpiba2,
+                                                                 fact,
+                                                                 tau,
+                                                                 atom_z,
+                                                                 gcar,
+                                                                 gg,
+                                                                 partial);
+    stress_ewa_final_reduce_kernel<FPTYPE><<<1, THREADS_PER_BLOCK>>>(partial, g_blocks, stress);
+    CHECK_CUDA(cudaFree(partial));
+
+    if (do_real_space)
+    {
+        const long long npairs = static_cast<long long>(nat) * nat;
+        const int r_blocks = std::min(1024,
+                                      std::max(1, static_cast<int>((npairs + THREADS_PER_BLOCK - 1)
+                                                                   / THREADS_PER_BLOCK)));
+        partial = nullptr;
+        CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&partial), static_cast<size_t>(r_blocks) * 7 * sizeof(FPTYPE)));
+        stress_ewa_r_kernel<FPTYPE><<<r_blocks, THREADS_PER_BLOCK>>>(nat,
+                                                                     nm1,
+                                                                     nm2,
+                                                                     nm3,
+                                                                     alpha,
+                                                                     omega,
+                                                                     lat0,
+                                                                     rmax,
+                                                                     tau,
+                                                                     atom_z,
+                                                                     latvec,
+                                                                     partial);
+        stress_ewa_final_reduce_kernel<FPTYPE><<<1, THREADS_PER_BLOCK>>>(partial, r_blocks, stress);
+        CHECK_CUDA(cudaFree(partial));
+    }
+
+    CHECK_CUDA_SYNC();
+}
+
 template struct synchronize_ptrs<base_device::DEVICE_GPU>;
 
 template struct cal_stress_mgga_op<std::complex<float>, base_device::DEVICE_GPU>;
@@ -1429,12 +2261,24 @@ template struct cal_dbecp_noevc_nl_op<double, base_device::DEVICE_GPU>;
 template struct cal_stress_nl_op<float, base_device::DEVICE_GPU>;
 template struct cal_stress_nl_op<double, base_device::DEVICE_GPU>;
 
+template struct build_stress_nl_reordered_r_op<float, base_device::DEVICE_GPU>;
+template struct build_stress_nl_reordered_r_op<double, base_device::DEVICE_GPU>;
+
+template struct cal_stress_nl_reordered_op<float, base_device::DEVICE_GPU>;
+template struct cal_stress_nl_reordered_op<double, base_device::DEVICE_GPU>;
+
+template struct cal_stress_ewa_op<float, base_device::DEVICE_GPU>;
+template struct cal_stress_ewa_op<double, base_device::DEVICE_GPU>;
+
 
 template struct cal_vq_op<double, base_device::DEVICE_GPU>;
 template struct cal_vq_op<float, base_device::DEVICE_GPU>;
 
 template struct cal_vq_deri_op<double, base_device::DEVICE_GPU>;
 template struct cal_vq_deri_op<float, base_device::DEVICE_GPU>;
+
+template struct cal_ylm_deri_op<double, base_device::DEVICE_GPU>;
+template struct cal_ylm_deri_op<float, base_device::DEVICE_GPU>;
 
 template struct cal_vkb_op<double, base_device::DEVICE_GPU>;
 template struct cal_vkb_op<float, base_device::DEVICE_GPU>;
@@ -1450,6 +2294,9 @@ template struct cal_force_npw_op<float, base_device::DEVICE_GPU>;
 
 template struct cal_multi_dot_op<double, base_device::DEVICE_GPU>;
 template struct cal_multi_dot_op<float, base_device::DEVICE_GPU>;
+
+template struct cal_kinetic_stress_op<double, base_device::DEVICE_GPU>;
+template struct cal_kinetic_stress_op<float, base_device::DEVICE_GPU>;
 
 // template struct prepare_vkb_deri_ptr_op<double, base_device::DEVICE_GPU>;
 // template struct prepare_vkb_deri_ptr_op<float, base_device::DEVICE_GPU>;

@@ -200,6 +200,64 @@ struct cal_stress_nl_op
     {}
 };
 
+template <typename FPTYPE, typename Device>
+struct build_stress_nl_reordered_r_op
+{
+    void chunk(const Device* ctx,
+               const bool& nondiagonal,
+               const int& chunk_nkb,
+               const int& nbands_occ,
+               const int& spin,
+               const int& deeq_2,
+               const int& deeq_3,
+               const int& deeq_4,
+               const int& it,
+               const int& atom_start,
+               const int& atom_count,
+               const int& nproj,
+               const FPTYPE* d_wg,
+               const bool& occ,
+               const FPTYPE* d_ekb,
+               const FPTYPE* qq_nt,
+               const FPTYPE* deeq,
+               const std::complex<FPTYPE>* becp,
+               std::complex<FPTYPE>* r_chunk)
+    {}
+    void chunk(const Device* ctx,
+               const int& chunk_nkb,
+               const int& nbands_occ,
+               const int& deeq_2,
+               const int& deeq_3,
+               const int& deeq_4,
+               const int& it,
+               const int& atom_start,
+               const int& atom_offset_in_type,
+               const int& atom_count,
+               const int& nproj,
+               const FPTYPE* d_wg,
+               const bool& occ,
+               const FPTYPE* d_ekb,
+               const FPTYPE* qq_nt,
+               const std::complex<FPTYPE>* deeq_nc,
+               const std::complex<FPTYPE>* becp,
+               std::complex<FPTYPE>* r_chunk)
+    {}
+};
+
+template <typename FPTYPE, typename Device>
+struct cal_stress_nl_reordered_op
+{
+    void chunk(const Device* ctx,
+               const int& ipol,
+               const int& jpol,
+               const int& npw,
+               const int& chunk_nkb,
+               const std::complex<FPTYPE>* y_chunk,
+               const std::complex<FPTYPE>* vkb_deri_chunk,
+               FPTYPE* stress)
+    {}
+};
+
 template <typename T, typename Device>
 struct cal_stress_mgga_op
 {
@@ -274,6 +332,16 @@ struct cal_vq_deri_op
                     FPTYPE* vq);
 };
 
+template <typename FPTYPE, typename Device>
+struct cal_ylm_deri_op
+{
+    void operator()(const Device* ctx,
+                    const int& nylm,
+                    const int& npw,
+                    const FPTYPE* gk,
+                    FPTYPE* ylm_deri);
+};
+
 
 template <typename FPTYPE, typename Device>
 struct cal_stress_drhoc_aux_op{
@@ -305,6 +373,49 @@ struct cal_multi_dot_op{
                     const FPTYPE* gk2,
                     const FPTYPE* d_kfac,
                     const std::complex<FPTYPE>* psi);
+};
+
+template <typename FPTYPE, typename Device>
+struct cal_kinetic_stress_op
+{
+    void operator()(const Device* ctx,
+                    const int& npw,
+                    const int& npwk_max,
+                    const int& npol,
+                    const int& nbands,
+                    const FPTYPE* band_weight,
+                    const bool& occ,
+                    const FPTYPE& k_weight,
+                    const FPTYPE* gk,
+                    const FPTYPE* kfac,
+                    const std::complex<FPTYPE>* psi,
+                    FPTYPE* stress);
+};
+
+template <typename FPTYPE, typename Device>
+struct cal_stress_ewa_op
+{
+    void operator()(const Device* ctx,
+                    const int nat,
+                    const int npw,
+                    const int ig0,
+                    const int do_real_space,
+                    const int nm1,
+                    const int nm2,
+                    const int nm3,
+                    const FPTYPE alpha,
+                    const FPTYPE omega,
+                    const FPTYPE tpiba2,
+                    const FPTYPE lat0,
+                    const FPTYPE fact,
+                    const FPTYPE rmax,
+                    const FPTYPE charge,
+                    const FPTYPE* tau,
+                    const FPTYPE* atom_z,
+                    const FPTYPE* gcar,
+                    const FPTYPE* gg,
+                    const FPTYPE* latvec,
+                    FPTYPE* stress);
 };
 
 
@@ -452,6 +563,61 @@ struct cal_stress_nl_op<FPTYPE, base_device::DEVICE_GPU>
                      FPTYPE* stress);
 };
 
+template <typename FPTYPE>
+struct build_stress_nl_reordered_r_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void chunk(const base_device::DEVICE_GPU* ctx,
+               const bool& nondiagonal,
+               const int& chunk_nkb,
+               const int& nbands_occ,
+               const int& spin,
+               const int& deeq_2,
+               const int& deeq_3,
+               const int& deeq_4,
+               const int& it,
+               const int& atom_start,
+               const int& atom_count,
+               const int& nproj,
+               const FPTYPE* d_wg,
+               const bool& occ,
+               const FPTYPE* d_ekb,
+               const FPTYPE* qq_nt,
+               const FPTYPE* deeq,
+               const std::complex<FPTYPE>* becp,
+               std::complex<FPTYPE>* r_chunk);
+    void chunk(const base_device::DEVICE_GPU* ctx,
+               const int& chunk_nkb,
+               const int& nbands_occ,
+               const int& deeq_2,
+               const int& deeq_3,
+               const int& deeq_4,
+               const int& it,
+               const int& atom_start,
+               const int& atom_offset_in_type,
+               const int& atom_count,
+               const int& nproj,
+               const FPTYPE* d_wg,
+               const bool& occ,
+               const FPTYPE* d_ekb,
+               const FPTYPE* qq_nt,
+               const std::complex<FPTYPE>* deeq_nc,
+               const std::complex<FPTYPE>* becp,
+               std::complex<FPTYPE>* r_chunk);
+};
+
+template <typename FPTYPE>
+struct cal_stress_nl_reordered_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void chunk(const base_device::DEVICE_GPU* ctx,
+               const int& ipol,
+               const int& jpol,
+               const int& npw,
+               const int& chunk_nkb,
+               const std::complex<FPTYPE>* y_chunk,
+               const std::complex<FPTYPE>* vkb_deri_chunk,
+               FPTYPE* stress);
+};
+
 // cpu version first, gpu version later
 template <typename FPTYPE>
 struct cal_vkb_op<FPTYPE, base_device::DEVICE_GPU>
@@ -519,6 +685,16 @@ struct cal_vq_deri_op<FPTYPE, base_device::DEVICE_GPU>
 };
 
 template <typename FPTYPE>
+struct cal_ylm_deri_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    const int& nylm,
+                    const int& npw,
+                    const FPTYPE* gk,
+                    FPTYPE* ylm_deri);
+};
+
+template <typename FPTYPE>
 struct cal_multi_dot_op<FPTYPE, base_device::DEVICE_GPU>{
     FPTYPE operator()(const int& npw,
                     const FPTYPE& fac,
@@ -526,6 +702,49 @@ struct cal_multi_dot_op<FPTYPE, base_device::DEVICE_GPU>{
                     const FPTYPE* gk2,
                     const FPTYPE* d_kfac,
                     const std::complex<FPTYPE>* psi);
+};
+
+template <typename FPTYPE>
+struct cal_kinetic_stress_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    const int& npw,
+                    const int& npwk_max,
+                    const int& npol,
+                    const int& nbands,
+                    const FPTYPE* band_weight,
+                    const bool& occ,
+                    const FPTYPE& k_weight,
+                    const FPTYPE* gk,
+                    const FPTYPE* kfac,
+                    const std::complex<FPTYPE>* psi,
+                    FPTYPE* stress);
+};
+
+template <typename FPTYPE>
+struct cal_stress_ewa_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    const int nat,
+                    const int npw,
+                    const int ig0,
+                    const int do_real_space,
+                    const int nm1,
+                    const int nm2,
+                    const int nm3,
+                    const FPTYPE alpha,
+                    const FPTYPE omega,
+                    const FPTYPE tpiba2,
+                    const FPTYPE lat0,
+                    const FPTYPE fact,
+                    const FPTYPE rmax,
+                    const FPTYPE charge,
+                    const FPTYPE* tau,
+                    const FPTYPE* atom_z,
+                    const FPTYPE* gcar,
+                    const FPTYPE* gg,
+                    const FPTYPE* latvec,
+                    FPTYPE* stress);
 };
 
 /**
