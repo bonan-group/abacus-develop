@@ -242,12 +242,18 @@ TEST_F(InputTest, Item_test)
         param.input.mem_saver = 1;
         param.input.calculation = "scf";
         it->second.reset_value(it->second, param);
-        EXPECT_EQ(param.input.mem_saver, 0);
+        EXPECT_EQ(param.input.mem_saver, 1);
 
         param.input.mem_saver = 1;
         param.input.calculation = "relax";
         it->second.reset_value(it->second, param);
         EXPECT_EQ(param.input.mem_saver, 0);
+
+        param.input.mem_saver = 2;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("mem_saver"));
     }
     { // gint_precision
         auto it = find_label("gint_precision", readinput.input_lists);

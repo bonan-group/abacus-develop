@@ -130,7 +130,7 @@ class psi_initializer
     const pseudopot_cell_vnl* p_pspot_nl_ = nullptr; ///< pseudopot_cell_vnl
     int random_seed_ = 1;                            ///< random seed, shared by random, atomic+random, nao+random
     std::vector<int> ixy2is_;                        ///< used by stick_to_pool function
-    int mem_saver_ = 0;                              ///< if save memory, only for nscf
+    int mem_saver_ = 0;                              ///< use one-k wavefunction storage for memory-saving paths
     std::string method_ = "none";                    ///< method name
     int nbands_complem_ = 0; ///< complement number of bands, which is nbands_start_ - ucell.natomwfc
     double mixing_coef_ = 0; ///< mixing coefficient for atomic+random and nao+random

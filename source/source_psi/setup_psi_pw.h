@@ -54,7 +54,17 @@ class Setup_Psi_pw
         const pseudopot_cell_vnl &ppcell,
         const Input_para &inp);
 
+    void before_runner(
+        const UnitCell &ucell,
+        const K_Vectors &kv,
+        const Structure_Factor &sf,
+        const ModulePW::PW_Basis_K &pw_wfc,
+        const pseudopot_cell_vnl &ppcell,
+        const Input_para &inp,
+        const bool save_memory);
+
     void init(hamilt::HamiltBase* p_hamilt);
+    void init_ik(hamilt::HamiltBase* p_hamilt, const int ik);
 
     void update_psi_d();
 
@@ -127,7 +137,11 @@ class Setup_Psi_pw
         const Structure_Factor &sf,
         const ModulePW::PW_Basis_K &pw_wfc, 
         const pseudopot_cell_vnl &ppcell,
-        const Input_para &inp);
+        const Input_para &inp,
+        const bool save_memory);
+
+    template <typename T, typename Device>
+    void init_ik_impl(hamilt::Hamilt<T, Device>* p_hamilt, const int ik);
 
     template <typename T, typename Device>
     void init_impl(hamilt::Hamilt<T, Device>* p_hamilt);

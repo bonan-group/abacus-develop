@@ -8,6 +8,12 @@
 #include <memory>
 #include <source_base/macros.h>
 
+namespace hamilt
+{
+template <typename T, typename Device>
+class OperatorEXXPW;
+}
+
 namespace ModuleESolver
 {
 
@@ -52,6 +58,8 @@ class ESolver_KS_PW : public ESolver_KS
     void validate_mixed_band_targets(const Input_para& inp) const;
 
     void solve_mixed_band_targets(UnitCell& ucell);
+    void solve_mixed_band_targets_full(UnitCell& ucell, hamilt::OperatorEXXPW<T, Device>* source_exx);
+    void solve_mixed_band_targets_mem_saver(UnitCell& ucell, hamilt::OperatorEXXPW<T, Device>* source_exx);
 
     // Electronic wave function psi
     Setup_Psi_pw stp;

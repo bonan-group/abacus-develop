@@ -700,10 +700,10 @@
 ### mem_saver
 
 - **Type**: Integer
-- **Availability**: *Used only for nscf calculations with plane wave basis set.*
-- **Description**: Save memory when performing nscf calculations.
+- **Availability**: *Used for nscf calculations with plane wave basis set, and for scf PW hybrid calculations with K_POINTS_BAND target k-points.*
+- **Description**: Save memory when performing many-k eigenvalue-only calculations.
   - 0: no memory saving techniques are used.
-  - 1: a memory saving technique will be used for many k point calculations.
+  - 1: a memory saving technique will be used for many k point calculations. For scf PW hybrid calculations with `K_POINTS_BAND`, target band k-points are solved in a streaming eigenvalue-only path. This path requires `out_band 1`, `exxace 1`, `exx_separate_loop 1`, `KPAR=1`, and an iterative PW solver other than `cg`; target wavefunction output is not supported.
 - **Default**: 0
 
 ### cal_stress

@@ -227,6 +227,62 @@ void HSolverPW<T, Device>::solve(hamilt::Hamilt<T, Device>* pHamilt,
 }
 
 template <typename T, typename Device>
+void HSolverPW<T, Device>::solve_ik(hamilt::Hamilt<T, Device>* pHamilt,
+                                    psi::Psi<T, Device>& psi,
+                                    elecstate::ElecState* pes,
+                                    double* out_eigenvalues_ik,
+                                    const int ik,
+                                    const int rank_in_pool_in,
+                                    const int nproc_in_pool_in,
+                                    const bool hamiltonian_prepared)
+{
+    ModuleBase::TITLE("HSolverPW", "solve_ik");
+    ModuleBase::timer::start("HSolverPW", "solve");
+
+    this->rank_in_pool = rank_in_pool_in;
+    this->nproc_in_pool = nproc_in_pool_in;
+
+    const std::initializer_list<std::string> _methods = {"cg", "dav", "dav_subspace", "bpcg"};
+    if (std::find(std::begin(_methods), std::end(_methods), this->method) == std::end(_methods))
+    {
+        ModuleBase::WARNING_QUIT("HSolverPW::solve_ik", "This type of eigensolver is not supported!");
+    }
+    if (ik < 0 || ik >= this->wfc_basis->nks)
+    {
+        ModuleBase::WARNING_QUIT("HSolverPW::solve_ik", "k-point index is out of range");
+    }
+
+    std::vector<Real> precondition(psi.get_nbasis(), 0.0);
+    ethr_band.resize(psi.get_nbands(), this->diag_thr);
+
+    if (!hamiltonian_prepared)
+    {
+        pHamilt->updateHk(ik);
+    }
+    psi.fix_k(ik);
+    update_precondition(precondition, ik, this->wfc_basis->npwk[ik], Real(pes->pot->get_vl_of_0()));
+
+    if (PARAM.inp.diago_smooth_ethr == true)
+    {
+        auto* _pes_pw = static_cast<elecstate::ElecStatePW<T, Device>*>(pes);
+        this->cal_smooth_ethr(_pes_pw->klist->wk[ik],
+                              &_pes_pw->wg(ik, 0),
+                              DiagoIterAssist<T, Device>::PW_DIAG_THR,
+                              ethr_band);
+    }
+
+    std::vector<Real> eigenvalues(psi.get_nbands(), 0.0);
+    this->hamiltSolvePsiK(pHamilt, psi, precondition, eigenvalues.data(), this->wfc_basis->nks);
+    base_device::memory::cast_memory_op<double, Real, base_device::DEVICE_CPU, base_device::DEVICE_CPU>()(
+        out_eigenvalues_ik,
+        eigenvalues.data(),
+        psi.get_nbands());
+    DiagoIterAssist<T, Device>::avg_iter = 0.0;
+
+    ModuleBase::timer::end("HSolverPW", "solve");
+}
+
+template <typename T, typename Device>
 void HSolverPW<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T, Device>* hm,
                                            psi::Psi<T, Device>& psi,
                                            std::vector<Real>& pre_condition,
