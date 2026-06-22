@@ -35,8 +35,9 @@ void PotXC::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Module
     }
     else
     {
+        const std::string device = this->rho_basis_ == nullptr ? "cpu" : this->rho_basis_->get_device();
         const std::tuple<double, double, ModuleBase::matrix> etxc_vtxc_v
-            = XC_Functional::v_xc(nrxx_current, chg, ucell);
+            = XC_Functional::v_xc(nrxx_current, chg, ucell, device);
         *(this->etxc_) = std::get<0>(etxc_vtxc_v);
         *(this->vtxc_) = std::get<1>(etxc_vtxc_v);
         v_eff += std::get<2>(etxc_vtxc_v);

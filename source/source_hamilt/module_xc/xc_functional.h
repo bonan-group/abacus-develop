@@ -19,6 +19,7 @@
 #include "source_cell/unitcell.h"
 
 #include <map> // added by jghan, 2024-10-10
+#include <string>
 
 class XC_Functional
 {
@@ -48,6 +49,11 @@ class XC_Functional
         const int &nrxx, // number of real-space grid
         const Charge* const chr,
         const UnitCell *ucell); // charge density
+    static std::tuple<double, double, ModuleBase::matrix> v_xc(
+        const int& nrxx,
+        const Charge* const chr,
+        const UnitCell* ucell,
+        const std::string& device); // charge density
 
 //-------------------
 //  xc_functional.cpp
@@ -207,6 +213,16 @@ class XC_Functional
         const UnitCell* ucell,
         std::vector<double>& stress_gga,
         const bool is_stress = false);
+    static void gradcorr(
+        double& etxc,
+        double& vtxc,
+        ModuleBase::matrix& v,
+        const Charge* const chr,
+        ModulePW::PW_Basis* rhopw,
+        const UnitCell* ucell,
+        std::vector<double>& stress_gga,
+        const bool is_stress,
+        const std::string& device);
     template <typename T, typename Device,
               typename Real = typename GetTypeReal<T>::type>
 

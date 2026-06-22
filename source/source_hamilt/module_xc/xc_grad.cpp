@@ -16,6 +16,12 @@
 #include <ATen/core/tensor_map.h>
 #include <ATen/core/tensor_types.h>
 #include <source_hamilt/module_xc/kernels/xc_functional_op.h>
+#include <source_hamilt/module_xc/kernels/xc_gradcorr_op.h>
+#include "source_hamilt/module_xc/xc_gpu_policy.h"
+#include "source_base/module_device/memory_op.h"
+
+#include <cstdlib>
+#include <string>
 
 #ifdef USE_LIBXC
 #include "libxc_abacus.h"
@@ -33,6 +39,20 @@ void XC_Functional::gradcorr(
     const UnitCell *ucell,
     std::vector<double> &stress_gga,
     const bool is_stress)
+{
+    XC_Functional::gradcorr(etxc, vtxc, v, chr, rhopw, ucell, stress_gga, is_stress, "cpu");
+}
+
+void XC_Functional::gradcorr(
+    double &etxc,
+    double &vtxc,
+    ModuleBase::matrix &v,
+    const Charge* const chr,
+    ModulePW::PW_Basis* rhopw,
+    const UnitCell *ucell,
+    std::vector<double> &stress_gga,
+    const bool is_stress,
+    const std::string& device)
 {
     ModuleBase::TITLE("XC_Functional","gradcorr");
 
@@ -245,6 +265,89 @@ void XC_Functional::gradcorr(
     double etxcgc = 0.0;
 
     ModuleBase::timer::start("XC_Functional", "gradcorr_eval_grid");
+    bool gpu_gradcorr_grid_done = false;
+#if __CUDA || __UT_USE_CUDA
+    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
+    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
+    const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
+    const bool use_gpu_gradcorr_grid = XC_Functional_GPU::xc_gpu_policy(device == "gpu",
+                                                                         !xc_gpu_enabled,
+                                                                         PARAM.inp.nspin,
+                                                                         is_pbesol ? "PBEsol" : "PBE")
+                                        && !use_libxc && !is_stress && nspin0 == 1 && (is_pbe || is_pbesol);
+    if (use_gpu_gradcorr_grid)
+    {
+        using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+        using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+        using syncmem_h2d_op
+            = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+        using syncmem_d2h_op
+            = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+        ModuleBase::timer::start("XC_Functional", "gradcorr_eval_grid_gpu");
+        std::vector<double> gdr1_flat(3 * rhopw->nrxx);
+        for (int ir = 0; ir < rhopw->nrxx; ++ir)
+        {
+            gdr1_flat[3 * ir + 0] = gdr1[ir].x;
+            gdr1_flat[3 * ir + 1] = gdr1[ir].y;
+            gdr1_flat[3 * ir + 2] = gdr1[ir].z;
+        }
+
+        double* d_rhotmp1 = nullptr;
+        double* d_rho_core = nullptr;
+        double* d_gdr1 = nullptr;
+        double* d_v = nullptr;
+        double* d_h1 = nullptr;
+        double* d_sums = nullptr;
+        resmem_double_op()(d_rhotmp1, rhopw->nrxx);
+        resmem_double_op()(d_rho_core, rhopw->nrxx);
+        resmem_double_op()(d_gdr1, 3 * rhopw->nrxx);
+        resmem_double_op()(d_v, rhopw->nrxx);
+        resmem_double_op()(d_h1, 3 * rhopw->nrxx);
+        resmem_double_op()(d_sums, 2);
+        syncmem_h2d_op()(d_rhotmp1, rhotmp1, rhopw->nrxx);
+        syncmem_h2d_op()(d_rho_core, chr->rho_core, rhopw->nrxx);
+        syncmem_h2d_op()(d_gdr1, gdr1_flat.data(), 3 * rhopw->nrxx);
+
+        const int iflag = is_pbesol ? 2 : 0;
+        hamilt::xc_gradcorr_pbe_grid_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                           rhopw->nrxx,
+                                                                           iflag,
+                                                                           ModuleBase::e2,
+                                                                           epsr,
+                                                                           d_rhotmp1,
+                                                                           d_rho_core,
+                                                                           d_gdr1,
+                                                                           d_v,
+                                                                           d_h1,
+                                                                           d_sums,
+                                                                           &etxcgc,
+                                                                           &vtxcgc);
+        std::vector<double> v_gpu(rhopw->nrxx);
+        std::vector<double> h_gpu(3 * rhopw->nrxx);
+        syncmem_d2h_op()(v_gpu.data(), d_v, rhopw->nrxx);
+        syncmem_d2h_op()(h_gpu.data(), d_h1, 3 * rhopw->nrxx);
+        for (int ir = 0; ir < rhopw->nrxx; ++ir)
+        {
+            v(0, ir) += v_gpu[ir];
+            h1[ir].x = h_gpu[3 * ir + 0];
+            h1[ir].y = h_gpu[3 * ir + 1];
+            h1[ir].z = h_gpu[3 * ir + 2];
+        }
+
+        delmem_double_op()(d_rhotmp1);
+        delmem_double_op()(d_rho_core);
+        delmem_double_op()(d_gdr1);
+        delmem_double_op()(d_v);
+        delmem_double_op()(d_h1);
+        delmem_double_op()(d_sums);
+        ModuleBase::timer::end("XC_Functional", "gradcorr_eval_grid_gpu");
+        gpu_gradcorr_grid_done = true;
+    }
+#endif
+    if (!gpu_gradcorr_grid_done)
+    {
 #ifdef _OPENMP
 #pragma omp parallel
     {
@@ -547,6 +650,7 @@ void XC_Functional::gradcorr(
     }
 }
 #endif
+    }
     ModuleBase::timer::end("XC_Functional", "gradcorr_eval_grid");
 
     if(!is_stress)

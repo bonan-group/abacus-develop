@@ -615,13 +615,17 @@ inline bool xc_gpu_policy(bool is_gpu, bool cpu_debug, int nspin, const std::str
 Implemented as `source/source_hamilt/module_xc/xc_gpu_policy.h` with
 case-insensitive matching for the supported built-ins.
 
-- [ ] **Step 4: Extend the PotXC/XC interface with explicit device intent**
+- [x] **Step 4: Extend the PotXC/XC interface with explicit device intent**
 
 Thread a device/context argument from `PotXC::cal_v_eff` into
 `XC_Functional::v_xc` and `gradcorr`, preserving the existing CPU call path as
 the default. Do not infer GPU use from global state alone.
 
-- [ ] **Step 5: Add a guarded CPU fallback switch**
+Actual: added explicit `device` overloads for `XC_Functional::v_xc` and
+`XC_Functional::gradcorr`; the existing overloads still route to `"cpu"`.
+`PotXC::cal_v_eff` now passes `rho_basis_->get_device()` when available.
+
+- [x] **Step 5: Add a guarded CPU fallback switch**
 
 Use `ABACUS_XC_GPU=0/1` only as a runtime opt-in/opt-out once the call path has
 explicit device intent. Unsupported cases must fall back to CPU:
@@ -632,7 +636,11 @@ explicit device intent. Unsupported cases must fall back to CPU:
 - LibXC/mGGA/hybrid functionals
 - non-PBE/PBEsol built-ins
 
-- [ ] **Step 6: Port the PBE/PBEsol grid-point `gradcorr` evaluation**
+Actual: the runtime path requires CUDA build, explicit GPU device intent,
+`ABACUS_XC_GPU=1`, built-in PBE/PBEsol, `nspin == 1`, non-stress, and
+non-LibXC. All other cases keep the existing CPU path.
+
+- [x] **Step 6: Port the PBE/PBEsol grid-point `gradcorr` evaluation**
 
 Move the `nspin == 1` built-in GGA grid loop from `gradcorr` to a CUDA kernel:
 
@@ -642,7 +650,12 @@ Move the `nspin == 1` built-in GGA grid loop from `gradcorr` to a CUDA kernel:
 - reductions: use deterministic block reductions where practical and compare
   against CPU tolerances
 
-- [ ] **Step 7: Address GPU-resident gradient/divergence work**
+Actual: added `xc_gradcorr_pbe_grid_op` CPU/CUDA operators and wired the
+guarded runtime path for the grid-point contribution to `v`, `h1`, `etxcgc`,
+and `vtxcgc`. A reference test caught and fixed an initial `pw`/`pz`
+correlation-helper mix-up in the copied PBE formula.
+
+- [x] **Step 7: Address GPU-resident gradient/divergence work**
 
 The measured FFT/derivative pieces are comparable to the grid loop. Decide
 after Step 6 profiling whether to:
@@ -651,7 +664,11 @@ after Step 6 profiling whether to:
 - add GPU `grad_rho`/`grad_dot` variants using the existing PW GPU FFT
   machinery so `rhotmp`, `gdr`, `h`, and `dh` avoid host round-trips.
 
-- [ ] **Step 8: Add CPU-vs-GPU correctness tests**
+Decision: kept `grad_rho` and `grad_dot` CPU-side for this staged change. The
+grid-loop-only move reduces the measured XC grid time substantially, while
+full GPU-resident gradient/divergence remains the next larger XC project.
+
+- [x] **Step 8: Add CPU-vs-GPU correctness tests**
 
 Compare a deterministic small grid against the CPU `gradcorr` reference:
 
@@ -663,7 +680,18 @@ Compare a deterministic small grid against the CPU `gradcorr` reference:
 Expected tolerance: start with `1e-10` double for isolated kernels and relax
 only if full runtime FFT ordering requires it.
 
-- [ ] **Step 9: Runtime validation**
+Actual:
+
+```bash
+cmake --build build-test-cuda --target MODULE_HAMILT_XC_Functional_UTs -j2
+./build-test-cuda/source/source_hamilt/module_xc/kernels/test/MODULE_HAMILT_XC_Functional_UTs --gtest_filter='XCGradcorrOpTest.PbeGridCpuMatchesBuiltinReferenceValues:XCGradcorrOpTest.PbeGridGpuMatchesCpu:XCFunctionGpuPolicyTest.GuardsSupportedBuiltins'
+```
+
+The focused tests passed. The added CPU reference test compares the new
+operator against existing ABACUS PBE reference values, and the GPU test
+compares CUDA output against the CPU operator.
+
+- [x] **Step 9: Runtime validation**
 
 Run a small Si case and Si256 with CPU XC and GPU XC toggled:
 
@@ -675,17 +703,40 @@ ABACUS_XC_GPU=1 build/abacus_basic_gpu
 
 Expected: total energy drift within selected precision tolerance, SCF convergence unchanged or improved.
 
-- [ ] **Step 10: Profile**
+Actual: Si256 CPU-XC fallback and GPU-XC runs both exited 0 with
+`OMP_NUM_THREADS=1`. Separate copied-case logs gave:
+
+- CPU-XC: `FINAL_ETOT = -27439.6260124258878932 eV`,
+  pressure `44.739301 kbar`.
+- GPU-XC: `FINAL_ETOT = -27439.6265233284029819 eV`,
+  pressure `44.739213 kbar`.
+- Absolute drift: `5.11e-4 eV`, `8.8e-5 kbar`.
+- Max force component drift: `3.00e-4 eV/Angstrom`.
+- Max force vector drift: `3.54e-4 eV/Angstrom`.
+
+- [x] **Step 10: Profile**
 
 Run Si256 Nsight:
 
 ```bash
-tools/perf/run_si256_nsys.sh runtime_si256_force_stress_fix_build_20260621-232100 build/abacus_basic_gpu nsight_si256_xc_gpu_omp1
+ABACUS_XC_GPU=1 tools/perf/run_si256_nsys.sh /tmp/si256_xc_gpu_path build/abacus_basic_gpu nsight_si256_xc_gpu_gradcorr_omp1
 ```
 
 Expected: repeated ~1.7 s gaps shrink substantially if XC was the source.
 
-- [ ] **Step 11: Commit**
+Actual timer/profile evidence:
+
+- `PotXC cal_veff`: `14.11 s -> 11.46 s`.
+- `XC_Functional v_xc`: `14.06 s -> 11.41 s`.
+- `XC_Functional gradcorr`: `12.53 s -> 9.89 s`.
+- `gradcorr_eval_grid`: `4.52 s -> 1.87 s`.
+- new `gradcorr_eval_grid_gpu`: `1.39 s`.
+- Nsight GPU active span: `43.23 s`.
+- CUDA-active time: `25.06 s`.
+- inactive time: `18.17 s`.
+- utilization: `57.97%`.
+
+- [x] **Step 11: Commit**
 
 ```bash
 git add source/source_hamilt/module_xc/kernels/xc_gradcorr_op.h source/source_hamilt/module_xc/kernels/cuda/xc_gradcorr_op.cu source/source_hamilt/module_xc/xc_gpu_policy.h source/source_estate/module_pot/pot_xc.h source/source_estate/module_pot/pot_xc.cpp source/source_hamilt/module_xc/xc_functional.h source/source_hamilt/module_xc/xc_pot.cpp source/source_hamilt/module_xc/xc_grad.cpp source/CMakeLists.txt source/source_hamilt/module_xc/kernels/test/xc_functional_op_test.cpp

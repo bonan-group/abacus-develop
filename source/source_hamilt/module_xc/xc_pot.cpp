@@ -19,6 +19,15 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const Charge* const chr,
     const UnitCell* ucell)
 {
+    return XC_Functional::v_xc(nrxx, chr, ucell, "cpu");
+}
+
+std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
+    const int& nrxx,
+    const Charge* const chr,
+    const UnitCell* ucell,
+    const std::string& device)
+{
     ModuleBase::TITLE("XC_Functional", "v_xc");
 
     if (use_libxc)
@@ -174,7 +183,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     // which is not used here
     std::vector<double> dum;
     ModuleBase::timer::start("XC_Functional", "gradcorr");
-    gradcorr(etxc, vtxc, v, chr, chr->rhopw, ucell, dum);
+    gradcorr(etxc, vtxc, v, chr, chr->rhopw, ucell, dum, false, device);
     ModuleBase::timer::end("XC_Functional", "gradcorr");
 
     // parallel code : collect vtxc,etxc

@@ -59,6 +59,7 @@ list(APPEND device_srcs
   source_pw/module_pwdft/kernels/structure_factor_op.cpp
   source_base/kernels/math_ylm_op.cpp
   source_hamilt/module_xc/kernels/xc_functional_op.cpp
+  source_hamilt/module_xc/kernels/xc_gradcorr_op.cpp
   source_pw/module_pwdft/kernels/cal_density_real_op.cpp
   source_pw/module_pwdft/kernels/mul_potential_op.cpp
   source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.cpp
@@ -93,6 +94,7 @@ if(USE_CUDA)
     source_base/kernels/cuda/math_kernel_op.cu
     source_base/kernels/cuda/math_kernel_op_vec.cu
     source_hamilt/module_xc/kernels/cuda/xc_functional_op.cu
+    source_hamilt/module_xc/kernels/cuda/xc_gradcorr_op.cu
     source_pw/module_pwdft/kernels/cuda/cal_density_real_op.cu
     source_pw/module_pwdft/kernels/cuda/mul_potential_op.cu
     source_pw/module_pwdft/kernels/cuda/vec_mul_vec_complex.cu
