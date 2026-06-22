@@ -1,10 +1,20 @@
 #include "source_pw/module_pwdft/kernels/vnl_op.h"
+#include "source_pw/module_pwdft/vnl_pw.h"
 
 #include "source_base/module_device/memory_op.h"
 
 #include <complex>
 #include <gtest/gtest.h>
 #include <vector>
+
+TEST(TestSrcPWVnlPolicy, forceStressUsesChunkedWhenFullVkbIsMissing)
+{
+    EXPECT_TRUE(force_stress_should_use_chunked_vnl(true, false, false, 8));
+    EXPECT_FALSE(force_stress_should_use_chunked_vnl(true, true, false, 8));
+    EXPECT_TRUE(force_stress_should_use_chunked_vnl(true, true, true, 8));
+    EXPECT_FALSE(force_stress_should_use_chunked_vnl(false, false, true, 8));
+    EXPECT_FALSE(force_stress_should_use_chunked_vnl(true, false, true, 0));
+}
 
 class TestSrcPWVnlMultiDevice : public ::testing::Test
 {

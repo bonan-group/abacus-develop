@@ -59,6 +59,11 @@ void FFT_Bundle::initfft(int nx_in,
         {
             ModuleBase::WARNING_QUIT("FFT_Bundle", "Please enable float fftw in the cmake to use float fft");
         }
+        if (this->device == "gpu")
+        {
+            ModuleBase::WARNING_QUIT("FFT_Bundle",
+                                     "Please enable float fftw in the cmake to use single/mixing precision GPU fft");
+        }
 #endif
     }
     else if (this->precision == "double")
@@ -97,15 +102,27 @@ void FFT_Bundle::initfft(int nx_in,
     }else if (device == "gpu")
     {
 #if defined(__ROCM)
-        fft_float = make_unique<FFT_ROCM<float>>();
-        fft_float->initfft(nx_in, ny_in, nz_in);
-        fft_double = make_unique<FFT_ROCM<double>>();
-        fft_double->initfft(nx_in, ny_in, nz_in);
+        if (float_flag)
+        {
+            fft_float = make_unique<FFT_ROCM<float>>();
+            fft_float->initfft(nx_in, ny_in, nz_in);
+        }
+        if (double_flag)
+        {
+            fft_double = make_unique<FFT_ROCM<double>>();
+            fft_double->initfft(nx_in, ny_in, nz_in);
+        }
 #elif defined(__CUDA)
-        fft_float = make_unique<FFT_CUDA<float>>();
-        fft_float->initfft(nx_in, ny_in, nz_in);
-        fft_double = make_unique<FFT_CUDA<double>>();
-        fft_double->initfft(nx_in, ny_in, nz_in);
+        if (float_flag)
+        {
+            fft_float = make_unique<FFT_CUDA<float>>();
+            fft_float->initfft(nx_in, ny_in, nz_in);
+        }
+        if (double_flag)
+        {
+            fft_double = make_unique<FFT_CUDA<double>>();
+            fft_double->initfft(nx_in, ny_in, nz_in);
+        }
 #endif
 
         // Also initialize CPU FFT for fallback operations

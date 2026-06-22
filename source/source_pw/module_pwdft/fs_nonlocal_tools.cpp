@@ -4,6 +4,7 @@
 #include "source_base/math_ylmreal.h"
 #include "source_base/parallel_device.h"
 #include "source_base/timer.h"
+#include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 #include "source_pw/module_pwdft/kernels/force_op.h"
 #include "source_io/module_parameter/parameter.h"
@@ -181,11 +182,13 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::use_chunked_vnl() const
 #if !defined(__CUDA) && !defined(__UT_USE_CUDA)
     return false;
 #else
-    if (get_chunked_vnl_override() == 0)
-    {
-        return false;
-    }
-    return this->device == base_device::GpuDevice && this->nkb > 0;
+    const bool is_gpu = this->device == base_device::GpuDevice;
+    const bool has_full_vkb = this->ppcell_vkb != nullptr;
+    const bool chunked_enabled = get_chunked_vnl_override() != 0
+                                 && vnl_chunking_enabled(this->nkb,
+                                                         this->max_npw,
+                                                         sizeof(std::complex<FPTYPE>));
+    return force_stress_should_use_chunked_vnl(is_gpu, has_full_vkb, chunked_enabled, this->nkb);
 #endif
 }
 
@@ -401,6 +404,11 @@ template <typename FPTYPE, typename Device>
 void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb(const int& ik, const int& nbdall)
 {
     ModuleBase::TITLE("FS_Nonlocal_tools", "cal_vkb");
+    if (this->ppcell_vkb == nullptr && this->nkb > 0)
+    {
+        ModuleBase::WARNING_QUIT("FS_Nonlocal_tools::cal_vkb",
+                                 "full VKB buffer is null; use the chunked force/stress VNL path.");
+    }
     const int npol = this->ucell_->get_npol();
     const int size_becp = nbdall * npol * this->nkb;
     if (this->becp == nullptr)
@@ -498,6 +506,11 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_becp(const int& ik,
     {
         return;
     }
+    if (this->ppcell_vkb == nullptr)
+    {
+        ModuleBase::WARNING_QUIT("FS_Nonlocal_tools::cal_becp",
+                                 "full VKB buffer is null; use the chunked force/stress VNL path.");
+    }
     const int npol = this->ucell_->get_npol();
     const int npw = this->wfc_basis_->npwk[ik];
     const char transa = 'C';
@@ -541,6 +554,11 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb_deri_s(const int& ik,
                                                        const int& jpol)
 {
     ModuleBase::TITLE("FS_Nonlocal_tools", "cal_vkb_deri_s");
+    if (this->ppcell_vkb == nullptr && this->nkb > 0)
+    {
+        ModuleBase::WARNING_QUIT("FS_Nonlocal_tools::cal_vkb_deri_s",
+                                 "full VKB buffer is null; use the chunked stress VNL path.");
+    }
     const int npol = this->ucell_->get_npol();
     const int size_becp = nbdall * npol * this->nkb;
     if (this->dbecp == nullptr)
@@ -661,6 +679,11 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_dbecp_s(const int& ik,
     const int npol = this->ucell_->get_npol();
     const int npm_npol = npm * npol;
     const int npw = this->wfc_basis_->npwk[ik];
+    if (this->ppcell_vkb == nullptr)
+    {
+        ModuleBase::WARNING_QUIT("FS_Nonlocal_tools::cal_dbecp_s",
+                                 "full VKB buffer is null; use the chunked stress VNL path.");
+    }
     std::complex<FPTYPE>* dbecp_ptr = this->dbecp + nbd0 * npol * this->nkb;
 
     // 2.b calculate dbecp = dbecp_noevc * psi
@@ -772,6 +795,11 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_vkb_deri_f(const int& ik, const int&
     {
         resmem_complex_op()(dbecp, 3 * size_becp);
     }
+    if (this->ppcell_vkb == nullptr)
+    {
+        ModuleBase::WARNING_QUIT("FS_Nonlocal_tools::cal_vkb_deri_f",
+                                 "full VKB buffer is null; use the chunked force VNL path.");
+    }
 
     const std::complex<FPTYPE>* vkb_ptr = this->ppcell_vkb;
     std::complex<FPTYPE>* vkb_deri_ptr = this->ppcell_vkb;
@@ -815,6 +843,11 @@ void FS_Nonlocal_tools<FPTYPE, Device>::cal_dbecp_f(const int& ik,
     std::complex<FPTYPE>* vkb_deri_ptr = this->ppcell_vkb;
     const int npm_npol = npm * npol;
     const int npw = this->wfc_basis_->npwk[ik];
+    if (vkb_deri_ptr == nullptr)
+    {
+        ModuleBase::WARNING_QUIT("FS_Nonlocal_tools::cal_dbecp_f",
+                                 "full VKB buffer is null; use the chunked force VNL path.");
+    }
 
     // do gemm to get dbecp and revert the ppcell_vkb for next ipol
     const char transa = 'C';

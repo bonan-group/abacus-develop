@@ -107,6 +107,14 @@ inline bool vnl_chunking_enabled(const int nkb, const int npwx, const size_t ele
 #endif
 }
 
+inline bool force_stress_should_use_chunked_vnl(const bool is_gpu,
+                                                const bool has_full_vkb,
+                                                const bool chunked_vnl_enabled,
+                                                const int nkb)
+{
+    return is_gpu && nkb > 0 && (chunked_vnl_enabled || !has_full_vkb);
+}
+
 //==========================================================
 // Calculate the non-local pseudopotential in reciprocal
 // space using plane wave as basis set.
