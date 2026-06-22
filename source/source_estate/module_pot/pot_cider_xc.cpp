@@ -20,6 +20,12 @@
 namespace
 {
 
+constexpr double CIDER_BRIDGE_GGA_RHO_THRESHOLD = 1.0e-6;
+constexpr double CIDER_BRIDGE_GGA_GRHO_THRESHOLD = 1.0e-10;
+constexpr double CIDER_BRIDGE_MGGA_RHO_THRESHOLD = 1.0e-8;
+constexpr double CIDER_BRIDGE_MGGA_GRHO_THRESHOLD = 1.0e-12;
+constexpr double CIDER_BRIDGE_MGGA_TAU_THRESHOLD = 1.0e-8;
+
 void log_same_density_xc_comparison(
     const Charge* const chg,
     const UnitCell* const ucell,
@@ -100,9 +106,81 @@ void log_same_density_xc_comparison(
     }
 }
 
+std::vector<double> build_bridge_sgn(
+    const int nspin,
+    const std::size_t nrxx,
+    const std::vector<double>& rho_interleaved,
+    const std::vector<double>& sigma_interleaved,
+    const std::vector<double>& tau_interleaved,
+    const bool is_mgga)
+{
+    std::vector<double> sgn(nrxx * nspin, 1.0);
+    const double rho_threshold =
+        is_mgga ? CIDER_BRIDGE_MGGA_RHO_THRESHOLD : CIDER_BRIDGE_GGA_RHO_THRESHOLD;
+    const double grho_threshold =
+        is_mgga ? CIDER_BRIDGE_MGGA_GRHO_THRESHOLD : CIDER_BRIDGE_GGA_GRHO_THRESHOLD;
+
+    if (nspin == 1) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 1024)
+#endif
+        for (std::size_t ir = 0; ir < nrxx; ++ir) {
+            const bool low_density = rho_interleaved[ir] < rho_threshold;
+            const bool low_gradient =
+                is_mgga
+                && !sigma_interleaved.empty()
+                && std::sqrt(std::abs(sigma_interleaved[ir])) < grho_threshold;
+            const bool low_tau =
+                is_mgga
+                && !tau_interleaved.empty()
+                && std::abs(tau_interleaved[ir]) < CIDER_BRIDGE_MGGA_TAU_THRESHOLD;
+            if (low_density || low_gradient || low_tau) {
+                sgn[ir] = 0.0;
+            }
+        }
+    } else {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 512)
+#endif
+        for (std::size_t ir = 0; ir < nrxx; ++ir) {
+            const std::size_t up = ir * 2;
+            const std::size_t dw = up + 1;
+            const bool low_density_up =
+                rho_interleaved[up] < rho_threshold;
+            const bool low_density_dw =
+                rho_interleaved[dw] < rho_threshold;
+            const bool low_gradient_up =
+                is_mgga
+                && !sigma_interleaved.empty()
+                && std::sqrt(std::abs(sigma_interleaved[ir * 3])) < grho_threshold;
+            const bool low_gradient_dw =
+                is_mgga
+                && !sigma_interleaved.empty()
+                && std::sqrt(std::abs(sigma_interleaved[ir * 3 + 2])) < grho_threshold;
+            const bool low_tau_up =
+                is_mgga
+                && !tau_interleaved.empty()
+                && std::abs(tau_interleaved[up]) < CIDER_BRIDGE_MGGA_TAU_THRESHOLD;
+            const bool low_tau_dw =
+                is_mgga
+                && !tau_interleaved.empty()
+                && std::abs(tau_interleaved[dw]) < CIDER_BRIDGE_MGGA_TAU_THRESHOLD;
+            if (low_density_up || low_gradient_up || low_tau_up) {
+                sgn[up] = 0.0;
+            }
+            if (low_density_dw || low_gradient_dw || low_tau_dw) {
+                sgn[dw] = 0.0;
+            }
+        }
+    }
+
+    return sgn;
+}
+
 std::pair<double, ModuleBase::matrix> reconstruct_bridge_vxc_with_native_helper(
     const int nspin,
     const std::size_t nrxx,
+    const std::vector<double>& sgn,
     const std::vector<double>& rho_interleaved,
     const std::vector<std::vector<ModuleBase::Vector3<double>>>& gdr,
     const std::vector<double>& vrho_interleaved,
@@ -110,26 +188,39 @@ std::pair<double, ModuleBase::matrix> reconstruct_bridge_vxc_with_native_helper(
     const double tpiba,
     const Charge* const chg)
 {
-    const int xc_polarized = (1 == nspin) ? XC_UNPOLARIZED : XC_POLARIZED;
-    std::vector<xc_func_type> funcs = XC_Functional_Libxc::init_func(
-        XC_Functional::get_func_id(), xc_polarized);
-    if (funcs.empty()) {
-        ModuleBase::WARNING_QUIT("PotCiderXC", "No XC functional ids available for bridge reconstruction");
+    double vtxc = 0.0;
+    ModuleBase::matrix v(nspin, nrxx);
+
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) reduction(+:vtxc) schedule(static, 256)
+#endif
+    for (int is = 0; is < nspin; ++is) {
+        for (std::size_t ir = 0; ir < nrxx; ++ir) {
+            const std::size_t index = ir * nspin + is;
+            const double v_tmp = ModuleBase::e2 * vrho_interleaved[index] * sgn[index];
+            v(is, ir) += v_tmp;
+            vtxc += v_tmp * rho_interleaved[index];
+        }
     }
-    std::vector<double> sgn(nrxx * nspin, 1.0);
-    auto result = XC_Functional_Libxc::convert_vtxc_v(
-        funcs.front(),
-        nspin,
-        nrxx,
-        sgn,
-        rho_interleaved,
-        gdr,
-        vrho_interleaved,
-        vsigma_interleaved,
-        tpiba,
-        chg);
-    XC_Functional_Libxc::finish_func(funcs);
-    return result;
+
+    if (!vsigma_interleaved.empty()) {
+        const std::vector<std::vector<double>> dh = XC_Functional_Libxc::cal_dh(
+            nspin, nrxx, sgn, gdr, vsigma_interleaved, tpiba, chg);
+
+        double rvtxc = 0.0;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) reduction(+:rvtxc) schedule(static, 256)
+#endif
+        for (int is = 0; is < nspin; ++is) {
+            for (std::size_t ir = 0; ir < nrxx; ++ir) {
+                rvtxc += dh[is][ir] * rho_interleaved[ir * nspin + is];
+                v(is, ir) -= dh[is][ir];
+            }
+        }
+        vtxc -= rvtxc;
+    }
+
+    return std::make_pair(vtxc, std::move(v));
 }
 
 std::vector<double> gather_spin_major_to_global(
@@ -210,6 +301,59 @@ std::vector<double> scatter_spin_major_from_global(
     return local;
 }
 
+std::vector<double> interleaved_to_spin_major(
+    const std::vector<double>& interleaved,
+    const int nchannels,
+    const std::size_t nrxx)
+{
+    std::vector<double> spin_major(nchannels * nrxx, 0.0);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static, 1024)
+#endif
+    for (int ich = 0; ich < nchannels; ++ich) {
+        for (std::size_t ir = 0; ir < nrxx; ++ir) {
+            spin_major[ich * nrxx + ir] = interleaved[ir * nchannels + ich];
+        }
+    }
+    return spin_major;
+}
+
+std::vector<double> spin_major_to_interleaved(
+    const std::vector<double>& spin_major,
+    const int nchannels,
+    const std::size_t nrxx)
+{
+    std::vector<double> interleaved(nchannels * nrxx, 0.0);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static, 1024)
+#endif
+    for (int ich = 0; ich < nchannels; ++ich) {
+        for (std::size_t ir = 0; ir < nrxx; ++ir) {
+            interleaved[ir * nchannels + ich] = spin_major[ich * nrxx + ir];
+        }
+    }
+    return interleaved;
+}
+
+double integrate_role_exc(
+    const std::vector<double>& exc,
+    const std::vector<double>& sgn,
+    const std::vector<double>& rho_interleaved,
+    const int nspin,
+    const std::size_t nrxx)
+{
+    double etxc_local = 0.0;
+    for (std::size_t ir = 0; ir < nrxx; ++ir) {
+        double rho_total = 0.0;
+        for (int is = 0; is < nspin; ++is) {
+            const std::size_t index = ir * nspin + is;
+            rho_total += rho_interleaved[index] * sgn[index];
+        }
+        etxc_local += ModuleBase::e2 * exc[ir] * rho_total;
+    }
+    return etxc_local;
+}
+
 } // namespace
 
 namespace elecstate
@@ -286,6 +430,17 @@ void PotCiderXC::cal_v_eff(
     const std::size_t nxyz = chg->rhopw->nxyz;
     const double tpiba = ucell->tpiba;
 
+    if (nspin != 1 && nspin != 2) {
+        ModuleBase::WARNING_QUIT(
+            "PotCiderXC",
+            "CIDER bridge currently supports only nspin=1 or nspin=2");
+    }
+    if (is_mgga_ && chg->kin_r == nullptr) {
+        ModuleBase::WARNING_QUIT(
+            "PotCiderXC",
+            "MGGA CIDER bridge requires kinetic-energy density chg->kin_r");
+    }
+
     static int eval_count = 0;
     eval_count += 1;
     GlobalV::ofs_running
@@ -295,31 +450,37 @@ void PotCiderXC::cal_v_eff(
         << " tpiba=" << tpiba
         << std::endl;
 
-    // === 1. Build rho in interleaved layout for gradient computation ===
-    // (ABACUS libxc functions use interleaved: rho[ir*nspin+is])
-    std::vector<double> rho_interleaved(nrxx * nspin);
+    // === 1. Build role-specific densities in ABACUS interleaved layout ===
+    // Baseline XC follows the normal NLCC path: valence + pseudo-core.
+    // CIDER ML exchange features follow the training density: valence-only.
+    std::vector<double> rho_baseline_interleaved(nrxx * nspin);
+    std::vector<double> rho_feature_interleaved(nrxx * nspin);
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static, 1024)
 #endif
     for (int is = 0; is < nspin; ++is) {
         for (std::size_t ir = 0; ir < nrxx; ++ir) {
-            rho_interleaved[ir * nspin + is] = chg->rho[is][ir] + 1.0 / nspin * chg->rho_core[ir];
+            const double rho_valence = chg->rho[is][ir];
+            rho_feature_interleaved[ir * nspin + is] = rho_valence;
+            rho_baseline_interleaved[ir * nspin + is] =
+                rho_valence + chg->rho_core[ir] / static_cast<double>(nspin);
         }
     }
 
-    // === 2. Build sigma using ABACUS gradient machinery ===
-    auto gdr = XC_Functional_Libxc::cal_gdr(nspin, nrxx, rho_interleaved, tpiba, chg);
-    auto sigma_interleaved = XC_Functional_Libxc::convert_sigma(gdr);
+    // === 2. Build role-specific sigma using ABACUS gradient machinery ===
+    auto gdr_baseline = XC_Functional_Libxc::cal_gdr(
+        nspin, nrxx, rho_baseline_interleaved, tpiba, chg);
+    auto sigma_baseline_interleaved = XC_Functional_Libxc::convert_sigma(gdr_baseline);
+    auto gdr_feature = XC_Functional_Libxc::cal_gdr(
+        nspin, nrxx, rho_feature_interleaved, tpiba, chg);
+    auto sigma_feature_interleaved = XC_Functional_Libxc::convert_sigma(gdr_feature);
 
-    // === 3. Build tau in interleaved layout ===
-    // CIDER functionals are trained on all-electron kinetic energy density,
-    // but ABACUS kin_r only contains the valence contribution. When
-    // cider_tf_tau is true, we approximate the frozen-core kinetic energy
-    // density via the Thomas-Fermi formula and add it to the
-    // wavefunction-derived valence tau.
-    std::vector<double> tau_interleaved;
+    // === 3. Build role-specific tau in interleaved layout ===
+    std::vector<double> tau_baseline_interleaved;
+    std::vector<double> tau_feature_interleaved;
     if (is_mgga_ && chg->kin_r != nullptr) {
-        tau_interleaved.resize(nrxx * nspin);
+        tau_baseline_interleaved.resize(nrxx * nspin);
+        tau_feature_interleaved.resize(nrxx * nspin);
         const bool use_tf_core = PARAM.inp.cider_tf_tau;
         constexpr double TF_FACTOR = (3.0 / 10.0) * std::pow(3.0 * M_PI * M_PI, 2.0 / 3.0);
 #ifdef _OPENMP
@@ -327,176 +488,222 @@ void PotCiderXC::cal_v_eff(
 #endif
         for (int is = 0; is < nspin; ++is) {
             for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                double tau = chg->kin_r[is][ir] / 2.0;
+                const double tau_valence = chg->kin_r[is][ir] / 2.0;
+                double tau_baseline = tau_valence;
                 if (use_tf_core) {
                     const double rho_cps = std::max(chg->rho_core[ir] / nspin, 0.0);
-                    tau += TF_FACTOR * std::pow(rho_cps, 5.0 / 3.0);
+                    tau_baseline += TF_FACTOR * std::pow(rho_cps, 5.0 / 3.0);
                 }
-                tau_interleaved[ir * nspin + is] = tau;
+                tau_feature_interleaved[ir * nspin + is] = tau_valence;
+                tau_baseline_interleaved[ir * nspin + is] = tau_baseline;
             }
         }
     }
 
-    // CIDER MGGA functionals need NLCC core density for rho, sigma, and tau.
-    // Print a one-time warning if no NLCC is present.
-    if (is_mgga_) {
-        static bool nlcc_warned = false;
-        if (!nlcc_warned) {
-            bool has_nlcc = false;
-            for (int it = 0; it < ucell->ntype; ++it) {
-                if (ucell->atoms[it].ncpp.nlcc) {
-                    has_nlcc = true;
-                    break;
-                }
-            }
-            if (!has_nlcc) {
-                GlobalV::ofs_running
-                    << "WARNING PotCiderXC: CIDER MGGA model requires NLCC pseudopotentials "
-                    << "for accurate core density contribution to rho, sigma, and tau.\n"
-                    << "No NLCC pseudopotential detected; core density will be zero."
-                    << std::endl;
-            }
-            nlcc_warned = true;
-        }
+    static bool density_policy_logged = false;
+    if (!density_policy_logged) {
+        GlobalV::ofs_running
+            << "PotCiderXC: dual-density policy"
+            << " baseline_rho_sigma=valence_plus_core"
+            << " feature_rho_sigma=valence_only"
+            << " tau_feature=valence_only"
+            << " tau_baseline="
+            << (PARAM.inp.cider_tf_tau ? "valence_plus_tf_core" : "valence_only")
+            << std::endl;
+        density_policy_logged = true;
     }
 
     // === 4. Convert to spin-major layout for the CIDER bridge ===
     // Python expects: rho[is*ngrids+ir], sigma[isig*ngrids+ir], tau[is*ngrids+ir]
     const int nsigma = (nspin == 1) ? 1 : 3;
 
-    std::vector<double> rho_sm(nrxx * nspin);
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static, 1024)
-#endif
-    for (int is = 0; is < nspin; ++is) {
-        for (std::size_t ir = 0; ir < nrxx; ++ir) {
-            rho_sm[is * nrxx + ir] = rho_interleaved[ir * nspin + is];
-        }
-    }
+    const std::vector<double> rho_baseline_sm =
+        interleaved_to_spin_major(rho_baseline_interleaved, nspin, nrxx);
+    const std::vector<double> sigma_baseline_sm =
+        interleaved_to_spin_major(sigma_baseline_interleaved, nsigma, nrxx);
+    const std::vector<double> rho_feature_sm =
+        interleaved_to_spin_major(rho_feature_interleaved, nspin, nrxx);
+    const std::vector<double> sigma_feature_sm =
+        interleaved_to_spin_major(sigma_feature_interleaved, nsigma, nrxx);
 
-    std::vector<double> sigma_sm(nrxx * nsigma);
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static, 1024)
-#endif
-    for (int isig = 0; isig < nsigma; ++isig) {
-        for (std::size_t ir = 0; ir < nrxx; ++ir) {
-            sigma_sm[isig * nrxx + ir] = sigma_interleaved[ir * nsigma + isig];
-        }
-    }
-
-    std::vector<double> tau_sm;
-    double* tau_sm_ptr = nullptr;
-    if (!tau_interleaved.empty()) {
-        tau_sm.resize(nrxx * nspin);
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static, 1024)
-#endif
-        for (int is = 0; is < nspin; ++is) {
-            for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                tau_sm[is * nrxx + ir] = tau_interleaved[ir * nspin + is];
-            }
-        }
-        tau_sm_ptr = tau_sm.data();
+    std::vector<double> tau_baseline_sm;
+    std::vector<double> tau_feature_sm;
+    if (!tau_baseline_interleaved.empty()) {
+        tau_baseline_sm = interleaved_to_spin_major(
+            tau_baseline_interleaved, nspin, nrxx);
+        tau_feature_sm = interleaved_to_spin_major(
+            tau_feature_interleaved, nspin, nrxx);
     }
 
     // === 5. Allocate output arrays (spin-major) ===
-    std::vector<double> exc(nrxx, 0.0);
-    std::vector<double> vrho_sm(nrxx * nspin, 0.0);
-    std::vector<double> vsigma_sm(nrxx * nsigma, 0.0);
-    std::vector<double> vtau_sm;
-    double* vtau_sm_ptr = nullptr;
+    std::vector<double> exc_baseline(nrxx, 0.0);
+    std::vector<double> exc_feature(nrxx, 0.0);
+    std::vector<double> vrho_baseline_sm(nrxx * nspin, 0.0);
+    std::vector<double> vrho_feature_sm(nrxx * nspin, 0.0);
+    std::vector<double> vsigma_baseline_sm(nrxx * nsigma, 0.0);
+    std::vector<double> vsigma_feature_sm(nrxx * nsigma, 0.0);
+    std::vector<double> vtau_baseline_sm;
+    std::vector<double> vtau_feature_sm;
+    std::vector<double> vtau_total_sm;
     if (is_mgga_) {
-        vtau_sm.resize(nrxx * nspin, 0.0);
-        vtau_sm_ptr = vtau_sm.data();
+        vtau_baseline_sm.resize(nrxx * nspin, 0.0);
+        vtau_feature_sm.resize(nrxx * nspin, 0.0);
+        vtau_total_sm.resize(nrxx * nspin, 0.0);
     }
 
     // === 6. Call CIDER bridge ===
-    const std::vector<double> rho_sm_global = gather_spin_major_to_global(this->rho_basis_, rho_sm, nspin);
-    const std::vector<double> sigma_sm_global = gather_spin_major_to_global(this->rho_basis_, sigma_sm, nsigma);
-    const std::vector<double> tau_sm_global = tau_sm.empty()
-                                                  ? std::vector<double>()
-                                                  : gather_spin_major_to_global(this->rho_basis_, tau_sm, nspin);
+    const std::vector<double> rho_baseline_sm_global =
+        gather_spin_major_to_global(this->rho_basis_, rho_baseline_sm, nspin);
+    const std::vector<double> sigma_baseline_sm_global =
+        gather_spin_major_to_global(this->rho_basis_, sigma_baseline_sm, nsigma);
+    const std::vector<double> rho_feature_sm_global =
+        gather_spin_major_to_global(this->rho_basis_, rho_feature_sm, nspin);
+    const std::vector<double> sigma_feature_sm_global =
+        gather_spin_major_to_global(this->rho_basis_, sigma_feature_sm, nsigma);
+    const std::vector<double> tau_baseline_sm_global =
+        tau_baseline_sm.empty()
+            ? std::vector<double>()
+            : gather_spin_major_to_global(this->rho_basis_, tau_baseline_sm, nspin);
+    const std::vector<double> tau_feature_sm_global =
+        tau_feature_sm.empty()
+            ? std::vector<double>()
+            : gather_spin_major_to_global(this->rho_basis_, tau_feature_sm, nspin);
 
-    std::vector<double> exc_global(nxyz, 0.0);
-    std::vector<double> vrho_sm_global(nxyz * nspin, 0.0);
-    std::vector<double> vsigma_sm_global(nxyz * nsigma, 0.0);
-    std::vector<double> vtau_sm_global;
-    double* tau_sm_global_ptr = nullptr;
-    double* vtau_sm_global_ptr = nullptr;
-    if (!tau_sm_global.empty()) {
-        tau_sm_global_ptr = const_cast<double*>(tau_sm_global.data());
-        vtau_sm_global.resize(nxyz * nspin, 0.0);
-        vtau_sm_global_ptr = vtau_sm_global.data();
+    std::vector<double> exc_baseline_global(nxyz, 0.0);
+    std::vector<double> exc_feature_global(nxyz, 0.0);
+    std::vector<double> vrho_baseline_sm_global(nxyz * nspin, 0.0);
+    std::vector<double> vrho_feature_sm_global(nxyz * nspin, 0.0);
+    std::vector<double> vsigma_baseline_sm_global(nxyz * nsigma, 0.0);
+    std::vector<double> vsigma_feature_sm_global(nxyz * nsigma, 0.0);
+    std::vector<double> vtau_baseline_sm_global;
+    std::vector<double> vtau_feature_sm_global;
+    double* vtau_baseline_sm_global_ptr = nullptr;
+    double* vtau_feature_sm_global_ptr = nullptr;
+    if (is_mgga_) {
+        vtau_baseline_sm_global.resize(nxyz * nspin, 0.0);
+        vtau_feature_sm_global.resize(nxyz * nspin, 0.0);
+        vtau_baseline_sm_global_ptr = vtau_baseline_sm_global.data();
+        vtau_feature_sm_global_ptr = vtau_feature_sm_global.data();
     }
 
-    int err = cider_bridge_evaluate(
+    const double* tau_baseline_sm_global_ptr =
+        tau_baseline_sm_global.empty() ? nullptr : tau_baseline_sm_global.data();
+    const double* tau_feature_sm_global_ptr =
+        tau_feature_sm_global.empty() ? nullptr : tau_feature_sm_global.data();
+
+    int err = cider_bridge_evaluate_dual(
         ctx_, nspin, static_cast<int>(nxyz),
-        rho_sm_global.data(), sigma_sm_global.data(), tau_sm_global_ptr,
-        exc_global.data(), vrho_sm_global.data(), vsigma_sm_global.data(), vtau_sm_global_ptr);
+        rho_baseline_sm_global.data(),
+        sigma_baseline_sm_global.data(),
+        tau_baseline_sm_global_ptr,
+        rho_feature_sm_global.data(),
+        sigma_feature_sm_global.data(),
+        tau_feature_sm_global_ptr,
+        exc_baseline_global.data(),
+        vrho_baseline_sm_global.data(),
+        vsigma_baseline_sm_global.data(),
+        vtau_baseline_sm_global_ptr,
+        exc_feature_global.data(),
+        vrho_feature_sm_global.data(),
+        vsigma_feature_sm_global.data(),
+        vtau_feature_sm_global_ptr);
 
     if (err != 0) {
-        ModuleBase::WARNING_QUIT("PotCiderXC", "cider_bridge_evaluate failed");
+        ModuleBase::WARNING_QUIT("PotCiderXC", "cider_bridge_evaluate_dual failed");
     }
 
-    exc = scatter_spin_major_from_global(this->rho_basis_, exc_global, 1);
-    vrho_sm = scatter_spin_major_from_global(this->rho_basis_, vrho_sm_global, nspin);
-    vsigma_sm = scatter_spin_major_from_global(this->rho_basis_, vsigma_sm_global, nsigma);
-    if (vtau_sm_global_ptr != nullptr) {
-        vtau_sm = scatter_spin_major_from_global(this->rho_basis_, vtau_sm_global, nspin);
+    exc_baseline = scatter_spin_major_from_global(this->rho_basis_, exc_baseline_global, 1);
+    exc_feature = scatter_spin_major_from_global(this->rho_basis_, exc_feature_global, 1);
+    vrho_baseline_sm = scatter_spin_major_from_global(
+        this->rho_basis_, vrho_baseline_sm_global, nspin);
+    vrho_feature_sm = scatter_spin_major_from_global(
+        this->rho_basis_, vrho_feature_sm_global, nspin);
+    vsigma_baseline_sm = scatter_spin_major_from_global(
+        this->rho_basis_, vsigma_baseline_sm_global, nsigma);
+    vsigma_feature_sm = scatter_spin_major_from_global(
+        this->rho_basis_, vsigma_feature_sm_global, nsigma);
+    if (is_mgga_) {
+        vtau_baseline_sm = scatter_spin_major_from_global(
+            this->rho_basis_, vtau_baseline_sm_global, nspin);
+        vtau_feature_sm = scatter_spin_major_from_global(
+            this->rho_basis_, vtau_feature_sm_global, nspin);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 1024)
+#endif
+        for (std::size_t i = 0; i < vtau_total_sm.size(); ++i) {
+            vtau_total_sm[i] = vtau_baseline_sm[i] + vtau_feature_sm[i];
+        }
     }
 
     GlobalV::ofs_running
-        << "PotCiderXC: bridge evaluate returned"
-        << " exc0=" << (exc.empty() ? 0.0 : exc[0])
-        << " vrho0=" << (vrho_sm.empty() ? 0.0 : vrho_sm[0])
-        << " vsigma0=" << (vsigma_sm.empty() ? 0.0 : vsigma_sm[0])
+        << "PotCiderXC: bridge evaluate_dual returned"
+        << " exc_baseline0=" << (exc_baseline.empty() ? 0.0 : exc_baseline[0])
+        << " exc_feature0=" << (exc_feature.empty() ? 0.0 : exc_feature[0])
+        << " vrho_baseline0=" << (vrho_baseline_sm.empty() ? 0.0 : vrho_baseline_sm[0])
+        << " vrho_feature0=" << (vrho_feature_sm.empty() ? 0.0 : vrho_feature_sm[0])
         << std::endl;
 
-    // === 7. Convert vrho back to interleaved, compute etxc and accumulate v_eff ===
-    double etxc_local = 0.0;
-    // etxc: exc is per-particle energy density, integrate over total density
-    for (std::size_t ir = 0; ir < nrxx; ++ir) {
-        double rho_total = 0.0;
-        for (int is = 0; is < nspin; ++is) {
-            rho_total += rho_interleaved[ir * nspin + is];
-        }
-        etxc_local += ModuleBase::e2 * exc[ir] * rho_total;
-    }
+    const std::vector<double> sgn_baseline = build_bridge_sgn(
+        nspin,
+        nrxx,
+        rho_baseline_interleaved,
+        sigma_baseline_interleaved,
+        tau_baseline_interleaved,
+        is_mgga_);
+    const std::vector<double> sgn_feature = build_bridge_sgn(
+        nspin,
+        nrxx,
+        rho_feature_interleaved,
+        sigma_feature_interleaved,
+        tau_feature_interleaved,
+        is_mgga_);
+
+    // === 7. Integrate each energy density with its owning density ===
+    double etxc_local = integrate_role_exc(
+        exc_baseline, sgn_baseline, rho_baseline_interleaved, nspin, nrxx);
+    etxc_local += integrate_role_exc(
+        exc_feature, sgn_feature, rho_feature_interleaved, nspin, nrxx);
 
     // === 8. Convert vrho/vsigma back to interleaved and use native ABACUS
     // helper machinery to reconstruct the local XC potential. This keeps the
     // divergence/gradient conventions aligned with the normal libxc path.
-    std::vector<double> vrho_int(nrxx * nspin);
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static, 1024)
-#endif
-    for (int is = 0; is < nspin; ++is) {
-        for (std::size_t ir = 0; ir < nrxx; ++ir) {
-            vrho_int[ir * nspin + is] = vrho_sm[is * nrxx + ir];
-        }
-    }
+    const std::vector<double> vrho_baseline_int =
+        spin_major_to_interleaved(vrho_baseline_sm, nspin, nrxx);
+    const std::vector<double> vsigma_baseline_int =
+        spin_major_to_interleaved(vsigma_baseline_sm, nsigma, nrxx);
+    const std::vector<double> vrho_feature_int =
+        spin_major_to_interleaved(vrho_feature_sm, nspin, nrxx);
+    const std::vector<double> vsigma_feature_int =
+        spin_major_to_interleaved(vsigma_feature_sm, nsigma, nrxx);
 
-    std::vector<double> vsigma_int(nrxx * nsigma);
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static, 1024)
-#endif
-    for (int isig = 0; isig < nsigma; ++isig) {
-        for (std::size_t ir = 0; ir < nrxx; ++ir) {
-            vsigma_int[ir * nsigma + isig] = vsigma_sm[isig * nrxx + ir];
-        }
-    }
-
-    auto vtxc_v_bridge = reconstruct_bridge_vxc_with_native_helper(
+    auto vtxc_v_baseline = reconstruct_bridge_vxc_with_native_helper(
         nspin,
         nrxx,
-        rho_interleaved,
-        gdr,
-        vrho_int,
-        vsigma_int,
+        sgn_baseline,
+        rho_baseline_interleaved,
+        gdr_baseline,
+        vrho_baseline_int,
+        vsigma_baseline_int,
         tpiba,
         chg);
-    double vtxc_local = std::get<0>(vtxc_v_bridge);
-    ModuleBase::matrix v_bridge = std::get<1>(vtxc_v_bridge);
+    auto vtxc_v_feature = reconstruct_bridge_vxc_with_native_helper(
+        nspin,
+        nrxx,
+        sgn_feature,
+        rho_feature_interleaved,
+        gdr_feature,
+        vrho_feature_int,
+        vsigma_feature_int,
+        tpiba,
+        chg);
+    double vtxc_local = std::get<0>(vtxc_v_baseline) + std::get<0>(vtxc_v_feature);
+    ModuleBase::matrix v_bridge = std::get<1>(vtxc_v_baseline);
+    const ModuleBase::matrix& v_feature = std::get<1>(vtxc_v_feature);
+    for (int is = 0; is < v_bridge.nr; ++is) {
+        for (int ir = 0; ir < v_bridge.nc; ++ir) {
+            v_bridge(is, ir) += v_feature(is, ir);
+        }
+    }
 
 #ifdef __MPI
     Parallel_Reduce::reduce_pool(etxc_local);
@@ -508,14 +715,21 @@ void PotCiderXC::cal_v_eff(
     *(this->vtxc_) = vtxc_local * grid_weight;
 
     ModuleBase::matrix bridge_vofk;
-    if (is_mgga_ && vtau_sm_ptr != nullptr)
+    if (is_mgga_ && !vtau_total_sm.empty())
     {
+        const std::vector<double> vtau_baseline_int =
+            spin_major_to_interleaved(vtau_baseline_sm, nspin, nrxx);
+        const std::vector<double> vtau_feature_int =
+            spin_major_to_interleaved(vtau_feature_sm, nspin, nrxx);
         bridge_vofk.create(nspin, nrxx);
         for (int is = 0; is < nspin; ++is)
         {
             for (std::size_t ir = 0; ir < nrxx; ++ir)
             {
-                bridge_vofk(is, ir) = vtau_sm[is * nrxx + ir];
+                const std::size_t index = ir * nspin + is;
+                bridge_vofk(is, ir) =
+                    vtau_baseline_int[index] * sgn_baseline[index]
+                    + vtau_feature_int[index] * sgn_feature[index];
             }
         }
     }
@@ -539,14 +753,21 @@ void PotCiderXC::cal_v_eff(
         << " grid_weight=" << grid_weight
         << std::endl;
 
-    // === 9. MGGA: convert vtau back to interleaved, assign into vofk ===
-    if (is_mgga_ && vofk_ != nullptr && vtau_sm_ptr != nullptr) {
+    // === 9. MGGA: assign summed role derivatives into vofk ===
+    if (is_mgga_ && vofk_ != nullptr && !vtau_total_sm.empty()) {
+        const std::vector<double> vtau_baseline_int =
+            spin_major_to_interleaved(vtau_baseline_sm, nspin, nrxx);
+        const std::vector<double> vtau_feature_int =
+            spin_major_to_interleaved(vtau_feature_sm, nspin, nrxx);
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static, 1024)
 #endif
         for (int is = 0; is < nspin; ++is) {
             for (std::size_t ir = 0; ir < nrxx; ++ir) {
-                (*vofk_)(is, ir) = vtau_sm[is * nrxx + ir];
+                const std::size_t index = ir * nspin + is;
+                (*vofk_)(is, ir) =
+                    vtau_baseline_int[index] * sgn_baseline[index]
+                    + vtau_feature_int[index] * sgn_feature[index];
             }
         }
     }
