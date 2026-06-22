@@ -56,6 +56,7 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
     // converting rho
     std::vector<double> rho;
     std::vector<double> amag;
+    ModuleBase::timer::start("XC_Functional_Libxc", "convert_rho");
     if(1==nspin || 2==PARAM.inp.nspin)
     {
         rho = XC_Functional_Libxc::convert_rho(nspin, nrxx, chr);
@@ -66,13 +67,18 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
         rho = std::get<0>(std::move(rho_amag));
         amag = std::get<1>(std::move(rho_amag));
     }
+    ModuleBase::timer::end("XC_Functional_Libxc", "convert_rho");
 
     std::vector<std::vector<ModuleBase::Vector3<double>>> gdr;
     std::vector<double> sigma;
     if(is_gga)
     {
+        ModuleBase::timer::start("XC_Functional_Libxc", "cal_gdr");
         gdr = XC_Functional_Libxc::cal_gdr(nspin, nrxx, rho, tpiba, chr);
+        ModuleBase::timer::end("XC_Functional_Libxc", "cal_gdr");
+        ModuleBase::timer::start("XC_Functional_Libxc", "convert_sigma");
         sigma = XC_Functional_Libxc::convert_sigma(gdr);
+        ModuleBase::timer::end("XC_Functional_Libxc", "convert_sigma");
     }
 
     double etxc = 0.0;
@@ -88,7 +94,9 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
         xc_func_set_dens_threshold(&func, rho_threshold);
 
         // sgn for threshold mask
+        ModuleBase::timer::start("XC_Functional_Libxc", "cal_sgn");
         const std::vector<double> sgn = XC_Functional_Libxc::cal_sgn(rho_threshold, grho_threshold, func, nspin, nrxx, rho, sigma);
+        ModuleBase::timer::end("XC_Functional_Libxc", "cal_sgn");
 
         std::vector<double> exc   ( nrxx                    );
         std::vector<double> vrho  ( nrxx * nspin            );
@@ -157,12 +165,16 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
         }
 
         // time factor is added by jghan, 2024-10-10
+        ModuleBase::timer::start("XC_Functional_Libxc", "convert_etxc");
         etxc += XC_Functional_Libxc::convert_etxc(nspin, nrxx, sgn, rho, exc) * factor;
+        ModuleBase::timer::end("XC_Functional_Libxc", "convert_etxc");
+        ModuleBase::timer::start("XC_Functional_Libxc", "convert_vtxc_v");
         const std::pair<double,ModuleBase::matrix> vtxc_v = XC_Functional_Libxc::convert_vtxc_v(
             func, nspin, nrxx,
             sgn, rho, gdr,
             vrho, vsigma,
             tpiba, chr);
+        ModuleBase::timer::end("XC_Functional_Libxc", "convert_vtxc_v");
         vtxc += std::get<0>(vtxc_v) * factor;
         v += std::get<1>(vtxc_v) * factor;
     } // end for( xc_func_type &func : funcs )

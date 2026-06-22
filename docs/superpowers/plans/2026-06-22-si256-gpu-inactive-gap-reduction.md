@@ -452,7 +452,7 @@ git commit -m "Reduce host setup in GPU force paths"
 - Produces timers for `xc_convert_rho`, `xc_cal_gdr`, `xc_libxc_eval`, `xc_convert_v`.
 - Later tasks use these to choose CPU batching versus GPU implementation.
 
-- [ ] **Step 1: Add sub-timers**
+- [x] **Step 1: Add sub-timers**
 
 Wrap each stage:
 
@@ -464,7 +464,7 @@ ModuleBase::timer::end("XC_Functional_Libxc", "convert_rho");
 
 Repeat for `cal_gdr`, `convert_sigma`, `cal_sgn`, `xc_lda/gga_exc_vxc`, `convert_etxc`, and `convert_vtxc_v`.
 
-- [ ] **Step 2: Verify timing labels**
+- [x] **Step 2: Verify timing labels**
 
 Run:
 
@@ -477,13 +477,26 @@ export OMP_NUM_THREADS=1
 
 Expected: timer table splits the current ~15.3 s XC time across stages.
 
-- [ ] **Step 3: Decide target path**
+Actual: the LibXC sub-timers did not appear for the Si256 benchmark because
+this input uses the built-in `XC_Functional::v_xc` path. Added built-in
+sub-timers as well. The verified OMP=1 Si256 split is:
+
+- `PotXC cal_veff`: 19.28 s over 10 calls.
+- `XC_Functional v_xc`: 19.21 s over 10 calls.
+- `XC_Functional xc_builtin_eval`: 1.98 s over 10 calls.
+- `XC_Functional gradcorr`: 17.12 s over 10 calls.
+
+- [x] **Step 3: Decide target path**
 
 Use the timer split:
 
 - If `xc_lda/gga_exc_vxc` dominates: implement a GPU-native analytic PBE/PBEsol/LDA path for known built-in functionals first.
 - If `convert_*` and `cal_gdr` dominate: move density conversion, sigma construction, and `convert_vtxc_v` to GPU while leaving LibXC evaluation on CPU.
 - If both dominate: implement GPU analytic PBE for Si benchmark and keep LibXC as fallback.
+
+Decision: `gradcorr` dominates the Si/PBE benchmark. Task 5 should target a
+guarded GPU path for the built-in GGA gradient-correction work first, not the
+LibXC conversion helpers or the scalar built-in XC evaluation.
 
 - [ ] **Step 4: Commit timing instrumentation**
 

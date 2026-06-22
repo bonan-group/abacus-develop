@@ -47,6 +47,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     double e2 = 2.0;
     double vanishing_charge = 1.0e-10;
 
+    ModuleBase::timer::start("XC_Functional", "xc_builtin_eval");
     if (PARAM.inp.nspin == 1 || ( PARAM.inp.nspin ==4 && !PARAM.globalv.domag && !PARAM.globalv.domag_z))
     {
         // spin-unpolarized case
@@ -163,6 +164,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
             }
         }
     }
+    ModuleBase::timer::end("XC_Functional", "xc_builtin_eval");
     // energy terms, local-density contributions
 
     // add gradient corrections (if any)
@@ -171,7 +173,9 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     // the dummy variable dum contains gradient correction to stress
     // which is not used here
     std::vector<double> dum;
+    ModuleBase::timer::start("XC_Functional", "gradcorr");
     gradcorr(etxc, vtxc, v, chr, chr->rhopw, ucell, dum);
+    ModuleBase::timer::end("XC_Functional", "gradcorr");
 
     // parallel code : collect vtxc,etxc
     // mohan add 2008-06-01
