@@ -70,12 +70,14 @@ void XC_Functional::gradcorr(
     }
 
     // doing FFT to get rho in G space: rhog1
+    ModuleBase::timer::start("XC_Functional", "gradcorr_rho_fft");
     rhopw->real2recip(chr->rho[0], chr->rhog[0]);
     if(PARAM.inp.nspin==2)
     {
         rhopw->real2recip(chr->rho[1], chr->rhog[1]);
     }
     rhopw->real2recip(chr->rho_core, chr->rhog_core);
+    ModuleBase::timer::end("XC_Functional", "gradcorr_rho_fft");
 
     // sum up (rho_core+rho) for each spin in real space
     // and reciprocal space.
@@ -95,6 +97,7 @@ void XC_Functional::gradcorr(
     // calculate the gradient of (rho_core+rho) in reciprocal space.
     rhotmp1 = new double[rhopw->nrxx];
     rhogsum1 = new std::complex<double>[rhopw->npw];
+    ModuleBase::timer::start("XC_Functional", "gradcorr_pack");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 1024)
 #endif
@@ -109,6 +112,7 @@ void XC_Functional::gradcorr(
     {
         rhogsum1[ig] = chr->rhog[0][ig] + fac * chr->rhog_core[ig];
     }
+    ModuleBase::timer::end("XC_Functional", "gradcorr_pack");
 
     gdr1 = new ModuleBase::Vector3<double>[rhopw->nrxx];
     if(!is_stress)
@@ -116,7 +120,9 @@ void XC_Functional::gradcorr(
         h1 = new ModuleBase::Vector3<double>[rhopw->nrxx];
     }
 
+    ModuleBase::timer::start("XC_Functional", "gradcorr_grad_rho");
     XC_Functional::grad_rho( rhogsum1 , gdr1, rhopw, ucell->tpiba);
+    ModuleBase::timer::end("XC_Functional", "gradcorr_grad_rho");
 
     // for spin polarized case;
     // calculate the gradient of (rho_core+rho) in reciprocal space.
@@ -124,6 +130,7 @@ void XC_Functional::gradcorr(
     {
         rhotmp2 = new double[rhopw->nrxx];
         rhogsum2 = new std::complex<double>[rhopw->npw];
+        ModuleBase::timer::start("XC_Functional", "gradcorr_pack");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 1024)
 #endif
@@ -138,6 +145,7 @@ void XC_Functional::gradcorr(
         {
             rhogsum2[ig] = chr->rhog[1][ig] + fac * chr->rhog_core[ig];
         }
+        ModuleBase::timer::end("XC_Functional", "gradcorr_pack");
 
         gdr2 = new ModuleBase::Vector3<double>[rhopw->nrxx];
         if(!is_stress)
@@ -145,7 +153,9 @@ void XC_Functional::gradcorr(
             h2 = new ModuleBase::Vector3<double>[rhopw->nrxx];
         }
 
+        ModuleBase::timer::start("XC_Functional", "gradcorr_grad_rho");
         XC_Functional::grad_rho( rhogsum2 , gdr2, rhopw, ucell->tpiba);
+        ModuleBase::timer::end("XC_Functional", "gradcorr_grad_rho");
     }
 
     if(PARAM.inp.nspin == 4&&(PARAM.globalv.domag||PARAM.globalv.domag_z))
@@ -153,6 +163,7 @@ void XC_Functional::gradcorr(
         rhotmp2 = new double[rhopw->nrxx];
         rhogsum2 = new std::complex<double>[rhopw->npw];
         neg = new double [rhopw->nrxx];
+        ModuleBase::timer::start("XC_Functional", "gradcorr_pack");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 1024)
 #endif
@@ -162,6 +173,7 @@ void XC_Functional::gradcorr(
             rhotmp2[ir] = 0.0;
             neg[ir] = 0.0;
         }
+        ModuleBase::timer::end("XC_Functional", "gradcorr_pack");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 1024)
 #endif
@@ -220,8 +232,10 @@ void XC_Functional::gradcorr(
             h2 = new ModuleBase::Vector3<double>[rhopw->nrxx];
         }
 
+        ModuleBase::timer::start("XC_Functional", "gradcorr_grad_rho");
         XC_Functional::grad_rho( rhogsum1 , gdr1, rhopw, ucell->tpiba);
         XC_Functional::grad_rho( rhogsum2 , gdr2, rhopw, ucell->tpiba);
+        ModuleBase::timer::end("XC_Functional", "gradcorr_grad_rho");
     }
 
     const double epsr = 1.0e-6;
@@ -230,6 +244,7 @@ void XC_Functional::gradcorr(
     double vtxcgc = 0.0;
     double etxcgc = 0.0;
 
+    ModuleBase::timer::start("XC_Functional", "gradcorr_eval_grid");
 #ifdef _OPENMP
 #pragma omp parallel
     {
@@ -532,9 +547,11 @@ void XC_Functional::gradcorr(
     }
 }
 #endif
+    ModuleBase::timer::end("XC_Functional", "gradcorr_eval_grid");
 
     if(!is_stress)
     {
+        ModuleBase::timer::start("XC_Functional", "gradcorr_apply");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 1024)
 #endif
@@ -563,11 +580,19 @@ void XC_Functional::gradcorr(
         {
             if(is==0)
             {
+                ModuleBase::timer::end("XC_Functional", "gradcorr_apply");
+                ModuleBase::timer::start("XC_Functional", "gradcorr_grad_dot");
                 XC_Functional::grad_dot(h1,dh,rhopw,ucell->tpiba);
+                ModuleBase::timer::end("XC_Functional", "gradcorr_grad_dot");
+                ModuleBase::timer::start("XC_Functional", "gradcorr_apply");
             }
             if(is==1)
             {
+                ModuleBase::timer::end("XC_Functional", "gradcorr_apply");
+                ModuleBase::timer::start("XC_Functional", "gradcorr_grad_dot");
                 XC_Functional::grad_dot(h2,dh,rhopw,ucell->tpiba);
+                ModuleBase::timer::end("XC_Functional", "gradcorr_grad_dot");
+                ModuleBase::timer::start("XC_Functional", "gradcorr_apply");
             }
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 1024)
@@ -600,6 +625,7 @@ void XC_Functional::gradcorr(
             }
             vtxcgc -= sum;
         }
+        ModuleBase::timer::end("XC_Functional", "gradcorr_apply");
 
         delete[] dh;
 

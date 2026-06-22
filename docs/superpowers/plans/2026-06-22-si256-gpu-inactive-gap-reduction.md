@@ -498,12 +498,26 @@ Decision: `gradcorr` dominates the Si/PBE benchmark. Task 5 should target a
 guarded GPU path for the built-in GGA gradient-correction work first, not the
 LibXC conversion helpers or the scalar built-in XC evaluation.
 
-- [ ] **Step 4: Commit timing instrumentation**
+- [x] **Step 4: Commit timing instrumentation**
 
 ```bash
 git add source/source_hamilt/module_xc/libxc_pot.cpp source/source_hamilt/module_xc/libxc_tools.cpp source/source_hamilt/module_xc/xc_pot.cpp
 git commit -m "Add detailed XC timing attribution"
 ```
+
+Actual commit: `f91c640af Add detailed XC timing attribution`.
+
+Additional `gradcorr` attribution showed the Si/PBE GGA time is split across
+multiple sub-stages:
+
+- `gradcorr_rho_fft`: 1.99 s over 11 calls.
+- `gradcorr_grad_rho`: 4.42 s over 11 calls.
+- `gradcorr_eval_grid`: 5.66 s over 11 calls.
+- `gradcorr_grad_dot`: 5.30 s over 10 calls.
+
+This means a scalar-only LDA/PBE XC kernel would not remove the whole observed
+gap; a useful runtime path must also address gradient/divergence FFT residency
+and the grid-point GGA loop.
 
 ---
 
@@ -522,7 +536,7 @@ git commit -m "Add detailed XC timing attribution"
 - Guards: CUDA build, `device == gpu`, `nspin == 1`, non-mGGA, recognized analytic functionals only.
 - CPU/LibXC remains default fallback for unsupported functionals.
 
-- [ ] **Step 1: Write policy tests**
+- [x] **Step 1: Write policy tests**
 
 Add tests for:
 
@@ -535,7 +549,7 @@ EXPECT_FALSE(xc_gpu_policy(true, true, 1, "PBE"));
 EXPECT_FALSE(xc_gpu_policy(true, false, 1, "SCAN"));
 ```
 
-- [ ] **Step 2: Run test and verify it fails**
+- [x] **Step 2: Run test and verify it fails**
 
 Run:
 
@@ -545,7 +559,13 @@ cmake --build build-test-cuda --target MODULE_HAMILT_XC_Functional_UTs -j2
 
 Expected: missing `xc_gpu_policy.h`.
 
-- [ ] **Step 3: Implement policy header**
+Actual: the target `MODULE_HAMILT_XC_Functional_UTs` is absent in the available
+CUDA test build because `source/source_hamilt/module_xc/CMakeLists.txt` gates
+kernel tests behind both `ENABLE_MPI` and `ENABLE_LIBXC`, and the configured
+`build-test-cuda` has `ENABLE_LIBXC=OFF`. The first direct target build
+therefore failed with "No rule to make target".
+
+- [x] **Step 3: Implement policy header**
 
 Create:
 
@@ -567,6 +587,9 @@ inline bool xc_gpu_policy(bool is_gpu, bool cpu_debug, int nspin, const std::str
 #endif
 ```
 
+Implemented as `source/source_hamilt/module_xc/xc_gpu_policy.h` with
+case-insensitive matching for the supported built-ins.
+
 - [ ] **Step 4: Implement only LDA first**
 
 Add CUDA kernel for LDA exchange/correlation matching the existing CPU scalar routines. Accept only LDA/PZ in the first implementation and return fallback for PBE.
@@ -581,6 +604,12 @@ for each rho[i] in deterministic vector:
 ```
 
 Expected tolerance: `1e-10` double, `1e-5` float.
+
+Blocked for this pass: the measured Si256 bottleneck is not the LDA scalar
+evaluation path. Also, `PotXC::cal_v_eff` currently calls
+`XC_Functional::v_xc(...)` without any device/context argument, so a real
+runtime GPU XC toggle would require a deliberate PotXC/XC interface extension
+rather than a local kernel-only patch.
 
 - [ ] **Step 6: Extend to PBE only after LDA passes**
 

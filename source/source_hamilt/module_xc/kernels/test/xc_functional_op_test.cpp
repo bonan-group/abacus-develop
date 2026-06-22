@@ -1,4 +1,5 @@
 #include <source_hamilt/module_xc/kernels/xc_functional_op.h>
+#include <source_hamilt/module_xc/xc_gpu_policy.h>
 
 #include <base/utils/gtest.h>
 #include <ATen/core/tensor.h>
@@ -14,6 +15,20 @@ public:
 };
 
 TYPED_TEST_SUITE(XC_FunctionalOpTest, base::utils::ComplexTypes);
+
+TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
+{
+    using XC_Functional_GPU::xc_gpu_policy;
+
+    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PBE"));
+    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PZ"));
+    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "pbesol"));
+    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "LDA"));
+    EXPECT_FALSE(xc_gpu_policy(false, false, 1, "PBE"));
+    EXPECT_FALSE(xc_gpu_policy(true, true, 1, "PBE"));
+    EXPECT_FALSE(xc_gpu_policy(true, false, 2, "PBE"));
+    EXPECT_FALSE(xc_gpu_policy(true, false, 1, "SCAN"));
+}
 
 TYPED_TEST(XC_FunctionalOpTest, xc_functional_grad_wfc_op) {
     using Type = typename std::tuple_element<0, decltype(TypeParam())>::type;
