@@ -5,8 +5,16 @@ case_dir=$1
 abacus_bin=$2
 out_dir=$3
 
-mkdir -p "${out_dir}"
 repo_dir=$(pwd)
+case_dir=$(realpath "${case_dir}")
+if [[ "${abacus_bin}" != /* ]]; then
+    abacus_bin="${repo_dir}/${abacus_bin}"
+fi
+if [[ "${out_dir}" != /* ]]; then
+    out_dir="${repo_dir}/${out_dir}"
+fi
+
+mkdir -p "${out_dir}"
 cd "${case_dir}"
 export OMP_NUM_THREADS=1
 

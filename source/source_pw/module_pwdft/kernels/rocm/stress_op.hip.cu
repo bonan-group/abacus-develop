@@ -767,6 +767,84 @@ __global__ void cal_force_npw(
     atomicAdd(&force[2], t_force2);
 }
 
+template <typename FPTYPE>
+__global__ void cal_force_scc_kernel(const int nat,
+                                     const int npw,
+                                     const int ig0,
+                                     const int force_nc,
+                                     const FPTYPE fact,
+                                     const FPTYPE tpiba,
+                                     const FPTYPE* gcar,
+                                     const int* ig2igg,
+                                     const FPTYPE* rhocgnt,
+                                     const thrust::complex<FPTYPE>* psic,
+                                     const FPTYPE* tau,
+                                     FPTYPE* forcescc)
+{
+    const int iat = blockIdx.x;
+    if (iat >= nat)
+    {
+        return;
+    }
+
+    const int tid = threadIdx.x;
+    FPTYPE fx = 0.0;
+    FPTYPE fy = 0.0;
+    FPTYPE fz = 0.0;
+    const FPTYPE tx = tau[3 * iat];
+    const FPTYPE ty = tau[3 * iat + 1];
+    const FPTYPE tz = tau[3 * iat + 2];
+    for (int ig = tid; ig < npw; ig += blockDim.x)
+    {
+        if (ig == ig0)
+        {
+            continue;
+        }
+        const FPTYPE gx = gcar[3 * ig];
+        const FPTYPE gy = gcar[3 * ig + 1];
+        const FPTYPE gz = gcar[3 * ig + 2];
+        const FPTYPE arg = 2.0 * 3.14159265358979323846 * (gx * tx + gy * ty + gz * tz);
+        const FPTYPE sinp = sin(arg);
+        const FPTYPE cosp = cos(arg);
+        const thrust::complex<FPTYPE> cpm(sinp, cosp);
+        const FPTYPE value = (cpm * thrust::conj(psic[ig])).real() * fact * rhocgnt[ig2igg[ig]] * tpiba;
+        fx += gx * value;
+        fy += gy * value;
+        fz += gz * value;
+    }
+
+    warp_reduce(fx);
+    warp_reduce(fy);
+    warp_reduce(fz);
+
+    __shared__ FPTYPE warp_sums[3][THREADS_PER_BLOCK / WARP_SIZE];
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    if (lane_id == 0)
+    {
+        warp_sums[0][warp_id] = fx;
+        warp_sums[1][warp_id] = fy;
+        warp_sums[2][warp_id] = fz;
+    }
+    __syncthreads();
+    if (warp_id == 0)
+    {
+        FPTYPE vals[3];
+        vals[0] = lane_id < (blockDim.x / WARP_SIZE) ? warp_sums[0][lane_id] : 0.0;
+        vals[1] = lane_id < (blockDim.x / WARP_SIZE) ? warp_sums[1][lane_id] : 0.0;
+        vals[2] = lane_id < (blockDim.x / WARP_SIZE) ? warp_sums[2][lane_id] : 0.0;
+        warp_reduce(vals[0]);
+        warp_reduce(vals[1]);
+        warp_reduce(vals[2]);
+        if (lane_id == 0)
+        {
+            forcescc[iat * force_nc] = vals[0];
+            forcescc[iat * force_nc + 1] = vals[1];
+            forcescc[iat * force_nc + 2] = vals[2];
+        }
+    }
+}
+
 
 template <typename FPTYPE>
 void cal_vkb_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
@@ -913,6 +991,41 @@ void cal_force_npw_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
     );
 
     return ;
+}
+
+template <typename FPTYPE>
+void cal_force_scc_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                   const int nat,
+                                                                   const int npw,
+                                                                   const int ig0,
+                                                                   const int forcenl_nc,
+                                                                   const FPTYPE fact,
+                                                                   const FPTYPE tpiba,
+                                                                   const FPTYPE* gcar,
+                                                                   const int* ig2igg,
+                                                                   const FPTYPE* rhocgnt,
+                                                                   const std::complex<FPTYPE>* psic,
+                                                                   const FPTYPE* tau,
+                                                                   FPTYPE* forcescc)
+{
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(cal_force_scc_kernel<FPTYPE>),
+                       dim3(nat),
+                       dim3(THREADS_PER_BLOCK),
+                       0,
+                       0,
+                       nat,
+                       npw,
+                       ig0,
+                       forcenl_nc,
+                       fact,
+                       tpiba,
+                       gcar,
+                       ig2igg,
+                       rhocgnt,
+                       reinterpret_cast<const thrust::complex<FPTYPE>*>(psic),
+                       tau,
+                       forcescc);
+    hipCheckOnDebug();
 }
 
 template <typename FPTYPE>
@@ -1269,6 +1382,8 @@ template struct cal_stress_nl_op<double, base_device::DEVICE_GPU>;
 
 template struct cal_force_npw_op<double, base_device::DEVICE_GPU>;
 template struct cal_force_npw_op<float, base_device::DEVICE_GPU>;
+template struct cal_force_scc_op<double, base_device::DEVICE_GPU>;
+template struct cal_force_scc_op<float, base_device::DEVICE_GPU>;
 
 template struct cal_multi_dot_op<double, base_device::DEVICE_GPU>;
 template struct cal_multi_dot_op<float, base_device::DEVICE_GPU>;

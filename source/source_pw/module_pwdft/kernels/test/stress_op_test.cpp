@@ -121,6 +121,96 @@ TEST(TestSrcPWStressMultiDevice, cal_stress_nl_op_cpu)
 }
 
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestSrcPWStressMultiDevice, cal_force_scc_op_gpu)
+{
+    using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using delmem_complex_op = base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>;
+    using syncmem_complex_h2d_op
+        = base_device::memory::synchronize_memory_op<std::complex<double>, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_double_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_double_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+    using resmem_int_op = base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>;
+    using delmem_int_op = base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>;
+    using syncmem_int_h2d_op
+        = base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+
+    const base_device::DEVICE_GPU* gpu_ctx = {};
+    const int nat = 2;
+    const int npw = 4;
+    const int ig0 = 1;
+    const int force_nc = 3;
+    const double fact = 2.0;
+    const double tpiba = 1.7;
+
+    const std::vector<double> gcar = {0.25, -0.50, 0.75, 0.0, 0.0, 0.0, -0.75, 0.50, 0.25, 0.40, 0.30, -0.20};
+    const std::vector<int> ig2igg = {0, 1, 2, 3};
+    const std::vector<double> rhocgnt = {0.80, 0.0, -0.25, 0.55};
+    const std::vector<std::complex<double>> psic = {{0.20, -0.10}, {0.0, 0.0}, {-0.35, 0.40}, {0.15, 0.30}};
+    const std::vector<double> tau = {0.10, 0.20, 0.30, 0.45, 0.25, 0.15};
+
+    std::vector<double> expected(nat * force_nc, 0.0);
+    for (int iat = 0; iat < nat; ++iat)
+    {
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            if (ig == ig0)
+            {
+                continue;
+            }
+            const double gx = gcar[3 * ig];
+            const double gy = gcar[3 * ig + 1];
+            const double gz = gcar[3 * ig + 2];
+            const double arg = ModuleBase::TWO_PI
+                               * (gx * tau[3 * iat] + gy * tau[3 * iat + 1] + gz * tau[3 * iat + 2]);
+            const std::complex<double> cpm(std::sin(arg), std::cos(arg));
+            const double value = (cpm * std::conj(psic[ig])).real() * fact * rhocgnt[ig2igg[ig]] * tpiba;
+            expected[iat * force_nc] += gx * value;
+            expected[iat * force_nc + 1] += gy * value;
+            expected[iat * force_nc + 2] += gz * value;
+        }
+    }
+
+    double* d_gcar = nullptr;
+    int* d_ig2igg = nullptr;
+    double* d_rhocgnt = nullptr;
+    std::complex<double>* d_psic = nullptr;
+    double* d_tau = nullptr;
+    double* d_forcescc = nullptr;
+
+    resmem_double_op()(d_gcar, gcar.size());
+    resmem_int_op()(d_ig2igg, ig2igg.size());
+    resmem_double_op()(d_rhocgnt, rhocgnt.size());
+    resmem_complex_op()(d_psic, psic.size());
+    resmem_double_op()(d_tau, tau.size());
+    resmem_double_op()(d_forcescc, expected.size());
+    syncmem_double_h2d_op()(d_gcar, gcar.data(), gcar.size());
+    syncmem_int_h2d_op()(d_ig2igg, ig2igg.data(), ig2igg.size());
+    syncmem_double_h2d_op()(d_rhocgnt, rhocgnt.data(), rhocgnt.size());
+    syncmem_complex_h2d_op()(d_psic, psic.data(), psic.size());
+    syncmem_double_h2d_op()(d_tau, tau.data(), tau.size());
+
+    hamilt::cal_force_scc_op<double, base_device::DEVICE_GPU>()(
+        gpu_ctx, nat, npw, ig0, force_nc, fact, tpiba, d_gcar, d_ig2igg, d_rhocgnt, d_psic, d_tau, d_forcescc);
+
+    std::vector<double> forcescc(expected.size(), 0.0);
+    syncmem_double_d2h_op()(forcescc.data(), d_forcescc, forcescc.size());
+    for (int i = 0; i < forcescc.size(); ++i)
+    {
+        EXPECT_NEAR(forcescc[i], expected[i], 1.0e-10);
+    }
+
+    delmem_double_op()(d_gcar);
+    delmem_int_op()(d_ig2igg);
+    delmem_double_op()(d_rhocgnt);
+    delmem_complex_op()(d_psic);
+    delmem_double_op()(d_tau);
+    delmem_double_op()(d_forcescc);
+}
+
 TEST(TestSrcPWStressMultiDevice, cal_kinetic_stress_op_gpu)
 {
     using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>;

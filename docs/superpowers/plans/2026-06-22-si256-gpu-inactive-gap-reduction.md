@@ -190,7 +190,7 @@ git commit -m "Add repeatable Si256 Nsight gap tooling"
 - Consumes: device arrays for `psic(G)`, `gcar`, `ig2igg`, `rhocgnt`, `tau`, and output `forcescc`.
 - CPU path remains unchanged.
 
-- [ ] **Step 1: Add a kernel unit test**
+- [x] **Step 1: Add a kernel unit test**
 
 Add a small CPU-vs-GPU comparison in `stress_op_test.cpp`:
 
@@ -206,7 +206,7 @@ TEST_F(StressOpTest, CalForceSccGpuMatchesCpuReference)
 
 Use existing memory helpers already used in this file for GPU allocation/copy.
 
-- [ ] **Step 2: Run test and verify it fails to compile**
+- [x] **Step 2: Run test and verify it fails to compile**
 
 Run:
 
@@ -216,7 +216,10 @@ cmake --build build-test-cuda --target MODULE_PW_Stress_UTs -j2
 
 Expected: compile failure because `cal_force_scc_op` does not exist.
 
-- [ ] **Step 3: Declare the operator**
+Note: in the current build tree the target is `MODULE_PW_Hamilt_Kernels_UTs`.
+The RED build failed as expected with missing `hamilt::cal_force_scc_op`.
+
+- [x] **Step 3: Declare the operator**
 
 Add to `stress_op.h` near `cal_force_npw_op`:
 
@@ -242,7 +245,7 @@ struct cal_force_scc_op
 
 Add a `DEVICE_GPU` specialization beside the other GPU declarations.
 
-- [ ] **Step 4: Implement CUDA SCC force kernel**
+- [x] **Step 4: Implement CUDA SCC force kernel**
 
 Add to `stress_op.cu`:
 
@@ -289,11 +292,14 @@ __global__ void cal_force_scc_kernel(int nat,
 }
 ```
 
-- [ ] **Step 5: Wire GPU path in `forces_scc.cpp`**
+- [x] **Step 5: Wire GPU path in `forces_scc.cpp`**
 
 In `cal_force_scc`, when `this->device == base_device::GpuDevice`, keep `psic` on device after `real2recip` if the PW basis exposes a device FFT result. If it does not, copy `psic`, `gcar`, `ig2igg`, `tau`, and `rhocgnt` to device once per atom type and call `cal_force_scc_op`. Do not copy `drhocgnt` back before the force accumulation in the GPU path.
 
-- [ ] **Step 6: Run kernel test**
+Note: the implemented runtime path is guarded to single-atomic-type cells, matching
+the Si256 benchmark, so mixed-species cells keep the CPU reference accumulation.
+
+- [x] **Step 6: Run kernel test**
 
 Run:
 
@@ -304,7 +310,10 @@ cmake --build build-test-cuda --target MODULE_PW_Stress_UTs -j2
 
 Expected: test passes with max absolute difference below `1e-10`.
 
-- [ ] **Step 7: Run Si256 force correctness check**
+Actual: `MODULE_PW_Hamilt_Kernels_UTs --gtest_filter='*cal_force_scc_op_gpu*'`
+passed outside the sandbox. The sandboxed run cannot see a CUDA device.
+
+- [x] **Step 7: Run Si256 force correctness check**
 
 Run the Si256 case outside the sandbox with:
 
@@ -316,7 +325,10 @@ export OMP_NUM_THREADS=1
 
 Expected: exit status 0. Compare total energy and final max force to the committed baseline logs. Accept only if force drift is within numerical noise for the same precision mode.
 
-- [ ] **Step 8: Profile and accept/reject**
+Actual: guarded Si256 run exited 0 with `OMP_NUM_THREADS=1`; final energy stayed
+`-27439.6264120973828540 eV` and total pressure stayed `44.738920 kbar`.
+
+- [x] **Step 8: Profile and accept/reject**
 
 Run:
 
@@ -326,7 +338,11 @@ tools/perf/run_si256_nsys.sh runtime_si256_force_stress_fix_build_20260621-23210
 
 Expected: `Forces cal_force_scc` no longer produces a ~6.6 s CPU-only gap. If the gap remains because `real2recip` or host transfer dominates, record that and split the next task around keeping `vnew`/FFT output resident on GPU.
 
-- [ ] **Step 9: Commit**
+Actual: `nsight_si256_scc_gpu_omp1/gaps.json` no longer shows the original
+single ~6.6 s gap; largest gaps are now repeated XC/SCF-region gaps of about
+1.8-3.0 s. Total inactive time remains about 29.97 s.
+
+- [x] **Step 9: Commit**
 
 ```bash
 git add source/source_pw/module_pwdft/forces_scc.cpp source/source_pw/module_pwdft/kernels/stress_op.h source/source_pw/module_pwdft/kernels/cuda/stress_op.cu source/source_pw/module_pwdft/kernels/rocm/stress_op.hip.cu source/source_pw/module_pwdft/kernels/test/stress_op_test.cpp

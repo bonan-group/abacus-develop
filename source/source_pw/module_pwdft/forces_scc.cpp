@@ -1,4 +1,5 @@
 #include "forces.h"
+#include "source_pw/module_pwdft/kernels/stress_op.h"
 #include "source_base/parallel_reduce.h"
 #include "source_io/module_output/output_log.h"
 #include "stress_func.h"
@@ -82,6 +83,50 @@ void Forces<FPTYPE, Device>::cal_force_scc(ModuleBase::matrix& forcescc,
 	}
 
     double fact = 2.0;
+    double* gcar_d = nullptr;
+    double* tau_d = nullptr;
+    double* rhocgnt_d = nullptr;
+    double* forcescc_d = nullptr;
+    int* ig2igg_d = nullptr;
+    std::complex<double>* psic_d = nullptr;
+    std::vector<double> gcar_h;
+    std::vector<double> tau_h;
+    const bool use_gpu_scc_accumulation = this->device == base_device::GpuDevice && ucell_in.ntype == 1;
+    if (use_gpu_scc_accumulation)
+    {
+        gcar_h.resize(rho_basis->npw * 3);
+        for (int ig = 0; ig < rho_basis->npw; ++ig)
+        {
+            gcar_h[3 * ig] = rho_basis->gcar[ig].x;
+            gcar_h[3 * ig + 1] = rho_basis->gcar[ig].y;
+            gcar_h[3 * ig + 2] = rho_basis->gcar[ig].z;
+        }
+        tau_h.resize(ucell_in.nat * 3);
+        int iat = 0;
+        for (int it = 0; it < ucell_in.ntype; ++it)
+        {
+            for (int ia = 0; ia < ucell_in.atoms[it].na; ++ia)
+            {
+                tau_h[3 * iat] = ucell_in.atoms[it].tau[ia].x;
+                tau_h[3 * iat + 1] = ucell_in.atoms[it].tau[ia].y;
+                tau_h[3 * iat + 2] = ucell_in.atoms[it].tau[ia].z;
+                ++iat;
+            }
+        }
+
+        resmem_var_op()(gcar_d, rho_basis->npw * 3);
+        resmem_var_op()(tau_d, ucell_in.nat * 3);
+        resmem_var_op()(rhocgnt_d, rho_basis->ngg);
+        resmem_var_op()(forcescc_d, forcescc.nr * forcescc.nc);
+        resmem_int_op()(ig2igg_d, rho_basis->npw);
+        resmem_complex_op()(psic_d, rho_basis->npw);
+        syncmem_var_h2d_op()(gcar_d, gcar_h.data(), rho_basis->npw * 3);
+        syncmem_var_h2d_op()(tau_d, tau_h.data(), ucell_in.nat * 3);
+        syncmem_var_h2d_op()(forcescc_d, forcescc.c, forcescc.nr * forcescc.nc);
+        syncmem_int_h2d_op()(ig2igg_d, rho_basis->ig2igg, rho_basis->npw);
+        syncmem_complex_h2d_op()(psic_d, psic.data(), rho_basis->npw);
+    }
+
 	for (int nt = 0; nt < ucell_in.ntype; nt++) 
 	{
 		//		Here we compute the G.ne.0 term
@@ -94,6 +139,24 @@ void Forces<FPTYPE, Device>::cal_force_scc(ModuleBase::matrix& forcescc,
 				rhocgnt.data(),
 				rho_basis,
 				ucell_in);        
+        if (use_gpu_scc_accumulation)
+        {
+            syncmem_var_h2d_op()(rhocgnt_d, rhocgnt.data(), rho_basis->ngg);
+            hamilt::cal_force_scc_op<FPTYPE, Device>()(this->ctx,
+                                                       ucell_in.nat,
+                                                       rho_basis->npw,
+                                                       ig0,
+                                                       forcescc.nc,
+                                                       fact,
+                                                       ucell_in.tpiba,
+                                                       gcar_d,
+                                                       ig2igg_d,
+                                                       rhocgnt_d,
+                                                       psic_d,
+                                                       tau_d,
+                                                       forcescc_d);
+            continue;
+        }
 		int iat = 0;
 		for (int it = 0; it < ucell_in.ntype; it++) {
 			for (int ia = 0; ia < ucell_in.atoms[it].na; ia++) {
@@ -133,6 +196,16 @@ void Forces<FPTYPE, Device>::cal_force_scc(ModuleBase::matrix& forcescc,
 		}
 	}
 
+    if (use_gpu_scc_accumulation)
+    {
+        syncmem_var_d2h_op()(forcescc.c, forcescc_d, forcescc.nr * forcescc.nc);
+        delmem_var_op()(gcar_d);
+        delmem_var_op()(tau_d);
+        delmem_var_op()(rhocgnt_d);
+        delmem_var_op()(forcescc_d);
+        delmem_int_op()(ig2igg_d);
+        delmem_complex_op()(psic_d);
+    }
 
 	Parallel_Reduce::reduce_pool(forcescc.c, forcescc.nr * forcescc.nc);
 

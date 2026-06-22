@@ -366,6 +366,25 @@ struct cal_force_npw_op{
 };
 
 template <typename FPTYPE, typename Device>
+struct cal_force_scc_op
+{
+    void operator()(const Device* ctx,
+                    int nat,
+                    int npw,
+                    int ig0,
+                    int forcenl_nc,
+                    FPTYPE fact,
+                    FPTYPE tpiba,
+                    const FPTYPE* gcar,
+                    const int* ig2igg,
+                    const FPTYPE* rhocgnt,
+                    const std::complex<FPTYPE>* psic,
+                    const FPTYPE* tau,
+                    FPTYPE* forcescc)
+    {}
+};
+
+template <typename FPTYPE, typename Device>
 struct cal_multi_dot_op{
     FPTYPE operator()(const int& npw,
                     const FPTYPE& fac,
@@ -800,6 +819,24 @@ struct cal_force_npw_op<FPTYPE, base_device::DEVICE_GPU>{
                     const int npw,
                     const FPTYPE omega, const FPTYPE tpiba, const int na
     );
+};
+
+template <typename FPTYPE>
+struct cal_force_scc_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nat,
+                    int npw,
+                    int ig0,
+                    int forcenl_nc,
+                    FPTYPE fact,
+                    FPTYPE tpiba,
+                    const FPTYPE* gcar,
+                    const int* ig2igg,
+                    const FPTYPE* rhocgnt,
+                    const std::complex<FPTYPE>* psic,
+                    const FPTYPE* tau,
+                    FPTYPE* forcescc);
 };
 
 
