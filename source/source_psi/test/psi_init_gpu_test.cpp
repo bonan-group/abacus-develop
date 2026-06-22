@@ -1,5 +1,6 @@
 #include "source_base/module_device/memory_op.h"
 #include "source_psi/kernels/psi_init_op.h"
+#include "source_psi/psi_init_policy.h"
 
 #include <gtest/gtest.h>
 
@@ -210,6 +211,11 @@ TEST(PsiInitGpuRandom, SeededInitializationIsDeterministicAndZeroPads)
             }
         }
     }
+}
+
+TEST(PsiInitGpuRandomPolicy, AllowsUnseededGpuRandomInitialization)
+{
+    EXPECT_TRUE(psi::gpu_random_init_policy(true, false, "dav_subspace", true, "random"));
 }
 
 TEST(PsiInitGpuRandom, DifferentSeedChangesValues)

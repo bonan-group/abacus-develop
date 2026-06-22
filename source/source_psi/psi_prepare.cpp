@@ -8,6 +8,7 @@
 #include "source_base/tool_quit.h"
 #include "source_hsolver/diago_iter_assist.h"
 #include "source_io/module_parameter/parameter.h"
+#include "source_psi/psi_init_policy.h"
 #include "source_psi/kernels/psi_init_op.h"
 #include "source_psi/psi_init_atomic.h"
 #include "source_psi/psi_init_atomic_random.h"
@@ -37,8 +38,11 @@ struct GpuRandomInit<T, base_device::DEVICE_GPU>
 {
     static bool enabled(const psi_initializer<T>* psi_initer, const std::string& ks_solver)
     {
-        return PARAM.inp.device == "gpu" && !PARAM.inp.psi_init_cpu_debug && PARAM.inp.pw_seed > 0 && ks_solver != "bpcg"
-               && psi_initer != nullptr && psi_initer->method() == "random";
+        return gpu_random_init_policy(PARAM.inp.device == "gpu",
+                                      PARAM.inp.psi_init_cpu_debug,
+                                      ks_solver,
+                                      psi_initer != nullptr,
+                                      psi_initer == nullptr ? "" : psi_initer->method());
     }
 };
 #endif
