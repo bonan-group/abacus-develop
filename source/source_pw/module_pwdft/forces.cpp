@@ -374,6 +374,7 @@ void Forces<FPTYPE, Device>::cal_force_loc(const UnitCell& ucell,
 
     if(this->device == base_device::GpuDevice)
     {
+        ModuleBase::timer::start("Forces", "force_gpu_pack");
         std::vector<double> tau_h;
         std::vector<double> gcar_h;
         tau_h.resize(this->nat * 3);
@@ -430,7 +431,11 @@ void Forces<FPTYPE, Device>::cal_force_loc(const UnitCell& ucell,
             vloc_d,
             vloc.nc,
             forcelc_d);
+        ModuleBase::timer::end("Forces", "force_gpu_pack");
+
+        ModuleBase::timer::start("Forces", "force_gpu_d2h");
         syncmem_var_d2h_op()(forcelc.c, forcelc_d, this->nat * 3);
+        ModuleBase::timer::end("Forces", "force_gpu_d2h");
 
         delmem_int_op()(iat2it_d);
         delmem_int_op()(ig2gg_d);
@@ -562,6 +567,7 @@ void Forces<FPTYPE, Device>::cal_force_ew(const UnitCell& ucell,
     }
     if(this->device == base_device::GpuDevice)
     {
+        ModuleBase::timer::start("Forces", "force_gpu_pack");
         std::vector<double> tau_h(this->nat * 3);
         std::vector<double> gcar_h(rho_basis->npw * 3);
         for(int iat = 0; iat < this->nat; ++iat)
@@ -614,8 +620,11 @@ void Forces<FPTYPE, Device>::cal_force_ew(const UnitCell& ucell,
             it_fact_d,
             aux_d,
             forceion_d);
-        
+        ModuleBase::timer::end("Forces", "force_gpu_pack");
+
+        ModuleBase::timer::start("Forces", "force_gpu_d2h");
         syncmem_var_d2h_op()(forceion.c, forceion_d, this->nat * 3);
+        ModuleBase::timer::end("Forces", "force_gpu_d2h");
         delmem_int_op()(iat2it_d);
         delmem_var_op()(gcar_d);
         delmem_var_op()(tau_d);

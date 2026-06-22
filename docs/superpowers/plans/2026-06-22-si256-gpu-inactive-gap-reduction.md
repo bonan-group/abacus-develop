@@ -363,7 +363,7 @@ git commit -m "Move SCC force accumulation to GPU"
 - Consumes: GPU force components from local/Ewald/NLCC/nonlocal/SCC.
 - Produces: lower host transfer/setup time in `Forces cal_force`.
 
-- [ ] **Step 1: Add timers around host packing and D2H copies**
+- [x] **Step 1: Add timers around host packing and D2H copies**
 
 Use existing `ModuleBase::timer` labels:
 
@@ -377,7 +377,7 @@ ModuleBase::timer::start("Forces", "force_gpu_d2h");
 ModuleBase::timer::end("Forces", "force_gpu_d2h");
 ```
 
-- [ ] **Step 2: Run Si256 once and identify transfer/setup cost**
+- [x] **Step 2: Run Si256 once and identify transfer/setup cost**
 
 Run outside sandbox:
 
@@ -389,7 +389,11 @@ export OMP_NUM_THREADS=1
 
 Expected: timer table shows whether repeated `gcar/tau/iat2it` packing is material.
 
-- [ ] **Step 3: Reuse device metadata per force call**
+Actual: `force_gpu_pack` and `force_gpu_d2h` did not appear in the printed
+Si256 timer table, so their costs are below the timer report threshold. The
+force phase remains dominated by `Forces cal_force_nl`.
+
+- [x] **Step 3: Reuse device metadata per force call**
 
 Create small local RAII scratch structs inside `forces.cpp` if packing is material:
 
@@ -405,11 +409,14 @@ struct ForceDeviceMeta
 
 Allocate once in `cal_force`, pass to local/Ewald/SCC/NLCC helpers, and free before returning.
 
-- [ ] **Step 4: Keep final component sum on CPU unless proven material**
+Decision: skipped the scratch-struct reuse refactor because measurement did
+not show packing/D2H as material. This avoids broad force-interface churn.
+
+- [x] **Step 4: Keep final component sum on CPU unless proven material**
 
 The final loop over `nat * 3` is small for 256 atoms. Do not move it to GPU unless profiler shows it above 100 ms.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run build and Si256:
 
@@ -422,7 +429,10 @@ export OMP_NUM_THREADS=1
 
 Expected: exit status 0, unchanged force values, lower force setup timers if they were material.
 
-- [ ] **Step 6: Commit**
+Actual: instrumented Si256 run exited 0 with `OMP_NUM_THREADS=1`; final energy
+remained `-27439.6264120973828540 eV` and pressure `44.738920 kbar`.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add source/source_pw/module_pwdft/forces.cpp source/source_pw/module_pwdft/forces_cc.cpp source/source_pw/module_pwdft/kernels/cuda/force_op.cu

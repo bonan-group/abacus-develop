@@ -137,6 +137,7 @@ void Forces<FPTYPE, Device>::cal_force_cc(ModuleBase::matrix& forcecc,
     }
 
 	if(this->device == base_device::GpuDevice ) {
+        ModuleBase::timer::start("Forces", "force_gpu_pack");
 		resmem_var_op()(gv_d, rho_basis->npw * 3);
         resmem_var_op()(tau_d, this->nat * 3);
         resmem_var_op()(rhocgigg_vec_d, rho_basis->npw);
@@ -147,6 +148,7 @@ void Forces<FPTYPE, Device>::cal_force_cc(ModuleBase::matrix& forcecc,
         syncmem_var_h2d_op()(tau_d, tau_h.data(), this->nat * 3);
         syncmem_complex_h2d_op()(psiv_d, psiv, rho_basis->nmaxgr);
         syncmem_var_h2d_op()(force_d, forcecc.c, 3 * this->nat);
+        ModuleBase::timer::end("Forces", "force_gpu_pack");
 	}
 
     double* tau_it_d = tau_d;  // the start address of each atom type's tau
@@ -224,7 +226,9 @@ void Forces<FPTYPE, Device>::cal_force_cc(ModuleBase::matrix& forcecc,
     }
     if(this->device == base_device::GpuDevice)
     {
+        ModuleBase::timer::start("Forces", "force_gpu_d2h");
         syncmem_var_d2h_op()(forcecc.c, force_d, 3 * nat);
+        ModuleBase::timer::end("Forces", "force_gpu_d2h");
         delmem_var_op()(gv_d);
         delmem_var_op()(tau_d);
         delmem_var_op()(force_d);
