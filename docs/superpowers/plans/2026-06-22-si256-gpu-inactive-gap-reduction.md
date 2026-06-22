@@ -521,20 +521,45 @@ and the grid-point GGA loop.
 
 ---
 
-### Task 5: Implement a Guarded GPU XC Path for Built-In LDA/PBE
+### Task 5: Implement a Guarded GPU `gradcorr` Path for Built-In PBE
 
 **Files:**
-- Create: `source/source_hamilt/module_xc/kernels/xc_eval_op.h`
-- Create: `source/source_hamilt/module_xc/kernels/cuda/xc_eval_op.cu`
-- Create: `source/source_hamilt/module_xc/xc_gpu_policy.h`
+- Create/modify: `source/source_hamilt/module_xc/kernels/xc_gradcorr_op.h`
+- Create/modify: `source/source_hamilt/module_xc/kernels/cuda/xc_gradcorr_op.cu`
+- Modify: `source/source_hamilt/module_xc/xc_gpu_policy.h`
+- Modify: `source/source_estate/module_pot/pot_xc.h`
+- Modify: `source/source_estate/module_pot/pot_xc.cpp`
+- Modify: `source/source_hamilt/module_xc/xc_functional.h`
 - Modify: `source/source_hamilt/module_xc/xc_pot.cpp`
-- Modify: `source/source_hamilt/module_xc/CMakeLists.txt`
+- Modify: `source/source_hamilt/module_xc/xc_grad.cpp`
+- Modify: `source/CMakeLists.txt`
 - Test: `source/source_hamilt/module_xc/kernels/test/xc_functional_op_test.cpp`
 
 **Interfaces:**
-- Produces: `XC_Functional::try_v_xc_gpu(...) -> std::optional<std::tuple<double, double, ModuleBase::matrix>>`
-- Guards: CUDA build, `device == gpu`, `nspin == 1`, non-mGGA, recognized analytic functionals only.
+- Produces: a guarded GPU implementation for the dominant built-in PBE
+  `gradcorr` work, not just scalar LDA/PBE evaluation.
+- Requires: an explicit device/context path from `PotXC::cal_v_eff` into
+  `XC_Functional::v_xc`/`gradcorr`.
+- Guards: CUDA build, `device == gpu`, `ABACUS_XC_GPU=1`, `nspin == 1`,
+  non-stress call, built-in PBE/PBEsol only.
 - CPU/LibXC remains default fallback for unsupported functionals.
+
+**Rationale:**
+
+The measured Si256 bottleneck is `XC_Functional::gradcorr`, not the scalar
+`XC_Functional::xc` loop. The relevant OMP=1 timer split is:
+
+- `XC_Functional v_xc`: 19.63 s over 10 calls.
+- `XC_Functional xc_builtin_eval`: 1.91 s over 10 calls.
+- `XC_Functional gradcorr`: 17.60 s over 10 calls.
+- `gradcorr_rho_fft`: 1.99 s over 11 calls.
+- `gradcorr_grad_rho`: 4.42 s over 11 calls.
+- `gradcorr_eval_grid`: 5.66 s over 11 calls.
+- `gradcorr_grad_dot`: 5.30 s over 10 calls.
+
+Therefore a standalone LDA scalar kernel would address the wrong hot path. A
+useful GPU XC path must either keep the density-gradient/divergence workflow
+GPU-resident or replace it with GPU kernels plus GPU FFT calls.
 
 - [x] **Step 1: Write policy tests**
 
@@ -590,32 +615,55 @@ inline bool xc_gpu_policy(bool is_gpu, bool cpu_debug, int nspin, const std::str
 Implemented as `source/source_hamilt/module_xc/xc_gpu_policy.h` with
 case-insensitive matching for the supported built-ins.
 
-- [ ] **Step 4: Implement only LDA first**
+- [ ] **Step 4: Extend the PotXC/XC interface with explicit device intent**
 
-Add CUDA kernel for LDA exchange/correlation matching the existing CPU scalar routines. Accept only LDA/PZ in the first implementation and return fallback for PBE.
+Thread a device/context argument from `PotXC::cal_v_eff` into
+`XC_Functional::v_xc` and `gradcorr`, preserving the existing CPU call path as
+the default. Do not infer GPU use from global state alone.
 
-- [ ] **Step 5: Compare GPU LDA against CPU**
+- [ ] **Step 5: Add a guarded CPU fallback switch**
 
-Unit test random positive densities:
+Use `ABACUS_XC_GPU=0/1` only as a runtime opt-in/opt-out once the call path has
+explicit device intent. Unsupported cases must fall back to CPU:
 
-```cpp
-for each rho[i] in deterministic vector:
-    compare vxc_gpu[i] to XC_Functional::xc(rho[i], exc, vxc)
-```
+- non-CUDA builds
+- `nspin != 1`
+- stress calls
+- LibXC/mGGA/hybrid functionals
+- non-PBE/PBEsol built-ins
 
-Expected tolerance: `1e-10` double, `1e-5` float.
+- [ ] **Step 6: Port the PBE/PBEsol grid-point `gradcorr` evaluation**
 
-Blocked for this pass: the measured Si256 bottleneck is not the LDA scalar
-evaluation path. Also, `PotXC::cal_v_eff` currently calls
-`XC_Functional::v_xc(...)` without any device/context argument, so a real
-runtime GPU XC toggle would require a deliberate PotXC/XC interface extension
-rather than a local kernel-only patch.
+Move the `nspin == 1` built-in GGA grid loop from `gradcorr` to a CUDA kernel:
 
-- [ ] **Step 6: Extend to PBE only after LDA passes**
+- input: `rhotmp1`, `rho_core`, `gdr1`
+- output: local additions to `v`, `h1`, `etxcgc`, `vtxcgc`
+- formulas: match existing `gcxc`, `pbex`, and `pbec` behavior for PBE/PBEsol
+- reductions: use deterministic block reductions where practical and compare
+  against CPU tolerances
 
-Port the existing analytic `pbex/pbec` formulas instead of calling LibXC from device code. Keep this guarded to known `XC_Functional::use_libxc == false` built-ins unless a correctness comparison against LibXC is added.
+- [ ] **Step 7: Address GPU-resident gradient/divergence work**
 
-- [ ] **Step 7: Runtime validation**
+The measured FFT/derivative pieces are comparable to the grid loop. Decide
+after Step 6 profiling whether to:
+
+- keep `grad_rho`/`grad_dot` CPU-side initially and accept a partial win, or
+- add GPU `grad_rho`/`grad_dot` variants using the existing PW GPU FFT
+  machinery so `rhotmp`, `gdr`, `h`, and `dh` avoid host round-trips.
+
+- [ ] **Step 8: Add CPU-vs-GPU correctness tests**
+
+Compare a deterministic small grid against the CPU `gradcorr` reference:
+
+- `v` max absolute difference
+- `etxc`/`vtxc` drift
+- PBE and PBEsol
+- fallback behavior for unsupported cases
+
+Expected tolerance: start with `1e-10` double for isolated kernels and relax
+only if full runtime FFT ordering requires it.
+
+- [ ] **Step 9: Runtime validation**
 
 Run a small Si case and Si256 with CPU XC and GPU XC toggled:
 
@@ -627,7 +675,7 @@ ABACUS_XC_GPU=1 build/abacus_basic_gpu
 
 Expected: total energy drift within selected precision tolerance, SCF convergence unchanged or improved.
 
-- [ ] **Step 8: Profile**
+- [ ] **Step 10: Profile**
 
 Run Si256 Nsight:
 
@@ -637,11 +685,11 @@ tools/perf/run_si256_nsys.sh runtime_si256_force_stress_fix_build_20260621-23210
 
 Expected: repeated ~1.7 s gaps shrink substantially if XC was the source.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add source/source_hamilt/module_xc/kernels/xc_eval_op.h source/source_hamilt/module_xc/kernels/cuda/xc_eval_op.cu source/source_hamilt/module_xc/xc_gpu_policy.h source/source_hamilt/module_xc/xc_pot.cpp source/source_hamilt/module_xc/CMakeLists.txt source/source_hamilt/module_xc/kernels/test/xc_functional_op_test.cpp
-git commit -m "Add guarded GPU XC evaluation path"
+git add source/source_hamilt/module_xc/kernels/xc_gradcorr_op.h source/source_hamilt/module_xc/kernels/cuda/xc_gradcorr_op.cu source/source_hamilt/module_xc/xc_gpu_policy.h source/source_estate/module_pot/pot_xc.h source/source_estate/module_pot/pot_xc.cpp source/source_hamilt/module_xc/xc_functional.h source/source_hamilt/module_xc/xc_pot.cpp source/source_hamilt/module_xc/xc_grad.cpp source/CMakeLists.txt source/source_hamilt/module_xc/kernels/test/xc_functional_op_test.cpp
+git commit -m "Add guarded GPU XC gradient correction path"
 ```
 
 ---
