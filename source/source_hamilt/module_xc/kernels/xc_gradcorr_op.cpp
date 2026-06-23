@@ -3,6 +3,8 @@
 #include "source_base/constants.h"
 
 #include <cmath>
+#include <complex>
+#include <vector>
 
 namespace hamilt
 {
@@ -100,7 +102,64 @@ void xc_pbec(const FPTYPE rho, const FPTYPE grho, const int iflag, FPTYPE& sc, F
     v2c = ddh0;
 }
 
+template <typename FPTYPE>
+void xc_slater_rs(const FPTYPE rs, FPTYPE& ex, FPTYPE& vx)
+{
+    const FPTYPE f = -0.687247939924714;
+    const FPTYPE alpha = 2.0 / 3.0;
+    ex = f * alpha / rs;
+    vx = 4.0 / 3.0 * f * alpha / rs;
+}
+
+template <typename FPTYPE>
+void xc_scalar_pbe(const FPTYPE rho, FPTYPE& exc, FPTYPE& vxc)
+{
+    const FPTYPE pi34 = 0.62035049089940;
+    const FPTYPE rs = pi34 / std::pow(rho, 1.0 / 3.0);
+    FPTYPE ex = 0.0;
+    FPTYPE vx = 0.0;
+    FPTYPE ec = 0.0;
+    FPTYPE vc = 0.0;
+    xc_slater_rs(rs, ex, vx);
+    xc_pw(rs, 0, ec, vc);
+    exc = ex + ec;
+    vxc = vx + vc;
+}
+
 } // namespace
+
+template <typename FPTYPE, typename Device>
+void xc_scalar_pbe_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                     const int nrxx,
+                                                     const FPTYPE e2,
+                                                     const FPTYPE epsr,
+                                                     const FPTYPE* rho,
+                                                     const FPTYPE* rho_core,
+                                                     FPTYPE* rho_total,
+                                                     FPTYPE* v,
+                                                     FPTYPE* etxc,
+                                                     FPTYPE* vtxc)
+{
+    *etxc = 0.0;
+    *vtxc = 0.0;
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        const FPTYPE rhox = rho[ir] + rho_core[ir];
+        rho_total[ir] = rhox;
+        v[ir] = 0.0;
+        const FPTYPE arho = std::abs(rhox);
+        if (arho <= epsr)
+        {
+            continue;
+        }
+        FPTYPE exc = 0.0;
+        FPTYPE vxc = 0.0;
+        xc_scalar_pbe(arho, exc, vxc);
+        v[ir] = e2 * vxc;
+        *etxc += e2 * exc * rhox;
+        *vtxc += e2 * vxc * rho[ir];
+    }
+}
 
 template <typename FPTYPE, typename Device>
 void xc_gradcorr_pbe_grid_op<FPTYPE, Device>::operator()(const Device* ctx,
@@ -163,7 +222,129 @@ void xc_gradcorr_pbe_grid_op<FPTYPE, Device>::operator()(const Device* ctx,
     }
 }
 
+template <typename FPTYPE, typename Device>
+void xc_gradcorr_pbe_grid_resident_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                                  const int nrxx,
+                                                                  const int iflag,
+                                                                  const FPTYPE e2,
+                                                                  const FPTYPE epsr,
+                                                                  const FPTYPE* rho,
+                                                                  const FPTYPE* rho_core,
+                                                                  const FPTYPE* gdr,
+                                                                  FPTYPE* v,
+                                                                  FPTYPE* h,
+                                                                  FPTYPE* etxc,
+                                                                  FPTYPE* vtxc)
+{
+    std::vector<FPTYPE> delta_v(nrxx, 0.0);
+    xc_gradcorr_pbe_grid_op<FPTYPE, Device>()(ctx,
+                                              nrxx,
+                                              iflag,
+                                              e2,
+                                              epsr,
+                                              rho,
+                                              rho_core,
+                                              gdr,
+                                              delta_v.data(),
+                                              h,
+                                              etxc,
+                                              vtxc);
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        v[ir] += delta_v[ir];
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_apply_dh_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                const int nrxx,
+                                                const FPTYPE* rho,
+                                                const FPTYPE* rho_core,
+                                                const FPTYPE* dh,
+                                                FPTYPE* v,
+                                                FPTYPE* vtxc_delta)
+{
+    *vtxc_delta = 0.0;
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        v[ir] -= dh[ir];
+        *vtxc_delta -= dh[ir] * (rho[ir] - rho_core[ir]);
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_multiply_iG_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                   const int npw,
+                                                   const int ipol,
+                                                   const FPTYPE* gcar,
+                                                   const std::complex<FPTYPE>* rhog,
+                                                   std::complex<FPTYPE>* porter)
+{
+    const std::complex<FPTYPE> imaginary(0.0, 1.0);
+    for (int ig = 0; ig < npw; ++ig)
+    {
+        porter[ig] = imaginary * rhog[ig] * gcar[3 * ig + ipol];
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_accumulate_iG_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                     const int npw,
+                                                     const int ipol,
+                                                     const FPTYPE* gcar,
+                                                     const std::complex<FPTYPE>* rhog,
+                                                     std::complex<FPTYPE>* accum,
+                                                     const bool zero_first)
+{
+    const std::complex<FPTYPE> imaginary(0.0, 1.0);
+    for (int ig = 0; ig < npw; ++ig)
+    {
+        const std::complex<FPTYPE> term = imaginary * rhog[ig] * gcar[3 * ig + ipol];
+        accum[ig] = zero_first ? term : accum[ig] + term;
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_set_component_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                     const int nrxx,
+                                                     const int ipol,
+                                                     const FPTYPE* component,
+                                                     FPTYPE* interleaved)
+{
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        interleaved[3 * ir + ipol] = component[ir];
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_extract_component_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                         const int nrxx,
+                                                         const int ipol,
+                                                         const FPTYPE* interleaved,
+                                                         FPTYPE* component)
+{
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        component[ir] = interleaved[3 * ir + ipol];
+    }
+}
+
+template struct xc_scalar_pbe_op<float, base_device::DEVICE_CPU>;
+template struct xc_scalar_pbe_op<double, base_device::DEVICE_CPU>;
 template struct xc_gradcorr_pbe_grid_op<float, base_device::DEVICE_CPU>;
 template struct xc_gradcorr_pbe_grid_op<double, base_device::DEVICE_CPU>;
+template struct xc_gradcorr_pbe_grid_resident_op<float, base_device::DEVICE_CPU>;
+template struct xc_gradcorr_pbe_grid_resident_op<double, base_device::DEVICE_CPU>;
+template struct xc_apply_dh_op<float, base_device::DEVICE_CPU>;
+template struct xc_apply_dh_op<double, base_device::DEVICE_CPU>;
+template struct xc_multiply_iG_op<float, base_device::DEVICE_CPU>;
+template struct xc_multiply_iG_op<double, base_device::DEVICE_CPU>;
+template struct xc_accumulate_iG_op<float, base_device::DEVICE_CPU>;
+template struct xc_accumulate_iG_op<double, base_device::DEVICE_CPU>;
+template struct xc_set_component_op<float, base_device::DEVICE_CPU>;
+template struct xc_set_component_op<double, base_device::DEVICE_CPU>;
+template struct xc_extract_component_op<float, base_device::DEVICE_CPU>;
+template struct xc_extract_component_op<double, base_device::DEVICE_CPU>;
 
 } // namespace hamilt

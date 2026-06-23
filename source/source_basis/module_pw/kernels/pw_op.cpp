@@ -62,6 +62,42 @@ struct set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_CPU>
 };
 
 template <typename FPTYPE>
+struct set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_CPU>
+{
+    void operator()(const int npwk,
+                    const int nx,
+                    const int ny,
+                    const int nz,
+                    const bool xprime,
+                    const int* box_index,
+                    const std::complex<FPTYPE>* in,
+                    std::complex<FPTYPE>* out)
+    {
+        for (int ig = 0; ig < npwk; ++ig)
+        {
+            const int idx = box_index[ig];
+            const int iz = idx % nz;
+            const int ixy = idx / nz;
+            const int iy = ixy % ny;
+            const int ix = ixy / ny;
+            const int cix = (nx - ix) % nx;
+            const int ciy = (ny - iy) % ny;
+            const int ciz = (nz - iz) % nz;
+            const int conj_idx = ciz + ciy * nz + cix * ny * nz;
+            out[idx] = in[ig];
+            const int reduced_coord = xprime ? ix : iy;
+            const int reduced_dim = xprime ? nx : ny;
+            const bool reduced_boundary
+                = reduced_coord == 0 || (reduced_dim % 2 == 0 && reduced_coord == reduced_dim / 2);
+            if (!reduced_boundary && conj_idx != idx)
+            {
+                out[conj_idx] = std::conj(in[ig]);
+            }
+        }
+    }
+};
+
+template <typename FPTYPE>
 struct set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_CPU>
 {
     void operator()(const int npw_k,
@@ -86,11 +122,12 @@ struct set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_CPU>
 };
 
 template struct set_3d_fft_box_op<float, base_device::DEVICE_CPU>;
+template struct set_3d_fft_box_gamma_op<float, base_device::DEVICE_CPU>;
 template struct set_recip_to_real_output_op<float, base_device::DEVICE_CPU>;
 template struct set_real_to_recip_output_op<float, base_device::DEVICE_CPU>;
 template struct set_3d_fft_box_op<double, base_device::DEVICE_CPU>;
+template struct set_3d_fft_box_gamma_op<double, base_device::DEVICE_CPU>;
 template struct set_recip_to_real_output_op<double, base_device::DEVICE_CPU>;
 template struct set_real_to_recip_output_op<double, base_device::DEVICE_CPU>;
 
 }  // namespace ModulePW
-

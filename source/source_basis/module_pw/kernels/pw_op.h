@@ -27,6 +27,21 @@ struct set_3d_fft_box_op {
 };
 
 template <typename FPTYPE, typename Device>
+struct set_3d_fft_box_gamma_op {
+    /// @brief Set a full 3D FFT box from gamma-only reciprocal coefficients.
+    /// The stored half spectrum is mirrored with Hermitian conjugates so a
+    /// complex inverse FFT gives the same real-space field as a gamma c2r FFT.
+    void operator()(const int npwk,
+                    const int nx,
+                    const int ny,
+                    const int nz,
+                    const bool xprime,
+                    const int* box_index,
+                    const std::complex<FPTYPE>* in,
+                    std::complex<FPTYPE>* out);
+};
+
+template <typename FPTYPE, typename Device>
 struct set_recip_to_real_output_op {
     /// @brief Calculate the outputs after the FFT translation of recip_to_real
     ///
@@ -92,6 +107,19 @@ template <typename FPTYPE>
 struct set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>
 {
     void operator()(const int npwk,
+                    const int* box_index,
+                    const std::complex<FPTYPE>* in,
+                    std::complex<FPTYPE>* out);
+};
+
+template <typename FPTYPE>
+struct set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const int npwk,
+                    const int nx,
+                    const int ny,
+                    const int nz,
+                    const bool xprime,
                     const int* box_index,
                     const std::complex<FPTYPE>* in,
                     std::complex<FPTYPE>* out);

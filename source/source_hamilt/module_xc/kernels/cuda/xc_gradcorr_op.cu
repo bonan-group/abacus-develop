@@ -5,6 +5,7 @@
 
 #include <base/macros/macros.h>
 #include <cuda_runtime.h>
+#include <thrust/complex.h>
 
 #define THREADS_PER_BLOCK 256
 
@@ -102,6 +103,63 @@ __device__ void xc_pbec(const FPTYPE rho, const FPTYPE grho, const int iflag, FP
 }
 
 template <typename FPTYPE>
+__device__ void xc_slater_rs(const FPTYPE rs, FPTYPE& ex, FPTYPE& vx)
+{
+    const FPTYPE f = -0.687247939924714;
+    const FPTYPE alpha = 2.0 / 3.0;
+    ex = f * alpha / rs;
+    vx = 4.0 / 3.0 * f * alpha / rs;
+}
+
+template <typename FPTYPE>
+__device__ void xc_scalar_pbe(const FPTYPE rho, FPTYPE& exc, FPTYPE& vxc)
+{
+    const FPTYPE pi34 = 0.62035049089940;
+    const FPTYPE rs = pi34 / pow(rho, 1.0 / 3.0);
+    FPTYPE ex = 0.0;
+    FPTYPE vx = 0.0;
+    FPTYPE ec = 0.0;
+    FPTYPE vc = 0.0;
+    xc_slater_rs(rs, ex, vx);
+    xc_pw(rs, 0, ec, vc);
+    exc = ex + ec;
+    vxc = vx + vc;
+}
+
+template <typename FPTYPE>
+__global__ void xc_scalar_pbe_kernel(const int nrxx,
+                                     const FPTYPE e2,
+                                     const FPTYPE epsr,
+                                     const FPTYPE* rho,
+                                     const FPTYPE* rho_core,
+                                     FPTYPE* rho_total,
+                                     FPTYPE* v,
+                                     FPTYPE* sums)
+{
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir >= nrxx)
+    {
+        return;
+    }
+
+    const FPTYPE rhox = rho[ir] + rho_core[ir];
+    rho_total[ir] = rhox;
+    v[ir] = 0.0;
+    const FPTYPE arho = fabs(rhox);
+    if (arho <= epsr)
+    {
+        return;
+    }
+
+    FPTYPE exc = 0.0;
+    FPTYPE vxc = 0.0;
+    xc_scalar_pbe(arho, exc, vxc);
+    v[ir] = e2 * vxc;
+    atomicAdd(sums, e2 * exc * rhox);
+    atomicAdd(sums + 1, e2 * vxc * rho[ir]);
+}
+
+template <typename FPTYPE>
 __global__ void xc_gradcorr_pbe_grid_kernel(const int nrxx,
                                             const int iflag,
                                             const FPTYPE e2,
@@ -162,6 +220,157 @@ __global__ void xc_gradcorr_pbe_grid_kernel(const int nrxx,
 }
 
 template <typename FPTYPE>
+__global__ void xc_gradcorr_pbe_grid_resident_kernel(const int nrxx,
+                                                     const int iflag,
+                                                     const FPTYPE e2,
+                                                     const FPTYPE epsr,
+                                                     const FPTYPE* rho,
+                                                     const FPTYPE* rho_core,
+                                                     const FPTYPE* gdr,
+                                                     FPTYPE* v,
+                                                     FPTYPE* h,
+                                                     FPTYPE* sums)
+{
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir >= nrxx)
+    {
+        return;
+    }
+
+    h[3 * ir + 0] = 0.0;
+    h[3 * ir + 1] = 0.0;
+    h[3 * ir + 2] = 0.0;
+
+    const FPTYPE arho = fabs(rho[ir]);
+    if (arho <= epsr)
+    {
+        return;
+    }
+
+    const FPTYPE gx = gdr[3 * ir + 0];
+    const FPTYPE gy = gdr[3 * ir + 1];
+    const FPTYPE gz = gdr[3 * ir + 2];
+    const FPTYPE grho = gx * gx + gy * gy + gz * gz;
+    if (grho < static_cast<FPTYPE>(1.0e-10))
+    {
+        return;
+    }
+
+    FPTYPE sx = 0.0;
+    FPTYPE v1x = 0.0;
+    FPTYPE v2x = 0.0;
+    FPTYPE sc = 0.0;
+    FPTYPE v1c = 0.0;
+    FPTYPE v2c = 0.0;
+    xc_pbex(arho, grho, iflag, sx, v1x, v2x);
+    xc_pbec(arho, grho, iflag == 2 ? 1 : iflag, sc, v1c, v2c);
+
+    const FPTYPE sxc = sx + sc;
+    const FPTYPE v1xc = v1x + v1c;
+    const FPTYPE v2xc = v2x + v2c;
+    const FPTYPE segno = rho[ir] >= 0.0 ? 1.0 : -1.0;
+
+    v[ir] += e2 * v1xc;
+    h[3 * ir + 0] = e2 * v2xc * gx;
+    h[3 * ir + 1] = e2 * v2xc * gy;
+    h[3 * ir + 2] = e2 * v2xc * gz;
+    atomicAdd(sums, e2 * sxc * segno);
+    atomicAdd(sums + 1, e2 * v1xc * (rho[ir] - rho_core[ir]));
+}
+
+template <typename FPTYPE>
+__global__ void xc_apply_dh_kernel(const int nrxx,
+                                   const FPTYPE* rho,
+                                   const FPTYPE* rho_core,
+                                   const FPTYPE* dh,
+                                   FPTYPE* v,
+                                   FPTYPE* sum)
+{
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir >= nrxx)
+    {
+        return;
+    }
+
+    v[ir] -= dh[ir];
+    atomicAdd(sum, -dh[ir] * (rho[ir] - rho_core[ir]));
+}
+
+template <typename FPTYPE>
+__global__ void xc_multiply_iG_kernel(const int npw,
+                                      const int ipol,
+                                      const FPTYPE* gcar,
+                                      const thrust::complex<FPTYPE>* rhog,
+                                      thrust::complex<FPTYPE>* porter)
+{
+    const int ig = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ig >= npw)
+    {
+        return;
+    }
+    porter[ig] = thrust::complex<FPTYPE>(0.0, gcar[3 * ig + ipol]) * rhog[ig];
+}
+
+template <typename FPTYPE>
+__global__ void xc_accumulate_iG_kernel(const int npw,
+                                        const int ipol,
+                                        const FPTYPE* gcar,
+                                        const thrust::complex<FPTYPE>* rhog,
+                                        thrust::complex<FPTYPE>* accum,
+                                        const bool zero_first)
+{
+    const int ig = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ig >= npw)
+    {
+        return;
+    }
+    const thrust::complex<FPTYPE> term = thrust::complex<FPTYPE>(0.0, gcar[3 * ig + ipol]) * rhog[ig];
+    accum[ig] = zero_first ? term : accum[ig] + term;
+}
+
+template <typename FPTYPE>
+__global__ void xc_set_component_kernel(const int nrxx, const int ipol, const FPTYPE* component, FPTYPE* interleaved)
+{
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir < nrxx)
+    {
+        interleaved[3 * ir + ipol] = component[ir];
+    }
+}
+
+template <typename FPTYPE>
+__global__ void xc_extract_component_kernel(const int nrxx, const int ipol, const FPTYPE* interleaved, FPTYPE* component)
+{
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir < nrxx)
+    {
+        component[ir] = interleaved[3 * ir + ipol];
+    }
+}
+
+template <typename FPTYPE>
+void xc_scalar_pbe_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                      const int nrxx,
+                                                                      const FPTYPE e2,
+                                                                      const FPTYPE epsr,
+                                                                      const FPTYPE* rho,
+                                                                      const FPTYPE* rho_core,
+                                                                      FPTYPE* rho_total,
+                                                                      FPTYPE* v,
+                                                                      FPTYPE* sums,
+                                                                      FPTYPE* etxc,
+                                                                      FPTYPE* vtxc)
+{
+    cudaMemset(sums, 0, 2 * sizeof(FPTYPE));
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_scalar_pbe_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(nrxx, e2, epsr, rho, rho_core, rho_total, v, sums);
+    CHECK_CUDA_SYNC();
+    cudaMemcpy(etxc, sums, sizeof(FPTYPE), cudaMemcpyDeviceToHost);
+    cudaMemcpy(vtxc, sums + 1, sizeof(FPTYPE), cudaMemcpyDeviceToHost);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
 void xc_gradcorr_pbe_grid_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
                                                                           const int nrxx,
                                                                           const int iflag,
@@ -185,7 +394,120 @@ void xc_gradcorr_pbe_grid_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const 
     CHECK_CUDA_SYNC();
 }
 
+template <typename FPTYPE>
+void xc_gradcorr_pbe_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
+    const base_device::DEVICE_GPU* ctx,
+    const int nrxx,
+    const int iflag,
+    const FPTYPE e2,
+    const FPTYPE epsr,
+    const FPTYPE* rho,
+    const FPTYPE* rho_core,
+    const FPTYPE* gdr,
+    FPTYPE* v,
+    FPTYPE* h,
+    FPTYPE* sums,
+    FPTYPE* etxc,
+    FPTYPE* vtxc)
+{
+    cudaMemset(sums, 0, 2 * sizeof(FPTYPE));
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_gradcorr_pbe_grid_resident_kernel<FPTYPE>
+        <<<block, THREADS_PER_BLOCK>>>(nrxx, iflag, e2, epsr, rho, rho_core, gdr, v, h, sums);
+    CHECK_CUDA_SYNC();
+    cudaMemcpy(etxc, sums, sizeof(FPTYPE), cudaMemcpyDeviceToHost);
+    cudaMemcpy(vtxc, sums + 1, sizeof(FPTYPE), cudaMemcpyDeviceToHost);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_apply_dh_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                 const int nrxx,
+                                                                 const FPTYPE* rho,
+                                                                 const FPTYPE* rho_core,
+                                                                 const FPTYPE* dh,
+                                                                 FPTYPE* v,
+                                                                 FPTYPE* sum,
+                                                                 FPTYPE* vtxc_delta)
+{
+    cudaMemset(sum, 0, sizeof(FPTYPE));
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_apply_dh_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(nrxx, rho, rho_core, dh, v, sum);
+    CHECK_CUDA_SYNC();
+    cudaMemcpy(vtxc_delta, sum, sizeof(FPTYPE), cudaMemcpyDeviceToHost);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_multiply_iG_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                    const int npw,
+                                                                    const int ipol,
+                                                                    const FPTYPE* gcar,
+                                                                    const std::complex<FPTYPE>* rhog,
+                                                                    std::complex<FPTYPE>* porter)
+{
+    const int block = (npw + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    auto rhog_ = reinterpret_cast<const thrust::complex<FPTYPE>*>(rhog);
+    auto porter_ = reinterpret_cast<thrust::complex<FPTYPE>*>(porter);
+    xc_multiply_iG_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(npw, ipol, gcar, rhog_, porter_);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_accumulate_iG_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                      const int npw,
+                                                                      const int ipol,
+                                                                      const FPTYPE* gcar,
+                                                                      const std::complex<FPTYPE>* rhog,
+                                                                      std::complex<FPTYPE>* accum,
+                                                                      const bool zero_first)
+{
+    const int block = (npw + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    auto rhog_ = reinterpret_cast<const thrust::complex<FPTYPE>*>(rhog);
+    auto accum_ = reinterpret_cast<thrust::complex<FPTYPE>*>(accum);
+    xc_accumulate_iG_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(npw, ipol, gcar, rhog_, accum_, zero_first);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_set_component_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                      const int nrxx,
+                                                                      const int ipol,
+                                                                      const FPTYPE* component,
+                                                                      FPTYPE* interleaved)
+{
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_set_component_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(nrxx, ipol, component, interleaved);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_extract_component_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                          const int nrxx,
+                                                                          const int ipol,
+                                                                          const FPTYPE* interleaved,
+                                                                          FPTYPE* component)
+{
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_extract_component_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(nrxx, ipol, interleaved, component);
+    CHECK_CUDA_SYNC();
+}
+
+template struct xc_scalar_pbe_op<float, base_device::DEVICE_GPU>;
+template struct xc_scalar_pbe_op<double, base_device::DEVICE_GPU>;
 template struct xc_gradcorr_pbe_grid_op<float, base_device::DEVICE_GPU>;
 template struct xc_gradcorr_pbe_grid_op<double, base_device::DEVICE_GPU>;
+template struct xc_gradcorr_pbe_grid_resident_op<float, base_device::DEVICE_GPU>;
+template struct xc_gradcorr_pbe_grid_resident_op<double, base_device::DEVICE_GPU>;
+template struct xc_apply_dh_op<float, base_device::DEVICE_GPU>;
+template struct xc_apply_dh_op<double, base_device::DEVICE_GPU>;
+template struct xc_multiply_iG_op<float, base_device::DEVICE_GPU>;
+template struct xc_multiply_iG_op<double, base_device::DEVICE_GPU>;
+template struct xc_accumulate_iG_op<float, base_device::DEVICE_GPU>;
+template struct xc_accumulate_iG_op<double, base_device::DEVICE_GPU>;
+template struct xc_set_component_op<float, base_device::DEVICE_GPU>;
+template struct xc_set_component_op<double, base_device::DEVICE_GPU>;
+template struct xc_extract_component_op<float, base_device::DEVICE_GPU>;
+template struct xc_extract_component_op<double, base_device::DEVICE_GPU>;
 
 } // namespace hamilt

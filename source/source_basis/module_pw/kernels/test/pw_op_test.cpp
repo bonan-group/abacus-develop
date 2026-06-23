@@ -28,6 +28,7 @@ class TestModulePWPWMultiDevice : public ::testing::Test
 
     using set_3d_fft_box_cpu_op = ModulePW::set_3d_fft_box_op<double, base_device::DEVICE_CPU>;
     using set_3d_fft_box_gpu_op = ModulePW::set_3d_fft_box_op<double, base_device::DEVICE_GPU>;
+    using set_3d_fft_box_gamma_gpu_op = ModulePW::set_3d_fft_box_gamma_op<double, base_device::DEVICE_GPU>;
     using set_recip_to_real_output_cpu_op = ModulePW::set_recip_to_real_output_op<double, base_device::DEVICE_CPU>;
     using set_recip_to_real_output_gpu_op = ModulePW::set_recip_to_real_output_op<double, base_device::DEVICE_GPU>;
     using set_real_to_recip_output_cpu_op = ModulePW::set_real_to_recip_output_op<double, base_device::DEVICE_CPU>;
@@ -119,6 +120,143 @@ TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_op_gpu)
     delete_memory_int_gpu_op()(d_box_index);
     delete_memory_complex_gpu_op()(d_res);
     delete_memory_complex_gpu_op()(d_in_1);
+}
+
+TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_gamma_op_gpu_fills_conjugate_partners)
+{
+    const int nx = 4;
+    const int ny = 4;
+    const int nz = 4;
+    const int nxyz_small = nx * ny * nz;
+    const std::vector<int> box_index_small = {0, 27, 20};
+    const std::vector<std::complex<double>> in_small = {{2.0, 0.0}, {1.25, -0.5}, {-0.25, 0.75}};
+    std::vector<std::complex<double>> res(nxyz_small, {0.0, 0.0});
+    std::vector<std::complex<double>> expected(nxyz_small, {0.0, 0.0});
+    expected[0] = {2.0, 0.0};
+    expected[27] = {1.25, -0.5};
+    expected[57] = {1.25, 0.5};
+    expected[20] = {-0.25, 0.75};
+    expected[60] = {-0.25, -0.75};
+
+    int* d_box_index = nullptr;
+    std::complex<double>* d_res = nullptr;
+    std::complex<double>* d_in = nullptr;
+    resize_memory_int_gpu_op()(d_box_index, box_index_small.size());
+    resize_memory_complex_gpu_op()(d_res, res.size());
+    resize_memory_complex_gpu_op()(d_in, in_small.size());
+    synchronize_memory_int_h2d_op()(d_box_index, box_index_small.data(), box_index_small.size());
+    synchronize_memory_complex_h2d_op()(d_res, res.data(), res.size());
+    synchronize_memory_complex_h2d_op()(d_in, in_small.data(), in_small.size());
+
+    set_3d_fft_box_gamma_gpu_op()(box_index_small.size(), nx, ny, nz, true, d_box_index, d_in, d_res);
+
+    synchronize_memory_complex_d2h_op()(res.data(), d_res, res.size());
+
+    for (int ii = 0; ii < nxyz_small; ii++) {
+        EXPECT_LT(std::abs(res[ii] - expected[ii]), 1e-12);
+    }
+    delete_memory_int_gpu_op()(d_box_index);
+    delete_memory_complex_gpu_op()(d_res);
+    delete_memory_complex_gpu_op()(d_in);
+}
+
+TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_gamma_op_gpu_supports_yprime_half_spectrum)
+{
+    const int nx = 4;
+    const int ny = 4;
+    const int nz = 4;
+    const int nxyz_small = nx * ny * nz;
+    const std::vector<int> box_index_small = {
+        1,
+        3,
+        6,
+        36,
+    };
+    const std::vector<std::complex<double>> in_small = {
+        {2.0, 0.0},
+        {2.0, -0.0},
+        {0.25, -0.75},
+        {-1.5, 0.5},
+    };
+    std::vector<std::complex<double>> res(nxyz_small, {0.0, 0.0});
+    std::vector<std::complex<double>> expected(nxyz_small, {0.0, 0.0});
+    expected[1] = {2.0, 0.0};
+    expected[3] = {2.0, -0.0};
+    expected[6] = {0.25, -0.75};
+    expected[14] = {0.25, 0.75};
+    expected[36] = {-1.5, 0.5};
+    expected[44] = {-1.5, -0.5};
+
+    int* d_box_index = nullptr;
+    std::complex<double>* d_res = nullptr;
+    std::complex<double>* d_in = nullptr;
+    resize_memory_int_gpu_op()(d_box_index, box_index_small.size());
+    resize_memory_complex_gpu_op()(d_res, res.size());
+    resize_memory_complex_gpu_op()(d_in, in_small.size());
+    synchronize_memory_int_h2d_op()(d_box_index, box_index_small.data(), box_index_small.size());
+    synchronize_memory_complex_h2d_op()(d_res, res.data(), res.size());
+    synchronize_memory_complex_h2d_op()(d_in, in_small.data(), in_small.size());
+
+    set_3d_fft_box_gamma_gpu_op()(box_index_small.size(), nx, ny, nz, false, d_box_index, d_in, d_res);
+
+    synchronize_memory_complex_d2h_op()(res.data(), d_res, res.size());
+
+    for (int ii = 0; ii < nxyz_small; ii++) {
+        EXPECT_LT(std::abs(res[ii] - expected[ii]), 1e-12);
+    }
+    delete_memory_int_gpu_op()(d_box_index);
+    delete_memory_complex_gpu_op()(d_res);
+    delete_memory_complex_gpu_op()(d_in);
+}
+
+TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_gamma_op_gpu_avoids_boundary_pair_races)
+{
+    const int nx = 4;
+    const int ny = 4;
+    const int nz = 4;
+    const int nxyz_small = nx * ny * nz;
+    const std::vector<int> box_index_small = {
+        1,
+        3,
+        2,
+        33,
+        35,
+    };
+    const std::vector<std::complex<double>> in_small = {
+        {1.0, 0.25},
+        {1.0, -0.25},
+        {-0.5, 0.0},
+        {0.5, -0.125},
+        {0.5, 0.125},
+    };
+    std::vector<std::complex<double>> res(nxyz_small, {0.0, 0.0});
+    std::vector<std::complex<double>> expected(nxyz_small, {0.0, 0.0});
+    expected[1] = {1.0, 0.25};
+    expected[3] = {1.0, -0.25};
+    expected[2] = {-0.5, 0.0};
+    expected[33] = {0.5, -0.125};
+    expected[35] = {0.5, 0.125};
+
+    int* d_box_index = nullptr;
+    std::complex<double>* d_res = nullptr;
+    std::complex<double>* d_in = nullptr;
+    resize_memory_int_gpu_op()(d_box_index, box_index_small.size());
+    resize_memory_complex_gpu_op()(d_res, res.size());
+    resize_memory_complex_gpu_op()(d_in, in_small.size());
+    synchronize_memory_int_h2d_op()(d_box_index, box_index_small.data(), box_index_small.size());
+    synchronize_memory_complex_h2d_op()(d_res, res.data(), res.size());
+    synchronize_memory_complex_h2d_op()(d_in, in_small.data(), in_small.size());
+
+    set_3d_fft_box_gamma_gpu_op()(box_index_small.size(), nx, ny, nz, true, d_box_index, d_in, d_res);
+
+    synchronize_memory_complex_d2h_op()(res.data(), d_res, res.size());
+
+    for (int ii = 0; ii < nxyz_small; ii++) {
+        EXPECT_LT(std::abs(res[ii] - expected[ii]), 1e-12);
+    }
+    delete_memory_int_gpu_op()(d_box_index);
+    delete_memory_complex_gpu_op()(d_res);
+    delete_memory_complex_gpu_op()(d_in);
 }
 
 TEST_F(TestModulePWPWMultiDevice, set_recip_to_real_output_op_gpu)
