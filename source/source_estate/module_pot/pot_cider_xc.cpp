@@ -13,6 +13,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
+#include <fstream>
+#include <string>
 #ifdef __MPI
 #include <mpi.h>
 #endif
@@ -333,6 +338,131 @@ std::vector<double> spin_major_to_interleaved(
         }
     }
     return interleaved;
+}
+
+void write_debug_array(std::ofstream& out, const std::string& name, const std::vector<double>& values)
+{
+    const std::uint32_t name_size = static_cast<std::uint32_t>(name.size());
+    const std::uint64_t value_size = static_cast<std::uint64_t>(values.size());
+    out.write(reinterpret_cast<const char*>(&name_size), sizeof(name_size));
+    out.write(name.data(), name.size());
+    out.write(reinterpret_cast<const char*>(&value_size), sizeof(value_size));
+    if (!values.empty()) {
+        out.write(
+            reinterpret_cast<const char*>(values.data()),
+            static_cast<std::streamsize>(values.size() * sizeof(double)));
+    }
+}
+
+void maybe_write_abacus_cider_debug_dump(
+    const int eval_count,
+    const int nspin,
+    const int nsigma,
+    const std::size_t nrxx,
+    const double grid_weight,
+    const double xmix,
+    const std::vector<double>& rho_baseline_sm,
+    const std::vector<double>& sigma_baseline_sm,
+    const std::vector<double>& tau_baseline_sm,
+    const std::vector<double>& rho_feature_sm,
+    const std::vector<double>& sigma_feature_sm,
+    const std::vector<double>& tau_feature_sm,
+    const std::vector<double>& exc_baseline,
+    const std::vector<double>& exc_feature,
+    const std::vector<double>& vrho_baseline_sm,
+    const std::vector<double>& vsigma_baseline_sm,
+    const std::vector<double>& vtau_baseline_sm,
+    const std::vector<double>& vrho_feature_sm,
+    const std::vector<double>& vsigma_feature_sm,
+    const std::vector<double>& vtau_feature_sm,
+    const ModuleBase::matrix& v_baseline,
+    const ModuleBase::matrix& v_feature,
+    const ModuleBase::matrix& v_total,
+    const double etxc_baseline_ry,
+    const double etxc_feature_ry,
+    const double vtxc_baseline_ry,
+    const double vtxc_feature_ry)
+{
+    const char* prefix = std::getenv("ABACUS_CIDER_DEBUG_DUMP_PREFIX");
+    if (prefix == nullptr || std::string(prefix).empty()) {
+        return;
+    }
+
+    const std::string mode =
+        std::getenv("ABACUS_CIDER_DEBUG_DUMP_MODE") == nullptr
+            ? "all"
+            : std::getenv("ABACUS_CIDER_DEBUG_DUMP_MODE");
+    if (mode == "first" && eval_count != 1) {
+        return;
+    }
+
+    char filename[4096];
+    std::snprintf(filename, sizeof(filename), "%s_call%04d.bin", prefix, eval_count);
+    std::ofstream out(filename, std::ios::binary);
+    if (!out.good()) {
+        GlobalV::ofs_warning << "PotCiderXC: failed to open debug dump " << filename << std::endl;
+        return;
+    }
+
+    const char magic[8] = {'A', 'C', 'D', 'D', 'U', 'M', 'P', '1'};
+    out.write(magic, sizeof(magic));
+    const std::uint32_t version = 1;
+    out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    const std::uint32_t nspin_u = static_cast<std::uint32_t>(nspin);
+    const std::uint32_t nsigma_u = static_cast<std::uint32_t>(nsigma);
+    const std::uint64_t nrxx_u = static_cast<std::uint64_t>(nrxx);
+    out.write(reinterpret_cast<const char*>(&nspin_u), sizeof(nspin_u));
+    out.write(reinterpret_cast<const char*>(&nsigma_u), sizeof(nsigma_u));
+    out.write(reinterpret_cast<const char*>(&nrxx_u), sizeof(nrxx_u));
+    out.write(reinterpret_cast<const char*>(&grid_weight), sizeof(grid_weight));
+    out.write(reinterpret_cast<const char*>(&xmix), sizeof(xmix));
+    out.write(reinterpret_cast<const char*>(&etxc_baseline_ry), sizeof(etxc_baseline_ry));
+    out.write(reinterpret_cast<const char*>(&etxc_feature_ry), sizeof(etxc_feature_ry));
+    out.write(reinterpret_cast<const char*>(&vtxc_baseline_ry), sizeof(vtxc_baseline_ry));
+    out.write(reinterpret_cast<const char*>(&vtxc_feature_ry), sizeof(vtxc_feature_ry));
+
+    std::vector<std::pair<std::string, const std::vector<double>*>> arrays = {
+        {"rho_baseline_sg", &rho_baseline_sm},
+        {"sigma_baseline_xg", &sigma_baseline_sm},
+        {"rho_feature_sg", &rho_feature_sm},
+        {"sigma_feature_xg", &sigma_feature_sm},
+        {"exc_baseline_g", &exc_baseline},
+        {"exc_feature_g", &exc_feature},
+        {"vrho_baseline_sg", &vrho_baseline_sm},
+        {"vsigma_baseline_xg", &vsigma_baseline_sm},
+        {"vrho_feature_sg", &vrho_feature_sm},
+        {"vsigma_feature_xg", &vsigma_feature_sm},
+    };
+    if (!tau_baseline_sm.empty()) {
+        arrays.push_back({"tau_baseline_sg", &tau_baseline_sm});
+        arrays.push_back({"vtau_baseline_sg", &vtau_baseline_sm});
+    }
+    if (!tau_feature_sm.empty()) {
+        arrays.push_back({"tau_feature_sg", &tau_feature_sm});
+        arrays.push_back({"vtau_feature_sg", &vtau_feature_sm});
+    }
+
+    std::vector<double> v_baseline_sm(nspin * nrxx, 0.0);
+    std::vector<double> v_feature_sm(nspin * nrxx, 0.0);
+    std::vector<double> v_total_sm(nspin * nrxx, 0.0);
+    for (int is = 0; is < nspin; ++is) {
+        for (std::size_t ir = 0; ir < nrxx; ++ir) {
+            v_baseline_sm[is * nrxx + ir] = v_baseline(is, ir);
+            v_feature_sm[is * nrxx + ir] = v_feature(is, ir);
+            v_total_sm[is * nrxx + ir] = v_total(is, ir);
+        }
+    }
+    arrays.push_back({"v_baseline_sg", &v_baseline_sm});
+    arrays.push_back({"v_feature_sg", &v_feature_sm});
+    arrays.push_back({"v_total_sg", &v_total_sm});
+
+    const std::uint32_t array_count = static_cast<std::uint32_t>(arrays.size());
+    out.write(reinterpret_cast<const char*>(&array_count), sizeof(array_count));
+    for (const auto& item : arrays) {
+        write_debug_array(out, item.first, *item.second);
+    }
+
+    GlobalV::ofs_running << "PotCiderXC: wrote debug dump " << filename << std::endl;
 }
 
 double integrate_role_exc(
@@ -659,9 +789,9 @@ void PotCiderXC::cal_v_eff(
         is_mgga_);
 
     // === 7. Integrate each energy density with its owning density ===
-    double etxc_local = integrate_role_exc(
+    double etxc_baseline_local = integrate_role_exc(
         exc_baseline, sgn_baseline, rho_baseline_interleaved, nspin, nrxx);
-    etxc_local += integrate_role_exc(
+    double etxc_feature_local = integrate_role_exc(
         exc_feature, sgn_feature, rho_feature_interleaved, nspin, nrxx);
 
     // === 8. Convert vrho/vsigma back to interleaved and use native ABACUS
@@ -696,8 +826,11 @@ void PotCiderXC::cal_v_eff(
         vsigma_feature_int,
         tpiba,
         chg);
-    double vtxc_local = std::get<0>(vtxc_v_baseline) + std::get<0>(vtxc_v_feature);
+    const double vtxc_baseline_local = std::get<0>(vtxc_v_baseline);
+    const double vtxc_feature_local = std::get<0>(vtxc_v_feature);
+    double vtxc_local = vtxc_baseline_local + vtxc_feature_local;
     ModuleBase::matrix v_bridge = std::get<1>(vtxc_v_baseline);
+    const ModuleBase::matrix& v_baseline = std::get<1>(vtxc_v_baseline);
     const ModuleBase::matrix& v_feature = std::get<1>(vtxc_v_feature);
     for (int is = 0; is < v_bridge.nr; ++is) {
         for (int ir = 0; ir < v_bridge.nc; ++ir) {
@@ -706,13 +839,70 @@ void PotCiderXC::cal_v_eff(
     }
 
 #ifdef __MPI
-    Parallel_Reduce::reduce_pool(etxc_local);
+    Parallel_Reduce::reduce_pool(etxc_baseline_local);
+    Parallel_Reduce::reduce_pool(etxc_feature_local);
     Parallel_Reduce::reduce_pool(vtxc_local);
 #endif
 
     const double grid_weight = ucell->omega / chg->rhopw->nxyz;
-    *(this->etxc_) = etxc_local * grid_weight;
+    const double etxc_baseline_ry = etxc_baseline_local * grid_weight;
+    const double etxc_feature_ry = etxc_feature_local * grid_weight;
+    const double etxc_total_ry = etxc_baseline_ry + etxc_feature_ry;
+    *(this->etxc_) = etxc_total_ry;
     *(this->vtxc_) = vtxc_local * grid_weight;
+
+    maybe_write_abacus_cider_debug_dump(
+        eval_count,
+        nspin,
+        nsigma,
+        nrxx,
+        grid_weight,
+        PARAM.inp.cider_xmix,
+        rho_baseline_sm,
+        sigma_baseline_sm,
+        tau_baseline_sm,
+        rho_feature_sm,
+        sigma_feature_sm,
+        tau_feature_sm,
+        exc_baseline,
+        exc_feature,
+        vrho_baseline_sm,
+        vsigma_baseline_sm,
+        vtau_baseline_sm,
+        vrho_feature_sm,
+        vsigma_feature_sm,
+        vtau_feature_sm,
+        v_baseline,
+        v_feature,
+        v_bridge,
+        etxc_baseline_ry,
+        etxc_feature_ry,
+        vtxc_baseline_local * grid_weight,
+        vtxc_feature_local * grid_weight);
+
+    const double ry_to_ha = 0.5;
+    const double xmix = PARAM.inp.cider_xmix;
+    GlobalV::ofs_running
+        << "PotCiderXC: component energy diagnostic"
+        << " baseline_ry=" << etxc_baseline_ry
+        << " baseline_Ha=" << (etxc_baseline_ry * ry_to_ha)
+        << " feature_scaled_ry=" << etxc_feature_ry
+        << " feature_scaled_Ha=" << (etxc_feature_ry * ry_to_ha);
+    if (std::abs(xmix) > 1.0e-14) {
+        const double etxc_feature_unmixed_ry = etxc_feature_ry / xmix;
+        GlobalV::ofs_running
+            << " feature_unmixed_ry=" << etxc_feature_unmixed_ry
+            << " feature_unmixed_Ha=" << (etxc_feature_unmixed_ry * ry_to_ha);
+    } else {
+        GlobalV::ofs_running
+            << " feature_unmixed_ry=nan"
+            << " feature_unmixed_Ha=nan";
+    }
+    GlobalV::ofs_running
+        << " total_ry=" << etxc_total_ry
+        << " total_Ha=" << (etxc_total_ry * ry_to_ha)
+        << " xmix=" << xmix
+        << std::endl;
 
     ModuleBase::matrix bridge_vofk;
     if (is_mgga_ && !vtau_total_sm.empty())
