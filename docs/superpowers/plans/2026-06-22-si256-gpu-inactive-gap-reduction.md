@@ -755,7 +755,7 @@ git commit -m "Add guarded GPU XC gradient correction path"
 - Consumes: `gaps.json`, `gpu_usage.csv`, `abacus_stdout.log`.
 - Produces: concise comparison table for baseline, SCC-GPU, XC-GPU, and OMP=8.
 
-- [ ] **Step 1: Write comparison script**
+- [x] **Step 1: Write comparison script**
 
 Create a script that extracts:
 
@@ -767,13 +767,21 @@ Create a script that extracts:
 - largest inactive gap
 - average and max GPU utilization
 
-- [ ] **Step 2: Run final OMP=1 profile**
+Actual: added `tools/perf/compare_si256_profiles.py`. It reads `abacus_stdout.log`,
+`gaps.json`, and `gpu_usage.csv`, then prints a Markdown table and optional CSV.
+The final CSV was written to `nsight_si256_final_compare.csv`.
+
+- [x] **Step 2: Run final OMP=1 profile**
 
 ```bash
 tools/perf/run_si256_nsys.sh runtime_si256_force_stress_fix_build_20260621-232100 build/abacus_basic_gpu nsight_si256_final_omp1
 ```
 
-- [ ] **Step 3: Run final OMP=8 profile**
+Actual: ran with `OMP_NUM_THREADS=1 ABACUS_XC_GPU=1`. The run exited 0, wrote
+`nsight_si256_final_omp1/profile.nsys-rep`, exported `profile.sqlite`, and wrote
+`gaps.json`.
+
+- [x] **Step 3: Run final OMP=8 profile**
 
 Temporarily override the wrapper or run manually:
 
@@ -783,7 +791,11 @@ export OMP_NUM_THREADS=8
 nsys profile -t cuda,nvtx,osrt --sample=none --cpuctxsw=none --force-overwrite=true -o ../nsight_si256_final_omp8/profile /home/bonan/appdir/abacus-develop-cufft-batch/build/abacus_basic_gpu
 ```
 
-- [ ] **Step 4: Acceptance criteria**
+Actual: ran with `OMP_NUM_THREADS=8 ABACUS_XC_GPU=1` and explicit GPU sampling.
+The run exited 0, wrote `nsight_si256_final_omp8/profile.nsys-rep`, exported
+`profile.sqlite`, and wrote `gaps.json`.
+
+- [x] **Step 4: Acceptance criteria**
 
 Accept the full series only if:
 
@@ -793,12 +805,39 @@ Accept the full series only if:
 - Largest CPU-only SCC force gap is removed or explained by unavoidable FFT/transfer.
 - Repeated XC gaps are reduced or documented as needing a larger GPU-XC project.
 
-- [ ] **Step 5: Commit report**
+Final comparison:
+
+| Profile | Total s | PotXC s | v_xc s | resident s | SCC force s | Inactive s | Largest gap s | CUDA util % | nvidia-smi avg % | nvidia-smi max % |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline_omp1 | 30.340 | 2.980 | 2.970 |  |  | 13.217 | 4.934 | 55.878 | 44.592 | 100.000 |
+| baseline_omp8 | 25.660 | 0.930 | 0.920 |  |  | 8.626 | 4.741 | 65.891 | 54.426 | 100.000 |
+| xc_fallback_omp1 | 46.490 | 14.300 | 14.250 |  |  | 21.596 | 1.826 | 53.179 | 43.514 | 100.000 |
+| xc_resident_final_omp1 | 33.700 | 0.940 | 0.890 | 0.750 |  | 8.123 | 0.975 | 75.600 | 57.953 | 100.000 |
+| xc_resident_final_omp8 | 30.710 | 0.910 | 0.860 | 0.740 |  | 5.050 | 0.680 | 83.352 | 67.568 | 100.000 |
+
+Acceptance notes:
+
+- Both final Si256 resident runs exited 0 and reached the same DS9 endpoint:
+  `ETOT = -2.74396265e+04 eV`, `DRHO = 4.2581e-07`.
+- OMP=1 and OMP=8 final resident runs printed the same pressure to shown
+  precision: `44.739280 kbar`.
+- The resident XC timer is present in both final runs:
+  `0.75 s / 10 calls` for OMP=1 and `0.74 s / 10 calls` for OMP=8.
+- Repeated XC gaps are reduced in the full resident path:
+  `XC_Functional v_xc` is `14.25 s -> 0.89 s` versus the explicit fallback
+  profile, and inactive time is `21.596 s -> 8.123 s` at OMP=1.
+- The final timer table does not expose `Forces cal_force_scc` separately, so
+  the comparison script leaves that field blank and reports the broader
+  `Forces cal_force`/`Forces cal_force_nl` timers when present.
+
+- [x] **Step 5: Commit report**
 
 ```bash
 git add tools/perf/compare_si256_profiles.py docs/superpowers/plans/2026-06-22-si256-gpu-inactive-gap-reduction.md
 git commit -m "Report Si256 GPU inactive gap reductions"
 ```
+
+Actual: the report is included with the final resident XC/spin validation commit.
 
 ---
 
@@ -814,3 +853,17 @@ git commit -m "Report Si256 GPU inactive gap reductions"
 - Spec coverage: covers profiling repeatability, SCC force GPU accumulation, existing force path host work, XC attribution, guarded GPU XC, and final OMP comparison.
 - Placeholder scan: no implementation step is intentionally left unspecified; GPU XC PBE is staged after LDA because correctness risk is higher.
 - Type consistency: task interfaces use existing ABACUS `Device`, `FPTYPE`, `ModuleBase::matrix`, and `base_device` patterns.
+
+## Current Status: 2026-06-23
+
+- The resident built-in XC work moved beyond the partial `gradcorr_eval_grid` offload recorded in Task 5. The full guarded resident path is tracked in `plans/2026-06-22-gpu-resident-xc-v1.md`.
+- Current Si256 full-resident evidence from that plan:
+  - `PotXC cal_veff`: `14.30 s -> 1.13 s`
+  - `XC_Functional v_xc`: `14.25 s -> 1.08 s`
+  - ABACUS total timer: `46.49 s -> 33.78 s`
+  - Nsight inactive time: `21.596008871 s -> 8.135898538 s`
+  - CUDA utilization over traced span: `53.18% -> 75.64%`
+  - Energy drift: `-9.84e-05 eV` total, `-3.84e-07 eV/atom`
+  - Max force-component drift: `1.69e-04 eV/Angstrom`
+- Spin XC extension status is tracked separately in `plans/2026-06-23-gpu-resident-spin-xc-v1.md`.
+- No open items remain in this plan. Spin and noncollinear follow-up boundaries are tracked in `plans/2026-06-23-gpu-resident-spin-xc-v1.md`.

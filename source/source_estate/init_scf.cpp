@@ -18,6 +18,7 @@ void init_scf(const UnitCell& ucell,
 
     //! renormalize the charge density
     pelec->charge->renormalize_rho();
+    pelec->charge->sync_realspace_density_to_device();
 
     //! initialize the potential
     pelec->pot->init_pot(pelec->charge);

@@ -40,6 +40,24 @@ struct xc_scalar_pbe_op
                     FPTYPE* vtxc);
 };
 
+template <typename FPTYPE, typename Device>
+struct xc_scalar_lda_spin_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    int correlation,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho_up,
+                    const FPTYPE* rho_dw,
+                    const FPTYPE* rho_core,
+                    FPTYPE* rho_up_total,
+                    FPTYPE* rho_dw_total,
+                    FPTYPE* v,
+                    FPTYPE* etxc,
+                    FPTYPE* vtxc);
+};
+
 template <typename FPTYPE>
 struct xc_scalar_pbe_op<FPTYPE, base_device::DEVICE_GPU>
 {
@@ -50,6 +68,25 @@ struct xc_scalar_pbe_op<FPTYPE, base_device::DEVICE_GPU>
                     const FPTYPE* rho,
                     const FPTYPE* rho_core,
                     FPTYPE* rho_total,
+                    FPTYPE* v,
+                    FPTYPE* sums,
+                    FPTYPE* etxc,
+                    FPTYPE* vtxc);
+};
+
+template <typename FPTYPE>
+struct xc_scalar_lda_spin_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    int correlation,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho_up,
+                    const FPTYPE* rho_dw,
+                    const FPTYPE* rho_core,
+                    FPTYPE* rho_up_total,
+                    FPTYPE* rho_dw_total,
                     FPTYPE* v,
                     FPTYPE* sums,
                     FPTYPE* etxc,
@@ -91,6 +128,26 @@ struct xc_gradcorr_pbe_grid_resident_op
                     FPTYPE* vtxc);
 };
 
+template <typename FPTYPE, typename Device>
+struct xc_gradcorr_pbe_spin_grid_resident_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    int iflag,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho_up,
+                    const FPTYPE* rho_dw,
+                    const FPTYPE* rho_core,
+                    const FPTYPE* gdr_up,
+                    const FPTYPE* gdr_dw,
+                    FPTYPE* v,
+                    FPTYPE* h_up,
+                    FPTYPE* h_dw,
+                    FPTYPE* etxc,
+                    FPTYPE* vtxc);
+};
+
 template <typename FPTYPE>
 struct xc_gradcorr_pbe_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>
 {
@@ -109,6 +166,27 @@ struct xc_gradcorr_pbe_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>
                     FPTYPE* vtxc);
 };
 
+template <typename FPTYPE>
+struct xc_gradcorr_pbe_spin_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    int iflag,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho_up,
+                    const FPTYPE* rho_dw,
+                    const FPTYPE* rho_core,
+                    const FPTYPE* gdr_up,
+                    const FPTYPE* gdr_dw,
+                    FPTYPE* v,
+                    FPTYPE* h_up,
+                    FPTYPE* h_dw,
+                    FPTYPE* sums,
+                    FPTYPE* etxc,
+                    FPTYPE* vtxc);
+};
+
 template <typename FPTYPE, typename Device>
 struct xc_apply_dh_op
 {
@@ -119,6 +197,51 @@ struct xc_apply_dh_op
                     const FPTYPE* dh,
                     FPTYPE* v,
                     FPTYPE* vtxc_delta);
+};
+
+template <typename FPTYPE, typename Device>
+struct xc_apply_dh_spin_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    const FPTYPE* rho,
+                    const FPTYPE* rho_core,
+                    const FPTYPE* dh,
+                    FPTYPE* v,
+                    FPTYPE* vtxc_delta);
+};
+
+template <typename FPTYPE, typename Device>
+struct xc_noncolin_rho_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    bool lsign,
+                    const FPTYPE* rho0,
+                    const FPTYPE* rho1,
+                    const FPTYPE* rho2,
+                    const FPTYPE* rho3,
+                    const FPTYPE* ux,
+                    FPTYPE* rho_up,
+                    FPTYPE* rho_dw,
+                    FPTYPE* neg);
+};
+
+template <typename FPTYPE, typename Device>
+struct xc_noncolin_rotate_potential_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    const FPTYPE* rho1,
+                    const FPTYPE* rho2,
+                    const FPTYPE* rho3,
+                    const FPTYPE* neg,
+                    const FPTYPE* v_up,
+                    const FPTYPE* v_dw,
+                    FPTYPE* v0,
+                    FPTYPE* v1,
+                    FPTYPE* v2,
+                    FPTYPE* v3);
 };
 
 template <typename FPTYPE>
@@ -132,6 +255,52 @@ struct xc_apply_dh_op<FPTYPE, base_device::DEVICE_GPU>
                     FPTYPE* v,
                     FPTYPE* sum,
                     FPTYPE* vtxc_delta);
+};
+
+template <typename FPTYPE>
+struct xc_apply_dh_spin_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    const FPTYPE* rho,
+                    const FPTYPE* rho_core,
+                    const FPTYPE* dh,
+                    FPTYPE* v,
+                    FPTYPE* sum,
+                    FPTYPE* vtxc_delta);
+};
+
+template <typename FPTYPE>
+struct xc_noncolin_rho_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    bool lsign,
+                    const FPTYPE* rho0,
+                    const FPTYPE* rho1,
+                    const FPTYPE* rho2,
+                    const FPTYPE* rho3,
+                    const FPTYPE* ux,
+                    FPTYPE* rho_up,
+                    FPTYPE* rho_dw,
+                    FPTYPE* neg);
+};
+
+template <typename FPTYPE>
+struct xc_noncolin_rotate_potential_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    const FPTYPE* rho1,
+                    const FPTYPE* rho2,
+                    const FPTYPE* rho3,
+                    const FPTYPE* neg,
+                    const FPTYPE* v_up,
+                    const FPTYPE* v_dw,
+                    FPTYPE* v0,
+                    FPTYPE* v1,
+                    FPTYPE* v2,
+                    FPTYPE* v3);
 };
 
 template <typename FPTYPE, typename Device>

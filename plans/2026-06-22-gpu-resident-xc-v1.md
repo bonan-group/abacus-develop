@@ -45,8 +45,8 @@ Assumptions:
 - [x] Keep the guarded fallback policy strict and observable.
   Preserve the current CPU fallback for unsupported cases and add a runtime timer or one-line debug marker that reports whether the resident path, partial path, or CPU path was selected. The guard should require CUDA, explicit GPU device intent, `ABACUS_XC_GPU=1`, built-in PBE/PBEsol, `nspin == 1`, non-stress, non-LibXC, and compatible PW GPU FFT conditions. Rationale: silent fallback makes performance results ambiguous and risks accidentally routing unsupported physics through the resident path.
 
-- [ ] Build layered correctness tests from kernels to full `v_xc`.
-  Add deterministic tests for scalar XC, GPU `grad_rho`, resident grid evaluation, GPU `grad_dot`, and full resident `v_xc` against the CPU path. Use small synthetic grids for isolated kernels and at least one real PW basis test for FFT ordering. Rationale: the previous formula-helper bug showed that GPU-vs-GPU-mirror tests are insufficient; every stage needs a canonical CPU reference. Progress: scalar/grid/divergence helper tests pass, a gamma-only FFT-box mirror test was added, and debug subdivision now demonstrates real PW-basis `grad_rho` plus resident grid parity at roundoff. A formal full `v_xc` unit/integration test is still needed.
+- [x] Build layered correctness tests from kernels to full `v_xc`.
+  Add deterministic tests for scalar XC, GPU `grad_rho`, resident grid evaluation, GPU `grad_dot`, and full resident `v_xc` against the CPU path. Use small synthetic grids for isolated kernels and at least one real PW basis test for FFT ordering. Rationale: the previous formula-helper bug showed that GPU-vs-GPU-mirror tests are insufficient; every stage needs a canonical CPU reference. Progress: scalar/grid/divergence helper tests pass, a gamma-only FFT-box mirror test was added, debug subdivision demonstrated real PW-basis `grad_rho` plus resident grid parity at roundoff, and a compact full `XC_Functional::v_xc` fixture now covers the resident dispatch boundary with real `Charge` device density.
 
 - [x] Validate Si256 numerics and performance with toggles.
   Run Si256 with `ABACUS_XC_GPU=0`, current partial GPU path, and full resident GPU path. Compare final energy, pressure, max force component drift, SCF convergence, `PotXC cal_veff`, `XC_Functional v_xc`, `gradcorr_grad_rho`, `gradcorr_eval_grid`, `gradcorr_grad_dot`, and Nsight inactive time. Rationale: the goal is not a fast isolated kernel; it is reducing the repeated XC inactive gaps in the benchmark.
@@ -155,3 +155,9 @@ Si256 validation after cleanup:
 Remaining follow-up:
 
 - The resident path still performs one final device-to-host copy because `XC_Functional::v_xc` returns a host `ModuleBase::matrix`. Moving the `PotXC`/effective-potential boundary fully onto the device remains the next residency improvement.
+- A compact automated full-interface fixture now covers the resident `XC_Functional::v_xc` dispatch boundary for LSDA spin:
+  - Test: `XCResidentOpTest.FullVxcLdaSpinResidentGpuMatchesCpu`
+  - It creates a real `Charge` object with GPU density buffers, syncs host real-space spin density to device, toggles `ABACUS_XC_GPU`, calls `XC_Functional::v_xc(..., "cpu")` and `XC_Functional::v_xc(..., "gpu")`, and compares `etxc`, `vtxc`, and the two-row potential matrix.
+  - The CUDA XC suite now also includes `XCResidentOpTest.ChargeRealspaceDensitySyncIsNoopOnCpuDevice`.
+  - Fresh result: `./build-test-cuda/source/source_hamilt/module_xc/kernels/test/MODULE_HAMILT_XC_Functional_UTs` passes 18 tests outside the sandbox with GPU access.
+- The full-interface fixture intentionally targets LSDA spin rather than PBE/PBEsol because the compact PBE resident path depends on a fully initialized GPU PW FFT basis. PBE/PBEsol full-path coverage remains through runtime smoke/profile validation plus focused stage tests.

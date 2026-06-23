@@ -167,6 +167,7 @@ void ElecStatePW<T, Device>::psiToRho(const psi::Psi<T, Device>& psi)
         }
     }
     this->parallelK();
+    this->charge->sync_realspace_density_to_device();
     ModuleBase::timer::end("ElecStatePW", "psiToRho");
 }
 

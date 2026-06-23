@@ -269,6 +269,8 @@ void Charge::init_rho(const UnitCell& ucell,
 				PARAM.inp.nbands, nspin, PARAM.globalv.npol,
 				kv->get_nkstot(),kv->ik2iktot,kv->isk,GlobalV::ofs_running);
     }
+
+    this->sync_realspace_density_to_device();
 }
 
 //==========================================================

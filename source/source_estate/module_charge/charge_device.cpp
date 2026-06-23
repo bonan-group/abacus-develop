@@ -273,3 +273,18 @@ void Charge::sync_rhog_save_to_host<base_device::DEVICE_GPU>()
 }
 
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+
+void Charge::sync_realspace_density_to_device()
+{
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+    if (device_ != "gpu")
+    {
+        return;
+    }
+    this->sync_rho_to_device<base_device::DEVICE_GPU>();
+    if (kin_r_d_ != nullptr)
+    {
+        this->sync_kin_r_to_device<base_device::DEVICE_GPU>();
+    }
+#endif
+}

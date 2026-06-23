@@ -103,6 +103,8 @@ void module_charge::chgmixing_ks(const int iter, // scf iteration number
     MPI_Bcast(chr.rho[0], nrxx, MPI_DOUBLE, 0, BP_WORLD);
 #endif
 
+    chr.sync_realspace_density_to_device();
+
     // mohan move the following code here, 2025-10-18
     // SCF restart information
     if (PARAM.inp.mixing_restart > 0

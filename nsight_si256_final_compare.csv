@@ -1,0 +1,6 @@
+label,path,total_s,potxc_cal_veff_s,xc_functional_v_xc_s,xc_resident_gpu_s,forces_cal_force_scc_s,forces_cal_force_s,inactive_gap_s,largest_gap_s,cuda_utilization_percent,gap_count,gpu_util_avg_percent,gpu_util_max_percent
+baseline_omp1,nsight_si256_results_20260622-105747/si256_dav_subspace_fixed,30.34,2.98,2.97,,,5.91,13.217067265,4.933525112,55.87825503437364,27,44.59154929577465,100.0
+baseline_omp8,nsight_si256_omp8_results_20260622-110604/si256_dav_subspace_fixed_omp8,25.66,0.93,0.92,,,5.81,8.625857856,4.741145668,65.89131599046496,25,54.42622950819672,100.0
+xc_fallback_omp1,nsight_si256_xc_clean_off_build_20260623,46.49,14.3,14.25,,,5.93,21.596008871,1.826373815,53.179288286968415,57,43.513513513513516,100.0
+xc_resident_final_omp1,nsight_si256_final_omp1,33.7,0.94,0.89,0.75,,5.97,8.122823432,0.974973508,75.5998865281085,69,57.95294117647059,100.0
+xc_resident_final_omp8,nsight_si256_final_omp8,30.71,0.91,0.86,0.74,,5.85,5.050072406,0.67958829,83.35245288848084,62,67.56756756756756,100.0

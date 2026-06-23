@@ -103,6 +103,8 @@ class Charge
 
     void renormalize_rho();
 
+    void sync_realspace_density_to_device();
+
     double sum_rho() const;
 
     void save_rho_before_sum_band();
