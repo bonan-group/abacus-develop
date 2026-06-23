@@ -650,6 +650,58 @@ TEST_F(KlistTest, FinalizeExxFullQMapNormalizesRepresentativeWeights)
     EXPECT_EQ(kv->exx_full_q_map[1].rep_local_index, 0);
 }
 
+TEST_F(KlistTest, FinalizeExxFullQMapNormalizesSpinPolarizedWeights)
+{
+    kv->nspin = 2;
+    kv->set_nkstot(2);
+    kv->set_nkstot_full(3);
+    kv->set_nks(2);
+    kv->wk = {0.2, 0.8};
+    kv->para_k.nks_pool = {2};
+
+    K_Vectors::ExxFullPoint point0;
+    point0.full_index = 0;
+    point0.rep_index = 0;
+    point0.rep_local_index = 0;
+    point0.weight = 0.25;
+
+    K_Vectors::ExxFullPoint point1 = point0;
+    point1.full_index = 1;
+    point1.weight = 0.75;
+
+    K_Vectors::ExxFullPoint point2 = point0;
+    point2.full_index = 2;
+    point2.rep_index = 1;
+    point2.rep_local_index = 1;
+    point2.weight = 0.5;
+
+    kv->exx_full_q_map = {point0, point1, point2};
+    kv->exx_full_k_map = {point0, point1, point2};
+    kv->normalize_exx_full_q_map_weights();
+    kv->finalize_exx_full_q_map();
+
+    EXPECT_NEAR(kv->exx_full_q_map[0].weight, 0.05, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[1].weight, 0.15, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[2].weight, 0.8, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[0].weight, 0.05, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[1].weight, 0.15, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[2].weight, 0.8, 1e-12);
+}
+
+TEST_F(KlistTest, ExxRepSpinIndexUsesPoolLocalSpinBlocks)
+{
+    kv->nspin = 2;
+    kv->set_nks(6);
+    kv->para_k.nks_pool = {3};
+
+    K_Vectors::ExxFullPoint point;
+    point.rep_pool = 0;
+    point.rep_local_index = 2;
+
+    EXPECT_EQ(kv->exx_rep_spin_index(point, 0), 2);
+    EXPECT_EQ(kv->exx_rep_spin_index(point, 1), 5);
+}
+
 TEST_F(KlistTest, ReadKpointsWarning1)
 {
     std::string k_file = "arbitrary_1";

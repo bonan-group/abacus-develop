@@ -44,6 +44,31 @@ TEST_F(TestModuleHamiltExxQState, conjugate_gather_and_scatter_cpu)
     EXPECT_EQ(out[3], complexd(3.0, -3.0));
 }
 
+TEST_F(TestModuleHamiltExxQState, gather_and_scatter_cpu_support_float_maps)
+{
+    using complexf = std::complex<float>;
+    using gather_float_cpu_op = hamilt::exx_gather_recip_op<complexf, base_device::DEVICE_CPU>;
+    using scatter_float_cpu_op = hamilt::exx_scatter_add_recip_op<complexf, base_device::DEVICE_CPU>;
+
+    const std::vector<complexf> in = {{1.0f, -1.0f}, {2.0f, 0.5f}, {-3.0f, 2.0f}};
+    const std::vector<int> gather_map = {1, -1, 2, 0};
+    std::vector<complexf> gathered(gather_map.size(), {9.0f, 9.0f});
+    gather_float_cpu_op()(in.data(), gathered.data(), gather_map.data(), gather_map.size());
+
+    EXPECT_EQ(gathered[0], complexf(2.0f, 0.5f));
+    EXPECT_EQ(gathered[1], complexf(0.0f, 0.0f));
+    EXPECT_EQ(gathered[2], complexf(-3.0f, 2.0f));
+    EXPECT_EQ(gathered[3], complexf(1.0f, -1.0f));
+
+    const std::vector<int> scatter_map = {2, -1, 0, 1};
+    std::vector<complexf> out(3, {0.25f, -0.25f});
+    scatter_float_cpu_op()(gathered.data(), out.data(), scatter_map.data(), scatter_map.size(), complexf(-0.5f, 0.25f));
+
+    EXPECT_EQ(out[0], complexf(1.25f, -2.0f));
+    EXPECT_EQ(out[1], complexf(0.0f, 0.5f));
+    EXPECT_EQ(out[2], complexf(-0.875f, 0.0f));
+}
+
 TEST_F(TestModuleHamiltExxQState, batch_elementwise_cpu_matches_scalar_calls)
 {
     const int npw = 3;
