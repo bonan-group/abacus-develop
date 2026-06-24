@@ -701,6 +701,165 @@ __global__ void xc_gradcorr_pbe_spin_grid_resident_kernel(const int nrxx,
 }
 
 template <typename FPTYPE>
+__global__ void xc_gradcorr_pbe_stress_kernel(const int nrxx,
+                                              const int iflag,
+                                              const FPTYPE e2,
+                                              const FPTYPE epsr,
+                                              const FPTYPE* rho,
+                                              const FPTYPE* gdr,
+                                              FPTYPE* stress)
+{
+    __shared__ FPTYPE block_stress[6 * THREADS_PER_BLOCK];
+    FPTYPE local_stress[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+    const int tid = threadIdx.x;
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir < nrxx)
+    {
+        const FPTYPE arho = fabs(rho[ir]);
+        const FPTYPE gx = gdr[3 * ir + 0];
+        const FPTYPE gy = gdr[3 * ir + 1];
+        const FPTYPE gz = gdr[3 * ir + 2];
+        const FPTYPE grho = gx * gx + gy * gy + gz * gz;
+
+        if (arho > epsr && grho >= static_cast<FPTYPE>(1.0e-10))
+        {
+            FPTYPE sx = 0.0;
+            FPTYPE v1x = 0.0;
+            FPTYPE v2x = 0.0;
+            FPTYPE sc = 0.0;
+            FPTYPE v1c = 0.0;
+            FPTYPE v2c = 0.0;
+            xc_pbex(arho, grho, iflag, sx, v1x, v2x);
+            xc_pbec(arho, grho, iflag == 2 ? 1 : iflag, sc, v1c, v2c);
+
+            const FPTYPE factor = e2 * (v2x + v2c);
+            local_stress[0] = gx * gx * factor;
+            local_stress[1] = gy * gx * factor;
+            local_stress[2] = gy * gy * factor;
+            local_stress[3] = gz * gx * factor;
+            local_stress[4] = gz * gy * factor;
+            local_stress[5] = gz * gz * factor;
+        }
+    }
+
+    for (int i = 0; i < 6; ++i)
+    {
+        block_stress[i * blockDim.x + tid] = local_stress[i];
+    }
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            for (int i = 0; i < 6; ++i)
+            {
+                block_stress[i * blockDim.x + tid] += block_stress[i * blockDim.x + tid + stride];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid < 6)
+    {
+        const int stress_index[6] = {0, 3, 4, 6, 7, 8};
+        atomicAdd(stress + stress_index[tid], block_stress[tid * blockDim.x]);
+    }
+}
+
+template <typename FPTYPE>
+__global__ void xc_gradcorr_pbe_spin_stress_kernel(const int nrxx,
+                                                   const int iflag,
+                                                   const FPTYPE e2,
+                                                   const FPTYPE epsr,
+                                                   const FPTYPE* rho_up,
+                                                   const FPTYPE* rho_dw,
+                                                   const FPTYPE* gdr_up,
+                                                   const FPTYPE* gdr_dw,
+                                                   FPTYPE* stress)
+{
+    __shared__ FPTYPE block_stress[6 * THREADS_PER_BLOCK];
+    FPTYPE local_stress[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+    const int tid = threadIdx.x;
+    const int ir = threadIdx.x + blockIdx.x * blockDim.x;
+    if (ir < nrxx)
+    {
+        const FPTYPE rhoup = rho_up[ir];
+        const FPTYPE rhodw = rho_dw[ir];
+        const FPTYPE rh = rhoup + rhodw;
+        const FPTYPE gxup = gdr_up[3 * ir + 0];
+        const FPTYPE gyup = gdr_up[3 * ir + 1];
+        const FPTYPE gzup = gdr_up[3 * ir + 2];
+        const FPTYPE gxdw = gdr_dw[3 * ir + 0];
+        const FPTYPE gydw = gdr_dw[3 * ir + 1];
+        const FPTYPE gzdw = gdr_dw[3 * ir + 2];
+        const FPTYPE grho2up = gxup * gxup + gyup * gyup + gzup * gzup;
+        const FPTYPE grho2dw = gxdw * gxdw + gydw * gydw + gzdw * gzdw;
+
+        FPTYPE sx = 0.0;
+        FPTYPE sc = 0.0;
+        FPTYPE v1xup = 0.0;
+        FPTYPE v1xdw = 0.0;
+        FPTYPE v2xup = 0.0;
+        FPTYPE v2xdw = 0.0;
+        FPTYPE v1cup = 0.0;
+        FPTYPE v1cdw = 0.0;
+        FPTYPE v2c = 0.0;
+        xc_gcx_pbe_spin(rhoup, rhodw, grho2up, grho2dw, iflag, sx, v1xup, v1xdw, v2xup, v2xdw);
+        if (rh > epsr)
+        {
+            FPTYPE zeta = (rhoup - rhodw) / rh;
+            const FPTYPE grh2 = (gxup + gxdw) * (gxup + gxdw) + (gyup + gydw) * (gyup + gydw)
+                                + (gzup + gzdw) * (gzup + gzdw);
+            xc_gcc_pbe_spin(rh, zeta, grh2, iflag, sc, v1cup, v1cdw, v2c);
+        }
+
+        const FPTYPE grad_up[3] = {gxup, gyup, gzup};
+        const FPTYPE grad_dw[3] = {gxdw, gydw, gzdw};
+        int index = 0;
+        for (int l = 0; l < 3; ++l)
+        {
+            for (int m = 0; m <= l; ++m)
+            {
+                const FPTYPE exchange = grad_up[l] * grad_up[m] * e2 * v2xup
+                                        + grad_dw[l] * grad_dw[m] * e2 * v2xdw;
+                const FPTYPE correlation = (grad_up[l] * grad_up[m] * v2c
+                                            + grad_dw[l] * grad_dw[m] * v2c
+                                            + (grad_up[l] * grad_dw[m] + grad_dw[l] * grad_up[m]) * v2c)
+                                           * e2;
+                local_stress[index++] = exchange + correlation;
+            }
+        }
+    }
+
+    for (int i = 0; i < 6; ++i)
+    {
+        block_stress[i * blockDim.x + tid] = local_stress[i];
+    }
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            for (int i = 0; i < 6; ++i)
+            {
+                block_stress[i * blockDim.x + tid] += block_stress[i * blockDim.x + tid + stride];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid < 6)
+    {
+        const int stress_index[6] = {0, 3, 4, 6, 7, 8};
+        atomicAdd(stress + stress_index[tid], block_stress[tid * blockDim.x]);
+    }
+}
+
+template <typename FPTYPE>
 __global__ void xc_apply_dh_kernel(const int nrxx,
                                    const FPTYPE* rho,
                                    const FPTYPE* rho_core,
@@ -716,6 +875,16 @@ __global__ void xc_apply_dh_kernel(const int nrxx,
 
     v[ir] -= dh[ir];
     atomicAdd(sum, -dh[ir] * (rho[ir] - rho_core[ir]));
+}
+
+template <typename FPTYPE>
+__global__ void xc_add_potential_kernel(const int size, const FPTYPE* src, FPTYPE* dst)
+{
+    const int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < size)
+    {
+        dst[i] += src[i];
+    }
 }
 
 template <typename FPTYPE>
@@ -997,6 +1166,41 @@ void xc_gradcorr_pbe_spin_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>::ope
 }
 
 template <typename FPTYPE>
+void xc_gradcorr_pbe_stress_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                            const int nrxx,
+                                                                            const int iflag,
+                                                                            const FPTYPE e2,
+                                                                            const FPTYPE epsr,
+                                                                            const FPTYPE* rho,
+                                                                            const FPTYPE* gdr,
+                                                                            FPTYPE* stress)
+{
+    cudaMemset(stress, 0, 9 * sizeof(FPTYPE));
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_gradcorr_pbe_stress_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(nrxx, iflag, e2, epsr, rho, gdr, stress);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_gradcorr_pbe_spin_stress_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                                 const int nrxx,
+                                                                                 const int iflag,
+                                                                                 const FPTYPE e2,
+                                                                                 const FPTYPE epsr,
+                                                                                 const FPTYPE* rho_up,
+                                                                                 const FPTYPE* rho_dw,
+                                                                                 const FPTYPE* gdr_up,
+                                                                                 const FPTYPE* gdr_dw,
+                                                                                 FPTYPE* stress)
+{
+    cudaMemset(stress, 0, 9 * sizeof(FPTYPE));
+    const int block = (nrxx + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_gradcorr_pbe_spin_stress_kernel<FPTYPE>
+        <<<block, THREADS_PER_BLOCK>>>(nrxx, iflag, e2, epsr, rho_up, rho_dw, gdr_up, gdr_dw, stress);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
 void xc_apply_dh_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
                                                                  const int nrxx,
                                                                  const FPTYPE* rho,
@@ -1011,6 +1215,17 @@ void xc_apply_dh_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_devi
     xc_apply_dh_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(nrxx, rho, rho_core, dh, v, sum);
     CHECK_CUDA_SYNC();
     cudaMemcpy(vtxc_delta, sum, sizeof(FPTYPE), cudaMemcpyDeviceToHost);
+    CHECK_CUDA_SYNC();
+}
+
+template <typename FPTYPE>
+void xc_add_potential_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_device::DEVICE_GPU* ctx,
+                                                                      const int size,
+                                                                      const FPTYPE* src,
+                                                                      FPTYPE* dst)
+{
+    const int block = (size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    xc_add_potential_kernel<FPTYPE><<<block, THREADS_PER_BLOCK>>>(size, src, dst);
     CHECK_CUDA_SYNC();
 }
 
@@ -1135,8 +1350,14 @@ template struct xc_gradcorr_pbe_grid_resident_op<float, base_device::DEVICE_GPU>
 template struct xc_gradcorr_pbe_grid_resident_op<double, base_device::DEVICE_GPU>;
 template struct xc_gradcorr_pbe_spin_grid_resident_op<float, base_device::DEVICE_GPU>;
 template struct xc_gradcorr_pbe_spin_grid_resident_op<double, base_device::DEVICE_GPU>;
+template struct xc_gradcorr_pbe_stress_op<float, base_device::DEVICE_GPU>;
+template struct xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_GPU>;
+template struct xc_gradcorr_pbe_spin_stress_op<float, base_device::DEVICE_GPU>;
+template struct xc_gradcorr_pbe_spin_stress_op<double, base_device::DEVICE_GPU>;
 template struct xc_apply_dh_op<float, base_device::DEVICE_GPU>;
 template struct xc_apply_dh_op<double, base_device::DEVICE_GPU>;
+template struct xc_add_potential_op<float, base_device::DEVICE_GPU>;
+template struct xc_add_potential_op<double, base_device::DEVICE_GPU>;
 template struct xc_apply_dh_spin_op<float, base_device::DEVICE_GPU>;
 template struct xc_apply_dh_spin_op<double, base_device::DEVICE_GPU>;
 template struct xc_noncolin_rho_op<float, base_device::DEVICE_GPU>;

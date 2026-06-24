@@ -288,3 +288,8 @@ void Charge::sync_realspace_density_to_device()
     }
 #endif
 }
+
+void Charge::sync_realspace_density_to_device() const
+{
+    const_cast<Charge*>(this)->sync_realspace_density_to_device();
+}

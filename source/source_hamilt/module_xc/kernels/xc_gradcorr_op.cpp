@@ -675,6 +675,125 @@ void xc_gradcorr_pbe_spin_grid_resident_op<FPTYPE, Device>::operator()(const Dev
 }
 
 template <typename FPTYPE, typename Device>
+void xc_gradcorr_pbe_stress_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                           const int nrxx,
+                                                           const int iflag,
+                                                           const FPTYPE e2,
+                                                           const FPTYPE epsr,
+                                                           const FPTYPE* rho,
+                                                           const FPTYPE* gdr,
+                                                           FPTYPE* stress)
+{
+    for (int i = 0; i < 9; ++i)
+    {
+        stress[i] = 0.0;
+    }
+
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        const FPTYPE arho = std::abs(rho[ir]);
+        if (arho <= epsr)
+        {
+            continue;
+        }
+
+        const FPTYPE gx = gdr[3 * ir + 0];
+        const FPTYPE gy = gdr[3 * ir + 1];
+        const FPTYPE gz = gdr[3 * ir + 2];
+        const FPTYPE grho = gx * gx + gy * gy + gz * gz;
+        if (grho < static_cast<FPTYPE>(1.0e-10))
+        {
+            continue;
+        }
+
+        FPTYPE sx = 0.0;
+        FPTYPE v1x = 0.0;
+        FPTYPE v2x = 0.0;
+        FPTYPE sc = 0.0;
+        FPTYPE v1c = 0.0;
+        FPTYPE v2c = 0.0;
+        xc_pbex(arho, grho, iflag, sx, v1x, v2x);
+        xc_pbec(arho, grho, iflag == 2 ? 1 : iflag, sc, v1c, v2c);
+
+        const FPTYPE grad[3] = {gx, gy, gz};
+        const FPTYPE v2xc = v2x + v2c;
+        for (int l = 0; l < 3; ++l)
+        {
+            for (int m = 0; m <= l; ++m)
+            {
+                stress[l * 3 + m] += grad[l] * grad[m] * e2 * v2xc;
+            }
+        }
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_gradcorr_pbe_spin_stress_op<FPTYPE, Device>::operator()(const Device* ctx,
+                                                                const int nrxx,
+                                                                const int iflag,
+                                                                const FPTYPE e2,
+                                                                const FPTYPE epsr,
+                                                                const FPTYPE* rho_up,
+                                                                const FPTYPE* rho_dw,
+                                                                const FPTYPE* gdr_up,
+                                                                const FPTYPE* gdr_dw,
+                                                                FPTYPE* stress)
+{
+    for (int i = 0; i < 9; ++i)
+    {
+        stress[i] = 0.0;
+    }
+
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        const FPTYPE rhoup = rho_up[ir];
+        const FPTYPE rhodw = rho_dw[ir];
+        const FPTYPE rh = rhoup + rhodw;
+        const FPTYPE gxup = gdr_up[3 * ir + 0];
+        const FPTYPE gyup = gdr_up[3 * ir + 1];
+        const FPTYPE gzup = gdr_up[3 * ir + 2];
+        const FPTYPE gxdw = gdr_dw[3 * ir + 0];
+        const FPTYPE gydw = gdr_dw[3 * ir + 1];
+        const FPTYPE gzdw = gdr_dw[3 * ir + 2];
+        const FPTYPE grho2up = gxup * gxup + gyup * gyup + gzup * gzup;
+        const FPTYPE grho2dw = gxdw * gxdw + gydw * gydw + gzdw * gzdw;
+
+        FPTYPE sx = 0.0;
+        FPTYPE sc = 0.0;
+        FPTYPE v1xup = 0.0;
+        FPTYPE v1xdw = 0.0;
+        FPTYPE v2xup = 0.0;
+        FPTYPE v2xdw = 0.0;
+        FPTYPE v1cup = 0.0;
+        FPTYPE v1cdw = 0.0;
+        FPTYPE v2c = 0.0;
+        xc_gcx_pbe_spin(rhoup, rhodw, grho2up, grho2dw, iflag, sx, v1xup, v1xdw, v2xup, v2xdw);
+        if (rh > epsr)
+        {
+            FPTYPE zeta = (rhoup - rhodw) / rh;
+            const FPTYPE grh2 = (gxup + gxdw) * (gxup + gxdw) + (gyup + gydw) * (gyup + gydw)
+                                + (gzup + gzdw) * (gzup + gzdw);
+            xc_gcc_pbe_spin(rh, zeta, grh2, iflag, sc, v1cup, v1cdw, v2c);
+        }
+
+        const FPTYPE grad_up[3] = {gxup, gyup, gzup};
+        const FPTYPE grad_dw[3] = {gxdw, gydw, gzdw};
+        for (int l = 0; l < 3; ++l)
+        {
+            for (int m = 0; m <= l; ++m)
+            {
+                stress[l * 3 + m] += grad_up[l] * grad_up[m] * e2 * v2xup
+                                     + grad_dw[l] * grad_dw[m] * e2 * v2xdw;
+                stress[l * 3 + m] += (grad_up[l] * grad_up[m] * v2c
+                                      + grad_dw[l] * grad_dw[m] * v2c
+                                      + (grad_up[l] * grad_dw[m] + grad_dw[l] * grad_up[m]) * v2c)
+                                     * e2;
+            }
+        }
+    }
+}
+
+template <typename FPTYPE, typename Device>
 void xc_apply_dh_op<FPTYPE, Device>::operator()(const Device* ctx,
                                                 const int nrxx,
                                                 const FPTYPE* rho,
@@ -688,6 +807,15 @@ void xc_apply_dh_op<FPTYPE, Device>::operator()(const Device* ctx,
     {
         v[ir] -= dh[ir];
         *vtxc_delta -= dh[ir] * (rho[ir] - rho_core[ir]);
+    }
+}
+
+template <typename FPTYPE, typename Device>
+void xc_add_potential_op<FPTYPE, Device>::operator()(const Device* ctx, const int size, const FPTYPE* src, FPTYPE* dst)
+{
+    for (int i = 0; i < size; ++i)
+    {
+        dst[i] += src[i];
     }
 }
 
@@ -833,8 +961,14 @@ template struct xc_gradcorr_pbe_grid_resident_op<float, base_device::DEVICE_CPU>
 template struct xc_gradcorr_pbe_grid_resident_op<double, base_device::DEVICE_CPU>;
 template struct xc_gradcorr_pbe_spin_grid_resident_op<float, base_device::DEVICE_CPU>;
 template struct xc_gradcorr_pbe_spin_grid_resident_op<double, base_device::DEVICE_CPU>;
+template struct xc_gradcorr_pbe_stress_op<float, base_device::DEVICE_CPU>;
+template struct xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_CPU>;
+template struct xc_gradcorr_pbe_spin_stress_op<float, base_device::DEVICE_CPU>;
+template struct xc_gradcorr_pbe_spin_stress_op<double, base_device::DEVICE_CPU>;
 template struct xc_apply_dh_op<float, base_device::DEVICE_CPU>;
 template struct xc_apply_dh_op<double, base_device::DEVICE_CPU>;
+template struct xc_add_potential_op<float, base_device::DEVICE_CPU>;
+template struct xc_add_potential_op<double, base_device::DEVICE_CPU>;
 template struct xc_apply_dh_spin_op<float, base_device::DEVICE_CPU>;
 template struct xc_apply_dh_spin_op<double, base_device::DEVICE_CPU>;
 template struct xc_noncolin_rho_op<float, base_device::DEVICE_CPU>;

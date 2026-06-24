@@ -109,6 +109,7 @@ TYPED_TEST_SUITE(XC_FunctionalOpTest, base::utils::ComplexTypes);
 TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
 {
     using XC_Functional_GPU::xc_gpu_policy;
+    using XC_Functional_GPU::xc_gpu_stress_policy;
 
     EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PBE"));
     EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PZ"));
@@ -118,6 +119,14 @@ TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
     EXPECT_FALSE(xc_gpu_policy(true, true, 1, "PBE"));
     EXPECT_FALSE(xc_gpu_policy(true, false, 2, "PBE"));
     EXPECT_FALSE(xc_gpu_policy(true, false, 1, "SCAN"));
+
+    EXPECT_TRUE(xc_gpu_stress_policy(true, false, 1, "PBE"));
+    EXPECT_TRUE(xc_gpu_stress_policy(true, false, 2, "pbesol"));
+    EXPECT_FALSE(xc_gpu_stress_policy(false, false, 1, "PBE"));
+    EXPECT_FALSE(xc_gpu_stress_policy(true, true, 1, "PBE"));
+    EXPECT_FALSE(xc_gpu_stress_policy(true, false, 4, "PBE"));
+    EXPECT_FALSE(xc_gpu_stress_policy(true, false, 1, "LDA"));
+    EXPECT_FALSE(xc_gpu_stress_policy(true, false, 1, "SCAN"));
 }
 
 TEST(XCGradcorrOpTest, PbeGridCpuMatchesBuiltinReferenceValues)
@@ -691,6 +700,223 @@ TEST(XCResidentOpTest, GridGpuAccumulatesIntoResidentPotential)
     delmem_double_op()(d_v);
     delmem_double_op()(d_h);
     delmem_double_op()(d_sums);
+}
+
+TEST(XCResidentOpTest, StressPbeGpuMatchesCpu)
+{
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const int nrxx = 6;
+    const int iflag = 0;
+    const double e2 = 2.0;
+    const double epsr = 1.0e-6;
+    const std::vector<double> rho_total = {0.020, 0.0255, 0.032, 0.0475, 0.055, 0.065};
+    const std::vector<double> gdr = {0.011, 0.017, 0.019, -0.009, 0.021, 0.013,
+                                     0.015, -0.014, 0.026, 0.010, -0.018, 0.022,
+                                     -0.020, 0.012, 0.016, 0.024, 0.019, -0.011};
+
+    std::vector<double> ref_stress(9, 0.0);
+    xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                 nrxx,
+                                                                 iflag,
+                                                                 e2,
+                                                                 epsr,
+                                                                 rho_total.data(),
+                                                                 gdr.data(),
+                                                                 ref_stress.data());
+
+    double* d_rho_total = nullptr;
+    double* d_gdr = nullptr;
+    double* d_stress = nullptr;
+    resmem_double_op()(d_rho_total, nrxx);
+    resmem_double_op()(d_gdr, 3 * nrxx);
+    resmem_double_op()(d_stress, 9);
+    syncmem_h2d_op()(d_rho_total, rho_total.data(), nrxx);
+    syncmem_h2d_op()(d_gdr, gdr.data(), 3 * nrxx);
+
+    xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                 nrxx,
+                                                                 iflag,
+                                                                 e2,
+                                                                 epsr,
+                                                                 d_rho_total,
+                                                                 d_gdr,
+                                                                 d_stress);
+
+    std::vector<double> stress(9, 0.0);
+    syncmem_d2h_op()(stress.data(), d_stress, 9);
+    for (int i = 0; i < 9; ++i)
+    {
+        EXPECT_NEAR(stress[i], ref_stress[i], 1.0e-11);
+    }
+
+    delmem_double_op()(d_rho_total);
+    delmem_double_op()(d_gdr);
+    delmem_double_op()(d_stress);
+}
+
+TEST(XCResidentOpTest, StressPbesolGpuMatchesCpu)
+{
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const int nrxx = 6;
+    const int iflag = 2;
+    const double e2 = 2.0;
+    const double epsr = 1.0e-6;
+    const std::vector<double> rho_total = {0.020, 0.0255, 0.032, 0.0475, 0.055, 0.065};
+    const std::vector<double> gdr = {0.011, 0.017, 0.019, -0.009, 0.021, 0.013,
+                                     0.015, -0.014, 0.026, 0.010, -0.018, 0.022,
+                                     -0.020, 0.012, 0.016, 0.024, 0.019, -0.011};
+
+    std::vector<double> ref_stress(9, 0.0);
+    xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                 nrxx,
+                                                                 iflag,
+                                                                 e2,
+                                                                 epsr,
+                                                                 rho_total.data(),
+                                                                 gdr.data(),
+                                                                 ref_stress.data());
+
+    double* d_rho_total = nullptr;
+    double* d_gdr = nullptr;
+    double* d_stress = nullptr;
+    resmem_double_op()(d_rho_total, nrxx);
+    resmem_double_op()(d_gdr, 3 * nrxx);
+    resmem_double_op()(d_stress, 9);
+    syncmem_h2d_op()(d_rho_total, rho_total.data(), nrxx);
+    syncmem_h2d_op()(d_gdr, gdr.data(), 3 * nrxx);
+
+    xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                 nrxx,
+                                                                 iflag,
+                                                                 e2,
+                                                                 epsr,
+                                                                 d_rho_total,
+                                                                 d_gdr,
+                                                                 d_stress);
+
+    std::vector<double> stress(9, 0.0);
+    syncmem_d2h_op()(stress.data(), d_stress, 9);
+    for (int i = 0; i < 9; ++i)
+    {
+        EXPECT_NEAR(stress[i], ref_stress[i], 1.0e-11);
+    }
+
+    delmem_double_op()(d_rho_total);
+    delmem_double_op()(d_gdr);
+    delmem_double_op()(d_stress);
+}
+
+TEST(XCResidentOpTest, StressSpinPbeGpuMatchesCpu)
+{
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const int nrxx = 5;
+    const double e2 = 2.0;
+    const double epsr = 1.0e-6;
+    const std::vector<double> rho_up_total = {0.018, 0.024, 0.031, 0.045, 0.052};
+    const std::vector<double> rho_dw_total = {0.011, 0.019, 0.010, 0.026, 0.040};
+    const std::vector<double> gdr_up = {0.011, 0.017, 0.019, -0.009, 0.021, 0.013,
+                                        0.015, -0.014, 0.026, 0.010, -0.018, 0.022,
+                                        -0.020, 0.012, 0.016};
+    const std::vector<double> gdr_dw = {-0.010, 0.013, 0.016, 0.018, -0.012, 0.017,
+                                        0.014, 0.011, -0.019, -0.015, 0.016, 0.020,
+                                        0.013, -0.017, 0.012};
+
+    double* d_rho_up_total = nullptr;
+    double* d_rho_dw_total = nullptr;
+    double* d_gdr_up = nullptr;
+    double* d_gdr_dw = nullptr;
+    double* d_stress = nullptr;
+    resmem_double_op()(d_rho_up_total, nrxx);
+    resmem_double_op()(d_rho_dw_total, nrxx);
+    resmem_double_op()(d_gdr_up, 3 * nrxx);
+    resmem_double_op()(d_gdr_dw, 3 * nrxx);
+    resmem_double_op()(d_stress, 9);
+    syncmem_h2d_op()(d_rho_up_total, rho_up_total.data(), nrxx);
+    syncmem_h2d_op()(d_rho_dw_total, rho_dw_total.data(), nrxx);
+    syncmem_h2d_op()(d_gdr_up, gdr_up.data(), 3 * nrxx);
+    syncmem_h2d_op()(d_gdr_dw, gdr_dw.data(), 3 * nrxx);
+
+    for (const int iflag: {0, 2})
+    {
+        std::vector<double> ref_stress(9, 0.0);
+        xc_gradcorr_pbe_spin_stress_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                          nrxx,
+                                                                          iflag,
+                                                                          e2,
+                                                                          epsr,
+                                                                          rho_up_total.data(),
+                                                                          rho_dw_total.data(),
+                                                                          gdr_up.data(),
+                                                                          gdr_dw.data(),
+                                                                          ref_stress.data());
+
+        xc_gradcorr_pbe_spin_stress_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                          nrxx,
+                                                                          iflag,
+                                                                          e2,
+                                                                          epsr,
+                                                                          d_rho_up_total,
+                                                                          d_rho_dw_total,
+                                                                          d_gdr_up,
+                                                                          d_gdr_dw,
+                                                                          d_stress);
+
+        std::vector<double> stress(9, 0.0);
+        syncmem_d2h_op()(stress.data(), d_stress, 9);
+        for (int i = 0; i < 9; ++i)
+        {
+            EXPECT_NEAR(stress[i], ref_stress[i], 1.0e-11);
+        }
+    }
+
+    delmem_double_op()(d_rho_up_total);
+    delmem_double_op()(d_rho_dw_total);
+    delmem_double_op()(d_gdr_up);
+    delmem_double_op()(d_gdr_dw);
+    delmem_double_op()(d_stress);
+}
+
+TEST(XCResidentOpTest, AddPotentialGpuAccumulatesIntoDeviceBuffer)
+{
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+
+    const int size = 6;
+    const std::vector<double> src = {0.1, -0.2, 0.3, 0.4, -0.5, 0.6};
+    const std::vector<double> dst0 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+
+    double* d_src = nullptr;
+    double* d_dst = nullptr;
+    resmem_double_op()(d_src, size);
+    resmem_double_op()(d_dst, size);
+    syncmem_h2d_op()(d_src, src.data(), size);
+    syncmem_h2d_op()(d_dst, dst0.data(), size);
+
+    xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, size, d_src, d_dst);
+
+    std::vector<double> dst(size, 0.0);
+    syncmem_d2h_op()(dst.data(), d_dst, size);
+    for (int i = 0; i < size; ++i)
+    {
+        EXPECT_DOUBLE_EQ(dst[i], dst0[i] + src[i]);
+    }
+
+    delmem_double_op()(d_src);
+    delmem_double_op()(d_dst);
 }
 
 TEST(XCResidentOpTest, ChargeRealspaceDensitySyncIsNoopOnCpuDevice)

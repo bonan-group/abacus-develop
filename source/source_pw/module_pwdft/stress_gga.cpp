@@ -3,6 +3,8 @@
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_base/timer.h"
 
+#include <type_traits>
+
 //calculate the GGA stress correction in PW and LCAO
 template <typename FPTYPE, typename Device>
 void Stress_Func<FPTYPE, Device>::stress_gga(const UnitCell& ucell,
@@ -28,7 +30,11 @@ void Stress_Func<FPTYPE, Device>::stress_gga(const UnitCell& ucell,
 	// call gradcorr to evaluate gradient correction to stress
 	// the first three terms are etxc, vtxc and v, which
 	// is not used here, so dummy variables are used.
-    XC_Functional::gradcorr(dum1, dum2, dum3, chr, rho_basis, &ucell, stress_gga, 1);
+    const std::string device = std::is_same<Device, base_device::DEVICE_GPU>::value ? "gpu" : "cpu";
+    if (!XC_Functional::gradcorr_stress_gpu(chr, rho_basis, &ucell, stress_gga, device))
+    {
+        XC_Functional::gradcorr(dum1, dum2, dum3, chr, rho_basis, &ucell, stress_gga, 1);
+    }
 
     for(int l = 0;l< 3;l++)
 	{

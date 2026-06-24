@@ -7,6 +7,7 @@
 #include "source_pw/module_pwdft/structure_factor.h"
 #include "pot_base.h"
 
+#include <string>
 #include <vector>
 
 namespace elecstate
@@ -79,15 +80,18 @@ class Potential : public PotBase
     // interfaces to get values
     ModuleBase::matrix& get_eff_v()
     {
+        this->materialize_eff_v_host();
         return this->v_eff;
     }
     const ModuleBase::matrix& get_eff_v() const
     {
+        this->materialize_eff_v_host();
         return this->v_eff;
     }
 
     double* get_eff_v(int is)
     {
+        this->materialize_eff_v_host();
         if (this->v_eff.nc > 0)
         {
             return &(this->v_eff(is, 0));
@@ -99,6 +103,7 @@ class Potential : public PotBase
     }
     const double* get_eff_v(int is) const
     {
+        this->materialize_eff_v_host();
         if (this->v_eff.nc > 0)
         {
             return &(this->v_eff(is, 0));
@@ -141,11 +146,21 @@ class Potential : public PotBase
 
     ModuleBase::matrix& get_veff_smooth()
     {
+        this->materialize_eff_v_host();
         return this->veff_smooth;
     }
     const ModuleBase::matrix& get_veff_smooth() const
     {
+        this->materialize_eff_v_host();
         return this->veff_smooth;
+    }
+    int get_veff_smooth_nr() const
+    {
+        return this->veff_smooth.nr;
+    }
+    int get_veff_smooth_nc() const
+    {
+        return this->veff_smooth.nc;
     }
 
     ModuleBase::matrix& get_vofk_smooth()
@@ -155,6 +170,14 @@ class Potential : public PotBase
     const ModuleBase::matrix& get_vofk_smooth() const
     {
         return this->vofk_smooth;
+    }
+    int get_vofk_smooth_nr() const
+    {
+        return this->vofk_smooth.nr;
+    }
+    int get_vofk_smooth_nc() const
+    {
+        return this->vofk_smooth.nc;
     }
 
     template <typename FPTYPE>
@@ -192,6 +215,9 @@ class Potential : public PotBase
 
   private:
     void cal_v_eff(const Charge*const chg, const UnitCell*const ucell, ModuleBase::matrix& v_eff) override;
+    bool update_from_charge_resident_gpu(const Charge*const chg, const UnitCell*const ucell);
+    bool supports_resident_gpu_update() const;
+    void materialize_eff_v_host() const;
     void cal_fixed_v(double* vl_pseudo) override;
     // interpolate potential on the smooth mesh if necessary
     void interpolate_vrs();
@@ -199,9 +225,9 @@ class Potential : public PotBase
     void allocate();
 
     std::vector<double> v_eff_fixed;
-    ModuleBase::matrix v_eff;
+    mutable ModuleBase::matrix v_eff;
 
-    ModuleBase::matrix veff_smooth; // used in uspp liuyu 2023-10-12
+    mutable ModuleBase::matrix veff_smooth; // used in uspp liuyu 2023-10-12
     ModuleBase::matrix vofk_smooth; // used in uspp liuyu 2023-10-12
 
     ModuleBase::matrix v_xc; // if PAW is used, vxc must be stored separately
@@ -214,6 +240,7 @@ class Potential : public PotBase
     ModuleBase::matrix vofk_eff;
 
     bool fixed_done = false;
+    mutable bool v_eff_host_stale_ = false;
 
     // gather etxc and vtxc in Potential, will be used in ESolver
     double* etxc_ = nullptr;
@@ -222,6 +249,7 @@ class Potential : public PotBase
     double vl_of_0 = 0.0;
 
     std::vector<PotBase*> components;
+    std::vector<std::string> component_names_;
 
     const UnitCell* ucell_ = nullptr;
     const ModuleBase::matrix* vloc_ = nullptr;

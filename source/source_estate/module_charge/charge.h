@@ -104,6 +104,7 @@ class Charge
     void renormalize_rho();
 
     void sync_realspace_density_to_device();
+    void sync_realspace_density_to_device() const;
 
     double sum_rho() const;
 

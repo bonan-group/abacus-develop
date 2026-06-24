@@ -31,7 +31,8 @@ bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
                                     const std::vector<int>& func_id,
                                     ModuleBase::matrix& v,
                                     double& etxc,
-                                    double& vtxc)
+                                    double& vtxc,
+                                    double* d_v_eff)
 {
     const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
     const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
@@ -92,9 +93,18 @@ bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
                                                                      &vtxc);
 
     ModuleBase::timer::end("XC_Functional", "v_xc_resident_scalar");
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
-    syncmem_double_d2h_op()(v.c, d_v, 2 * nrxx);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
+    if (d_v_eff != nullptr)
+    {
+        ModuleBase::timer::start("XC_Functional", "v_xc_resident_device_add");
+        hamilt::xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, 2 * nrxx, d_v, d_v_eff);
+        ModuleBase::timer::end("XC_Functional", "v_xc_resident_device_add");
+    }
+    else
+    {
+        ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
+        syncmem_double_d2h_op()(v.c, d_v, 2 * nrxx);
+        ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
+    }
 
     cleanup();
     ModuleBase::timer::end("XC_Functional", "v_xc_resident_gpu");
@@ -108,7 +118,8 @@ bool try_v_xc_pbe_resident_gpu(const int nrxx,
                                const std::vector<int>& func_id,
                                ModuleBase::matrix& v,
                                double& etxc,
-                               double& vtxc)
+                               double& vtxc,
+                               double* d_v_eff)
 {
     const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
     const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
@@ -263,9 +274,18 @@ bool try_v_xc_pbe_resident_gpu(const int nrxx,
     vtxc += vtxc_delta;
     ModuleBase::timer::end("XC_Functional", "v_xc_resident_grad_dot");
 
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
-    syncmem_double_d2h_op()(v.c, d_v, nrxx);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
+    if (d_v_eff != nullptr)
+    {
+        ModuleBase::timer::start("XC_Functional", "v_xc_resident_device_add");
+        hamilt::xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, d_v, d_v_eff);
+        ModuleBase::timer::end("XC_Functional", "v_xc_resident_device_add");
+    }
+    else
+    {
+        ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
+        syncmem_double_d2h_op()(v.c, d_v, nrxx);
+        ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
+    }
 
     cleanup();
     ModuleBase::timer::end("XC_Functional", "v_xc_resident_gpu");
@@ -279,7 +299,8 @@ bool try_v_xc_pbe_spin_resident_gpu(const int nrxx,
                                     const std::vector<int>& func_id,
                                     ModuleBase::matrix& v,
                                     double& etxc,
-                                    double& vtxc)
+                                    double& vtxc,
+                                    double* d_v_eff)
 {
     const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
     const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
@@ -460,9 +481,18 @@ bool try_v_xc_pbe_spin_resident_gpu(const int nrxx,
     apply_grad_dot(d_h_dw, d_rho_dw_total, d_v + nrxx);
     ModuleBase::timer::end("XC_Functional", "v_xc_resident_grad_dot");
 
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
-    syncmem_double_d2h_op()(v.c, d_v, 2 * nrxx);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
+    if (d_v_eff != nullptr)
+    {
+        ModuleBase::timer::start("XC_Functional", "v_xc_resident_device_add");
+        hamilt::xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, 2 * nrxx, d_v, d_v_eff);
+        ModuleBase::timer::end("XC_Functional", "v_xc_resident_device_add");
+    }
+    else
+    {
+        ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
+        syncmem_double_d2h_op()(v.c, d_v, 2 * nrxx);
+        ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
+    }
 
     cleanup();
     ModuleBase::timer::end("XC_Functional", "v_xc_resident_gpu");
@@ -516,7 +546,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     double vanishing_charge = 1.0e-10;
 
 #if __CUDA || __UT_USE_CUDA
-    if (try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc))
+    if (try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc, nullptr))
     {
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
@@ -529,7 +559,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
         return std::make_tuple(etxc, vtxc, std::move(v));
     }
 
-    if (try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc))
+    if (try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc, nullptr))
     {
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
@@ -542,7 +572,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
         return std::make_tuple(etxc, vtxc, std::move(v));
     }
 
-    if (try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc))
+    if (try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc, nullptr))
     {
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
@@ -697,4 +727,47 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 
     ModuleBase::timer::end("XC_Functional", "v_xc");
     return std::make_tuple(etxc, vtxc, std::move(v));
+}
+
+bool XC_Functional::add_v_xc_to_device(const int& nrxx,
+                                       const Charge* const chr,
+                                       const UnitCell* ucell,
+                                       const std::string& device,
+                                       double* d_v_eff,
+                                       double& etxc,
+                                       double& vtxc)
+{
+    etxc = 0.0;
+    vtxc = 0.0;
+    if (d_v_eff == nullptr || use_libxc || XC_Functional::get_ked_flag())
+    {
+        return false;
+    }
+
+#if __CUDA || __UT_USE_CUDA
+    ModuleBase::timer::start("XC_Functional", "v_xc_device_add");
+    ModuleBase::matrix unused_v;
+    bool used_resident = try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, func_id, unused_v, etxc, vtxc, d_v_eff);
+    if (!used_resident)
+    {
+        used_resident = try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, func_id, unused_v, etxc, vtxc, d_v_eff);
+    }
+    if (!used_resident)
+    {
+        used_resident = try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, func_id, unused_v, etxc, vtxc, d_v_eff);
+    }
+    if (used_resident)
+    {
+#ifdef __MPI
+        Parallel_Reduce::reduce_pool(etxc);
+        Parallel_Reduce::reduce_pool(vtxc);
+#endif
+        etxc *= ucell->omega / chr->rhopw->nxyz;
+        vtxc *= ucell->omega / chr->rhopw->nxyz;
+    }
+    ModuleBase::timer::end("XC_Functional", "v_xc_device_add");
+    return used_resident;
+#else
+    return false;
+#endif
 }

@@ -148,6 +148,34 @@ struct xc_gradcorr_pbe_spin_grid_resident_op
                     FPTYPE* vtxc);
 };
 
+template <typename FPTYPE, typename Device>
+struct xc_gradcorr_pbe_stress_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    int iflag,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho,
+                    const FPTYPE* gdr,
+                    FPTYPE* stress);
+};
+
+template <typename FPTYPE, typename Device>
+struct xc_gradcorr_pbe_spin_stress_op
+{
+    void operator()(const Device* ctx,
+                    int nrxx,
+                    int iflag,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho_up,
+                    const FPTYPE* rho_dw,
+                    const FPTYPE* gdr_up,
+                    const FPTYPE* gdr_dw,
+                    FPTYPE* stress);
+};
+
 template <typename FPTYPE>
 struct xc_gradcorr_pbe_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>
 {
@@ -187,6 +215,34 @@ struct xc_gradcorr_pbe_spin_grid_resident_op<FPTYPE, base_device::DEVICE_GPU>
                     FPTYPE* vtxc);
 };
 
+template <typename FPTYPE>
+struct xc_gradcorr_pbe_stress_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    int iflag,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho,
+                    const FPTYPE* gdr,
+                    FPTYPE* stress);
+};
+
+template <typename FPTYPE>
+struct xc_gradcorr_pbe_spin_stress_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int nrxx,
+                    int iflag,
+                    FPTYPE e2,
+                    FPTYPE epsr,
+                    const FPTYPE* rho_up,
+                    const FPTYPE* rho_dw,
+                    const FPTYPE* gdr_up,
+                    const FPTYPE* gdr_dw,
+                    FPTYPE* stress);
+};
+
 template <typename FPTYPE, typename Device>
 struct xc_apply_dh_op
 {
@@ -197,6 +253,12 @@ struct xc_apply_dh_op
                     const FPTYPE* dh,
                     FPTYPE* v,
                     FPTYPE* vtxc_delta);
+};
+
+template <typename FPTYPE, typename Device>
+struct xc_add_potential_op
+{
+    void operator()(const Device* ctx, int size, const FPTYPE* src, FPTYPE* dst);
 };
 
 template <typename FPTYPE, typename Device>
@@ -255,6 +317,12 @@ struct xc_apply_dh_op<FPTYPE, base_device::DEVICE_GPU>
                     FPTYPE* v,
                     FPTYPE* sum,
                     FPTYPE* vtxc_delta);
+};
+
+template <typename FPTYPE>
+struct xc_add_potential_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx, int size, const FPTYPE* src, FPTYPE* dst);
 };
 
 template <typename FPTYPE>

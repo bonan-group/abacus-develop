@@ -22,6 +22,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #ifdef USE_LIBXC
 #include "libxc_abacus.h"
@@ -29,6 +30,175 @@
 #include "source_hamilt/module_xc/exx_info.h"
 #endif
 #endif
+
+bool XC_Functional::gradcorr_stress_gpu(const Charge* const chr,
+                                        ModulePW::PW_Basis* rhopw,
+                                        const UnitCell* ucell,
+                                        std::vector<double>& stress_gga,
+                                        const std::string& device)
+{
+#if __CUDA || __UT_USE_CUDA
+    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
+    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
+    const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
+    const std::string xc_name = is_pbesol ? "PBEsol" : "PBE";
+    const int nspin = PARAM.inp.nspin;
+    if (!XC_Functional_GPU::xc_gpu_stress_policy(device == "gpu", !xc_gpu_enabled, nspin, xc_name)
+        || use_libxc || func_type != 2 || !(is_pbe || is_pbesol)
+        || chr == nullptr || rhopw == nullptr || ucell == nullptr || chr->get_device() != "gpu"
+        || rhopw->get_device() != "gpu" || rhopw->poolnproc != 1 || !(nspin == 1 || nspin == 2)
+        || chr->get_rho_d(0) == nullptr || (nspin == 2 && chr->get_rho_d(1) == nullptr))
+    {
+        return false;
+    }
+
+    chr->sync_realspace_density_to_device();
+
+    using complex_t = std::complex<double>;
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using resmem_complex_op = base_device::memory::resize_memory_op<complex_t, base_device::DEVICE_GPU>;
+    using delmem_complex_op = base_device::memory::delete_memory_op<complex_t, base_device::DEVICE_GPU>;
+    using syncmem_double_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_double_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
+    using setmem_double_op = base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>;
+
+    const int nrxx = rhopw->nrxx;
+    const int npw = rhopw->npw;
+    const int iflag = is_pbesol ? 2 : 0;
+    const double e2 = ModuleBase::e2;
+    const double epsr = 1.0e-6;
+
+    double* d_rho_core = nullptr;
+    double* d_rho_total = nullptr;
+    double* d_rho_dw_total = nullptr;
+    double* d_gcar = nullptr;
+    double* d_gdr = nullptr;
+    double* d_gdr_dw = nullptr;
+    double* d_grad_r = nullptr;
+    double* d_dummy_v = nullptr;
+    double* d_sums = nullptr;
+    double* d_stress = nullptr;
+    complex_t* d_rhog_total = nullptr;
+    complex_t* d_grad_g = nullptr;
+
+    const auto cleanup = [&]() {
+        delmem_double_op()(d_rho_core);
+        delmem_double_op()(d_rho_total);
+        delmem_double_op()(d_rho_dw_total);
+        delmem_double_op()(d_gcar);
+        delmem_double_op()(d_gdr);
+        delmem_double_op()(d_gdr_dw);
+        delmem_double_op()(d_grad_r);
+        delmem_double_op()(d_dummy_v);
+        delmem_double_op()(d_sums);
+        delmem_double_op()(d_stress);
+        delmem_complex_op()(d_rhog_total);
+        delmem_complex_op()(d_grad_g);
+    };
+
+    ModuleBase::timer::start("XC_Functional", "gradcorr_stress_gpu");
+
+    std::vector<double> gcar_flat(3 * npw);
+    for (int ig = 0; ig < npw; ++ig)
+    {
+        gcar_flat[3 * ig + 0] = rhopw->gcar[ig].x;
+        gcar_flat[3 * ig + 1] = rhopw->gcar[ig].y;
+        gcar_flat[3 * ig + 2] = rhopw->gcar[ig].z;
+    }
+
+    resmem_double_op()(d_rho_core, nrxx);
+    resmem_double_op()(d_rho_total, nrxx);
+    resmem_double_op()(d_gcar, 3 * npw);
+    resmem_double_op()(d_gdr, 3 * nrxx);
+    resmem_double_op()(d_grad_r, nrxx);
+    resmem_double_op()(d_stress, 9);
+    resmem_complex_op()(d_rhog_total, npw);
+    resmem_complex_op()(d_grad_g, npw);
+    syncmem_double_h2d_op()(d_rho_core, chr->rho_core, nrxx);
+    syncmem_double_h2d_op()(d_gcar, gcar_flat.data(), 3 * npw);
+
+    const auto build_grad = [&](double* d_total, double* d_gdr_out) {
+        rhopw->real_to_recip<double, complex_t, base_device::DEVICE_GPU>(d_total, d_rhog_total);
+        for (int ipol = 0; ipol < 3; ++ipol)
+        {
+            hamilt::xc_multiply_iG_op<double, base_device::DEVICE_GPU>()(
+                nullptr, npw, ipol, d_gcar, d_rhog_total, d_grad_g);
+            setmem_double_op()(d_grad_r, 0, nrxx);
+            rhopw->recip_to_real<complex_t, double, base_device::DEVICE_GPU>(d_grad_g, d_grad_r, true, ucell->tpiba);
+            hamilt::xc_set_component_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, ipol, d_grad_r, d_gdr_out);
+        }
+    };
+
+    if (nspin == 1)
+    {
+        double etxc_dummy = 0.0;
+        double vtxc_dummy = 0.0;
+        resmem_double_op()(d_dummy_v, nrxx);
+        resmem_double_op()(d_sums, 2);
+        hamilt::xc_scalar_pbe_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                    nrxx,
+                                                                    e2,
+                                                                    1.0e-10,
+                                                                    chr->get_rho_d(0),
+                                                                    d_rho_core,
+                                                                    d_rho_total,
+                                                                    d_dummy_v,
+                                                                    d_sums,
+                                                                    &etxc_dummy,
+                                                                    &vtxc_dummy);
+        build_grad(d_rho_total, d_gdr);
+        hamilt::xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_GPU>()(
+            nullptr, nrxx, iflag, e2, epsr, d_rho_total, d_gdr, d_stress);
+    }
+    else
+    {
+        double etxc_dummy = 0.0;
+        double vtxc_dummy = 0.0;
+        resmem_double_op()(d_rho_dw_total, nrxx);
+        resmem_double_op()(d_gdr_dw, 3 * nrxx);
+        resmem_double_op()(d_dummy_v, 2 * nrxx);
+        resmem_double_op()(d_sums, 2);
+        hamilt::xc_scalar_lda_spin_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                         nrxx,
+                                                                         1,
+                                                                         e2,
+                                                                         1.0e-10,
+                                                                         chr->get_rho_d(0),
+                                                                         chr->get_rho_d(1),
+                                                                         d_rho_core,
+                                                                         d_rho_total,
+                                                                         d_rho_dw_total,
+                                                                         d_dummy_v,
+                                                                         d_sums,
+                                                                         &etxc_dummy,
+                                                                         &vtxc_dummy);
+        build_grad(d_rho_total, d_gdr);
+        build_grad(d_rho_dw_total, d_gdr_dw);
+        hamilt::xc_gradcorr_pbe_spin_stress_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                                  nrxx,
+                                                                                  iflag,
+                                                                                  e2,
+                                                                                  epsr,
+                                                                                  d_rho_total,
+                                                                                  d_rho_dw_total,
+                                                                                  d_gdr,
+                                                                                  d_gdr_dw,
+                                                                                  d_stress);
+    }
+
+    stress_gga.assign(9, 0.0);
+    syncmem_double_d2h_op()(stress_gga.data(), d_stress, 9);
+    cleanup();
+    ModuleBase::timer::end("XC_Functional", "gradcorr_stress_gpu");
+    return true;
+#else
+    return false;
+#endif
+}
 
 void XC_Functional::gradcorr(
     double &etxc,

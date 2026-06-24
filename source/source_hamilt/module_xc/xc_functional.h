@@ -54,6 +54,14 @@ class XC_Functional
         const Charge* const chr,
         const UnitCell* ucell,
         const std::string& device); // charge density
+    static bool add_v_xc_to_device(
+        const int& nrxx,
+        const Charge* const chr,
+        const UnitCell* ucell,
+        const std::string& device,
+        double* d_v_eff,
+        double& etxc,
+        double& vtxc);
 
 //-------------------
 //  xc_functional.cpp
@@ -222,6 +230,12 @@ class XC_Functional
         const UnitCell* ucell,
         std::vector<double>& stress_gga,
         const bool is_stress,
+        const std::string& device);
+    static bool gradcorr_stress_gpu(
+        const Charge* const chr,
+        ModulePW::PW_Basis* rhopw,
+        const UnitCell* ucell,
+        std::vector<double>& stress_gga,
         const std::string& device);
     template <typename T, typename Device,
               typename Real = typename GetTypeReal<T>::type>

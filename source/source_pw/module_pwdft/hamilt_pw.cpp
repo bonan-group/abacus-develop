@@ -89,8 +89,8 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
             pot_in->pot_register(pot_register_in);
             Operator<T, Device>* veff = new Veff<OperatorPW<T, Device>>(isk,
                                                                         pot_in->get_veff_smooth_data<Real>(),
-                                                                        pot_in->get_veff_smooth().nr,
-                                                                        pot_in->get_veff_smooth().nc,
+                                                                        pot_in->get_veff_smooth_nr(),
+                                                                        pot_in->get_veff_smooth_nc(),
                                                                         wfc_basis);
             if (this->ops == nullptr)
             {
@@ -103,8 +103,8 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
             Operator<T, Device>* meta = new Meta<OperatorPW<T, Device>>(tpiba,
                                                                         isk,
                                                                         pot_in->get_vofk_smooth_data<Real>(),
-                                                                        pot_in->get_vofk_smooth().nr,
-                                                                        pot_in->get_vofk_smooth().nc,
+                                                                        pot_in->get_vofk_smooth_nr(),
+                                                                        pot_in->get_vofk_smooth_nc(),
                                                                         wfc_basis);
             this->ops->add(meta);
         }

@@ -6,6 +6,7 @@
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
+#include "source_base/module_device/memory_op.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_io/module_parameter/parameter.h"
 #include "pot_ml_exx.h"
@@ -48,6 +49,7 @@ Potential::~Potential()
         }
         this->components.clear();
     }
+    this->component_names_.clear();
     if (use_gpu_)
     {
         delmem_sd_op()(s_veff_smooth);
@@ -74,6 +76,7 @@ void Potential::pot_register(const std::vector<std::string>& components_list)
         }
         this->components.clear();
     }
+    this->component_names_.clear();
 
     // register components
     //---------------------------
@@ -83,6 +86,7 @@ void Potential::pot_register(const std::vector<std::string>& components_list)
     {
         PotBase* tmp = this->get_pot_type(comp);
         this->components.push_back(tmp);
+        this->component_names_.push_back(comp);
     }
 
     // after register, reset fixed_done to false
@@ -139,6 +143,10 @@ void Potential::allocate()
             resmem_dd_op()(d_veff_smooth, nspin * nrxx_smooth);
             resmem_dd_op()(d_vofk_smooth, nspin * nrxx_smooth);
         }
+        else
+        {
+            resmem_dd_op()(d_veff_smooth, nspin * nrxx_smooth);
+        }
     }
     else
     {
@@ -165,6 +173,12 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
     {
         this->cal_fixed_v(this->v_eff_fixed.data());
         this->fixed_done = true;
+        this->v_eff_host_stale_ = false;
+    }
+
+    if (this->update_from_charge_resident_gpu(chg, ucell))
+    {
+        return;
     }
 
     this->cal_v_eff(chg, ucell, this->v_eff);
@@ -177,12 +191,18 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
         if (PARAM.globalv.has_float_data)
         {
             castmem_d2s_h2d_op()(s_veff_smooth, this->veff_smooth.c, this->veff_smooth.nr * this->veff_smooth.nc);
-            castmem_d2s_h2d_op()(s_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
+            if (this->vofk_smooth.nc > 0)
+            {
+                castmem_d2s_h2d_op()(s_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
+            }
         }
         if (PARAM.globalv.has_double_data)
         {
             syncmem_d2d_h2d_op()(d_veff_smooth, this->veff_smooth.c, this->veff_smooth.nr * this->veff_smooth.nc);
-            syncmem_d2d_h2d_op()(d_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
+            if (this->vofk_smooth.nc > 0)
+            {
+                syncmem_d2d_h2d_op()(d_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
+            }
         }
     }
     else
@@ -190,12 +210,117 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
         if (PARAM.globalv.has_float_data)
         {
             castmem_d2s_h2h_op()(s_veff_smooth, this->veff_smooth.c, this->veff_smooth.nr * this->veff_smooth.nc);
-            castmem_d2s_h2h_op()(s_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
+            if (this->vofk_smooth.nc > 0)
+            {
+                castmem_d2s_h2h_op()(s_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
+            }
         }
         // There's no need to synchronize memory for double precision pointers while in a CPU environment
     }
 
     //ModuleBase::timer::end("Potential", "update_from_charge");
+}
+
+bool Potential::supports_resident_gpu_update() const
+{
+    if (!this->use_gpu_ || PARAM.globalv.double_grid || XC_Functional::get_ked_flag()
+        || this->rho_basis_ == nullptr || this->rho_basis_smooth_ == nullptr
+        || this->rho_basis_->nrxx != this->rho_basis_smooth_->nrxx)
+    {
+        return false;
+    }
+
+    bool has_xc = false;
+    for (const std::string& name : this->component_names_)
+    {
+        if (name == "xc")
+        {
+            has_xc = true;
+        }
+        else if (name != "local" && name != "hartree")
+        {
+            return false;
+        }
+    }
+    return has_xc;
+}
+
+bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const UnitCell*const ucell)
+{
+#if __CUDA || __UT_USE_CUDA
+    if (!this->supports_resident_gpu_update() || chg == nullptr || ucell == nullptr || this->d_veff_smooth == nullptr)
+    {
+        return false;
+    }
+
+    const int nspin = this->v_eff.nr;
+    const int nrxx = this->v_eff.nc;
+    if (!(nspin == 1 || nspin == 2) || nrxx <= 0)
+    {
+        return false;
+    }
+
+    ModuleBase::TITLE("Potential", "update_resident_gpu");
+    ModuleBase::timer::start("Potential", "update_resident_gpu");
+
+    this->v_eff.zero_out();
+    this->v_eff_host_stale_ = false;
+    for (int is = 0; is < nspin; ++is)
+    {
+        if (is == 0 || nspin == 2)
+        {
+            ModuleBase::GlobalFunc::COPYARRAY(this->v_eff_fixed.data(), &(this->v_eff(is, 0)), nrxx);
+        }
+    }
+    for (size_t i = 0; i < this->components.size(); ++i)
+    {
+        if (this->component_names_[i] != "xc" && this->components[i]->dynamic_mode)
+        {
+            this->components[i]->cal_v_eff(chg, ucell, this->v_eff);
+        }
+    }
+    this->interpolate_vrs();
+
+    syncmem_d2d_h2d_op()(this->d_veff_smooth, this->veff_smooth.c, nspin * nrxx);
+
+    double etxc = 0.0;
+    double vtxc = 0.0;
+    const bool used_resident_xc = XC_Functional::add_v_xc_to_device(nrxx, chg, ucell, "gpu", this->d_veff_smooth, etxc, vtxc);
+    if (!used_resident_xc)
+    {
+        ModuleBase::timer::end("Potential", "update_resident_gpu");
+        return false;
+    }
+
+    *(this->etxc_) = etxc;
+    *(this->vtxc_) = vtxc;
+    this->v_eff_host_stale_ = true;
+
+    if (PARAM.globalv.has_float_data)
+    {
+        using castmem_d2s_d2d_op
+            = base_device::memory::cast_memory_op<float, double, base_device::DEVICE_GPU, base_device::DEVICE_GPU>;
+        castmem_d2s_d2d_op()(this->s_veff_smooth, this->d_veff_smooth, nspin * nrxx);
+    }
+
+    ModuleBase::timer::end("Potential", "update_resident_gpu");
+    return true;
+#else
+    return false;
+#endif
+}
+
+void Potential::materialize_eff_v_host() const
+{
+    if (!this->v_eff_host_stale_ || this->d_veff_smooth == nullptr || this->v_eff.nc == 0)
+    {
+        return;
+    }
+
+    const int size = this->v_eff.nr * this->v_eff.nc;
+    syncmem_d2d_d2h_op()(this->v_eff.c, this->d_veff_smooth, size);
+    this->veff_smooth = this->v_eff;
+    this->v_eff_host_stale_ = false;
 }
 
 void Potential::cal_fixed_v(double* vl_pseudo)
@@ -224,6 +349,7 @@ void Potential::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Mo
     const int nrxx = this->v_eff.nc;
     // first of all, set v_eff to zero.
     this->v_eff.zero_out();
+    this->v_eff_host_stale_ = false;
 
     // add fixed potential components
     // nspin = 2, add fixed components for all
@@ -232,7 +358,7 @@ void Potential::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Mo
     {
         if (i == 0 || nspin_current == 2)
         {
-            ModuleBase::GlobalFunc::COPYARRAY(this->v_eff_fixed.data(), this->get_eff_v(i), nrxx);
+            ModuleBase::GlobalFunc::COPYARRAY(this->v_eff_fixed.data(), &(this->v_eff(i, 0)), nrxx);
         }
     }
 
@@ -266,9 +392,11 @@ void Potential::get_vnew(const Charge* chg, ModuleBase::matrix& vnew)
 {
     ModuleBase::TITLE("Potential", "get_vnew");
     vnew.create(this->v_eff.nr, this->v_eff.nc);
+    this->materialize_eff_v_host();
     vnew = this->v_eff;
 
     this->update_from_charge(chg, this->ucell_);
+    this->materialize_eff_v_host();
     //(used later for scf correction to the forces )
     for (int iter = 0; iter < vnew.nr * vnew.nc; ++iter)
     {
