@@ -6,7 +6,12 @@
 #include "source_estate/update_pot.h" // use elecstate::update_pot
 #include "source_estate/elecstate_pw.h" // use ElecStatePW
 #include "source_estate/module_charge/charge.h" // use Charge
+#include "source_base/kernels/math_kernel_op.h"
+#include "source_base/parallel_device.h"
 #include <chrono> // for timing
+#include <cmath>
+#include <cstdlib>
+#include <limits>
 
 template <typename T, typename Device>
 void Exx_Helper<T, Device>::init(const UnitCell& ucell, const Input_para& inp, const ModuleBase::matrix& wg)
@@ -125,6 +130,88 @@ double Exx_Helper<T, Device>::cal_exx_energy(void* psi_)
 }
 
 template <typename T, typename Device>
+bool Exx_Helper<T, Device>::cal_exx_hybrid_band_diagonal(void* psi_, std::vector<double>& diagonal_ry)
+{
+    auto* psi_in = static_cast<psi::Psi<T, Device>*>(psi_);
+    if (op_exx == nullptr || psi_in == nullptr || op_exx->first_iter)
+    {
+        return false;
+    }
+
+    const int nk = psi_in->get_nk();
+    const int nbands = psi_in->get_nbands();
+    const int nbasis = psi_in->get_nbasis();
+    diagonal_ry.assign(static_cast<std::size_t>(nk) * nbands, 0.0);
+    const bool band_edges_only = std::getenv("ABACUS_EXCHANGE_SHIFT_BAND_EDGES_ONLY") != nullptr;
+    if (band_edges_only)
+    {
+        diagonal_ry.assign(static_cast<std::size_t>(nk) * nbands, std::numeric_limits<double>::quiet_NaN());
+    }
+
+    using resize_op = base_device::memory::resize_memory_op<T, Device>;
+    using delete_op = base_device::memory::delete_memory_op<T, Device>;
+    using set_op = base_device::memory::set_memory_op<T, Device>;
+    using dot_op = ModuleBase::dot_real_op<T, Device>;
+
+    T* hpsi = nullptr;
+    const int target_nbands = band_edges_only ? 1 : nbands;
+    resize_op()(hpsi, static_cast<std::size_t>(target_nbands) * nbasis);
+
+    for (int ik = 0; ik < nk; ++ik)
+    {
+        psi_in->fix_k(ik);
+        op_exx->init(ik);
+        if (band_edges_only)
+        {
+            int highest_occupied = -1;
+            int lowest_empty = -1;
+            for (int ib = 0; ib < nbands; ++ib)
+            {
+                const double occ = (*wg)(ik, ib);
+                if (occ > 1.0e-8)
+                {
+                    highest_occupied = ib;
+                }
+                else if (lowest_empty < 0)
+                {
+                    lowest_empty = ib;
+                }
+            }
+            for (const int ib : {highest_occupied, lowest_empty})
+            {
+                if (ib < 0 || ib >= nbands)
+                {
+                    continue;
+                }
+                const T* psi_band = psi_in->get_pointer() + static_cast<std::size_t>(ib) * nbasis;
+                set_op()(hpsi, 0, static_cast<std::size_t>(nbasis));
+                op_exx->act(1, nbasis, psi_in->get_npol(), psi_band, hpsi, psi_in->get_current_nbas(), true);
+                diagonal_ry[static_cast<std::size_t>(ik) * nbands + ib] =
+                    dot_op()(psi_in->get_current_nbas(), psi_band, hpsi, false);
+            }
+        }
+        else
+        {
+            set_op()(hpsi, 0, static_cast<std::size_t>(nbands) * nbasis);
+            op_exx->act(nbands, nbasis, psi_in->get_npol(), psi_in->get_pointer(), hpsi, psi_in->get_current_nbas(), true);
+            for (int ib = 0; ib < nbands; ++ib)
+            {
+                const T* psi_band = psi_in->get_pointer() + static_cast<std::size_t>(ib) * nbasis;
+                const T* hpsi_band = hpsi + static_cast<std::size_t>(ib) * nbasis;
+                diagonal_ry[static_cast<std::size_t>(ik) * nbands + ib] =
+                    dot_op()(psi_in->get_current_nbas(), psi_band, hpsi_band, false);
+            }
+        }
+    }
+
+#ifdef __MPI
+    Parallel_Common::reduce_data(diagonal_ry.data(), static_cast<int>(diagonal_ry.size()), POOL_WORLD);
+#endif
+    delete_op()(hpsi);
+    return true;
+}
+
+template <typename T, typename Device>
 bool Exx_Helper<T, Device>::exx_after_converge(int &iter, bool ene_conv)
 {
     if (op_exx->first_iter)
@@ -175,4 +262,3 @@ template class Exx_Helper<std::complex<double>, base_device::DEVICE_CPU>;
 template class Exx_Helper<std::complex<float>, base_device::DEVICE_GPU>;
 template class Exx_Helper<std::complex<double>, base_device::DEVICE_GPU>;
 #endif
-

@@ -34,8 +34,21 @@
 #include "source_pw/module_pwdft/deltaspin_pw.h" // mohan add 20250309
 
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
+#include "source_base/kernels/math_kernel_op.h"
+#include "source_base/parallel_device.h"
+#include "source_pw/module_pwdft/op_pw_veff.h"
+
+#if defined(ENABLE_CIDER) && defined(USE_LIBXC)
+#include "source_estate/module_pot/pot_cider_xc.h"
+#endif
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <string>
+#include <vector>
 
 namespace ModuleESolver
 {
@@ -54,7 +67,7 @@ void setup_training_pbe0_exx_label()
     GlobalC::exx_info.info_global.hybrid_step = 1;
     GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock] = {
         {{"alpha", "1"}}};
-}
+    }
 
 template <typename T, typename Device>
 double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
@@ -104,20 +117,163 @@ double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
         op_exx.set_psi(*psi);
         op_exx.set_wg(wg);
         const double raw_exx = op_exx.cal_exx_energy(psi);
-        const double scaled_exx = GlobalC::exx_info.info_global.hybrid_alpha * raw_exx;
-        if (!std::isfinite(scaled_exx))
+        if (!std::isfinite(raw_exx))
         {
             ModuleBase::WARNING_QUIT("evaluate_training_pbe0_exx_energy",
                                      "one-shot EXX label evaluation produced a non-finite energy");
         }
         restore_exx_state();
-        return scaled_exx;
+        return raw_exx;
     }
     catch (...)
     {
         restore_exx_state();
         throw;
     }
+	}
+
+template <typename T, typename Device>
+std::vector<double> cal_local_potential_band_diagonal(const ModuleBase::matrix& potential,
+                                                      const int* isk,
+                                                      const ModulePW::PW_Basis_K* pw_wfc,
+                                                      psi::Psi<T, Device>* psi_in)
+{
+    using Real = typename GetTypeReal<T>::type;
+    using resize_op = base_device::memory::resize_memory_op<T, Device>;
+    using delete_op = base_device::memory::delete_memory_op<T, Device>;
+    using set_op = base_device::memory::set_memory_op<T, Device>;
+    using dot_op = ModuleBase::dot_real_op<T, Device>;
+
+    const int nk = psi_in->get_nk();
+    const int nbands = psi_in->get_nbands();
+    const int nbasis = psi_in->get_nbasis();
+    std::vector<Real> potential_real(static_cast<std::size_t>(potential.nr) * potential.nc);
+    for (std::size_t i = 0; i < potential_real.size(); ++i)
+    {
+        potential_real[i] = static_cast<Real>(potential.c[i]);
+    }
+
+    hamilt::Veff<hamilt::OperatorPW<T, Device>> veff(isk,
+                                                     potential_real.data(),
+                                                     potential.nr,
+                                                     potential.nc,
+                                                     pw_wfc);
+    std::vector<double> diagonal(static_cast<std::size_t>(nk) * nbands, 0.0);
+    T* hpsi = nullptr;
+    resize_op()(hpsi, static_cast<std::size_t>(nbands) * nbasis);
+
+    for (int ik = 0; ik < nk; ++ik)
+    {
+        psi_in->fix_k(ik);
+        veff.init(ik);
+        set_op()(hpsi, 0, static_cast<std::size_t>(nbands) * nbasis);
+        veff.act(nbands, nbasis, psi_in->get_npol(), psi_in->get_pointer(), hpsi, psi_in->get_current_nbas(), true);
+        for (int ib = 0; ib < nbands; ++ib)
+        {
+            const T* psi_band = psi_in->get_pointer() + static_cast<std::size_t>(ib) * nbasis;
+            const T* hpsi_band = hpsi + static_cast<std::size_t>(ib) * nbasis;
+            diagonal[static_cast<std::size_t>(ik) * nbands + ib] =
+                dot_op()(psi_in->get_current_nbas(), psi_band, hpsi_band, false);
+        }
+    }
+
+#ifdef __MPI
+    Parallel_Common::reduce_data(diagonal.data(), static_cast<int>(diagonal.size()), POOL_WORLD);
+#endif
+    delete_op()(hpsi);
+    return diagonal;
+}
+
+template <typename T, typename Device>
+void maybe_write_exchange_shift_dump(const char* prefix,
+                                     const int istep,
+                                     const int iter,
+                                     const K_Vectors& kv,
+                                     const ModuleBase::matrix& ekb,
+                                     const ModuleBase::matrix& wg,
+                                     const double fermi_ry,
+                                     const double cider_xmix,
+                                     const double exx_hybrid_alpha,
+                                     const std::vector<double>* cider_feature_diag,
+                                     const std::vector<double>* exx_hybrid_diag)
+{
+    if (prefix == nullptr || std::string(prefix).empty())
+    {
+        return;
+    }
+    if (GlobalV::RANK_IN_POOL != 0)
+    {
+        return;
+    }
+
+    char filename[4096];
+    std::snprintf(filename, sizeof(filename), "%s_step%04d_iter%04d.jsonl", prefix, istep, iter);
+    std::ofstream out(filename);
+    if (!out.good())
+    {
+        GlobalV::ofs_warning << "ExchangeShift: failed to open dump " << filename << std::endl;
+        return;
+    }
+    out << std::setprecision(17);
+    out << "{\"kind\":\"metadata\""
+        << ",\"schema\":\"ABACUS_EXCHANGE_SHIFT_JSONL_V1\""
+        << ",\"step\":" << istep
+        << ",\"iter\":" << iter
+        << ",\"nks\":" << kv.get_nks()
+        << ",\"nbands\":" << ekb.nc
+        << ",\"fermi_ry\":" << fermi_ry
+        << ",\"cider_xmix\":" << cider_xmix
+        << ",\"exx_hybrid_alpha\":" << exx_hybrid_alpha
+        << ",\"pbe_x_available\":false"
+        << ",\"cider_feature_available\":" << (cider_feature_diag == nullptr ? "false" : "true")
+        << ",\"exx_hybrid_available\":" << (exx_hybrid_diag == nullptr ? "false" : "true")
+        << "}\n";
+    for (int ik = 0; ik < kv.get_nks(); ++ik)
+    {
+        const int ikglobal = kv.ik2iktot[ik];
+        for (int ib = 0; ib < ekb.nc; ++ib)
+        {
+            const std::size_t idx = static_cast<std::size_t>(ik) * ekb.nc + ib;
+            const bool have_cider = cider_feature_diag != nullptr && std::isfinite((*cider_feature_diag)[idx]);
+            const bool have_exx = exx_hybrid_diag != nullptr && std::isfinite((*exx_hybrid_diag)[idx]);
+            out << "{\"kind\":\"band\""
+                << ",\"ik\":" << ik
+                << ",\"ik_global\":" << ikglobal
+                << ",\"ib\":" << ib
+                << ",\"eigenvalue_ry\":" << ekb(ik, ib)
+                << ",\"occupation\":" << wg(ik, ib)
+                << ",\"pbe_x_ry\":0.0"
+                << ",\"cider_feature_ry\":";
+            if (have_cider)
+            {
+                out << (*cider_feature_diag)[idx];
+            }
+            else
+            {
+                out << "null";
+            }
+            out << ",\"exx_ry\":";
+            if (have_exx)
+            {
+                out << (*exx_hybrid_diag)[idx];
+            }
+            else
+            {
+                out << "null";
+            }
+            out << ",\"exx_hybrid_ry\":";
+            if (have_exx)
+            {
+                out << (*exx_hybrid_diag)[idx];
+            }
+            else
+            {
+                out << "null";
+            }
+            out << "}\n";
+        }
+    }
+    GlobalV::ofs_running << "ExchangeShift: wrote dump " << filename << std::endl;
 }
 
 } // namespace
@@ -312,6 +468,49 @@ void ESolver_KS_PW<T, Device>::hamilt2rho_single(UnitCell& ucell, const int iste
           GlobalV::RANK_IN_POOL, GlobalV::NPROC_IN_POOL, skip_charge, ucell.tpiba, ucell.nat);
     }
 
+    const char* exchange_shift_prefix = std::getenv("ABACUS_EXCHANGE_SHIFT_DUMP_PREFIX");
+    if (exchange_shift_prefix != nullptr && !std::string(exchange_shift_prefix).empty() && !skip_solve)
+    {
+        std::vector<double> cider_feature_diag;
+        std::vector<double>* cider_feature_diag_ptr = nullptr;
+#if defined(ENABLE_CIDER) && defined(USE_LIBXC)
+        if (!PARAM.inp.cider_model.empty())
+        {
+            const ModuleBase::matrix* v_feature = elecstate::PotCiderXC::debug_last_feature_potential();
+            if (v_feature != nullptr)
+            {
+                cider_feature_diag = cal_local_potential_band_diagonal(
+                    *v_feature,
+                    this->kv.isk.data(),
+                    this->pw_wfc,
+                    this->stp.template get_psi_t<T, Device>());
+                cider_feature_diag_ptr = &cider_feature_diag;
+            }
+        }
+#endif
+
+        std::vector<double> exx_hybrid_diag;
+        std::vector<double>* exx_hybrid_diag_ptr = nullptr;
+        if (GlobalC::exx_info.info_global.cal_exx && this->exx_helper != nullptr
+            && this->exx_helper->cal_exx_hybrid_band_diagonal(this->stp.template get_psi_t<T, Device>(), exx_hybrid_diag))
+        {
+            exx_hybrid_diag_ptr = &exx_hybrid_diag;
+        }
+
+        maybe_write_exchange_shift_dump<T, Device>(
+            exchange_shift_prefix,
+            istep,
+            iter,
+            this->kv,
+            this->pelec->ekb,
+            this->pelec->wg,
+            this->pelec->eferm.ef,
+            PARAM.inp.cider_xmix,
+            GlobalC::exx_info.info_global.hybrid_alpha,
+            cider_feature_diag_ptr,
+            exx_hybrid_diag_ptr);
+    }
+
     // symmetrize the charge density
     Symmetry_rho::symmetrize_rho(PARAM.inp.nspin, this->chr, this->pw_rhod, ucell.symm);
 
@@ -373,7 +572,7 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
                                                                               &this->kv,
                                                                               &this->pelec->wg,
                                                                               this->stp.template get_psi_t<T, Device>());
-        GlobalV::ofs_running << "training_pbe0_exx_label: hybrid-scaled EXX energy = "
+        GlobalV::ofs_running << "training_pbe0_exx_label: full EXX energy = "
                              << 0.5 * this->pelec->f_en.exx << " Ha" << std::endl;
         ModuleBase::timer::end("ESolver_KS_PW", "training_pbe0_exx_label");
     }

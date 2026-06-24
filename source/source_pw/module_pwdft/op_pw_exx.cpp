@@ -321,6 +321,10 @@ void OperatorEXXPW<T, Device>::act(const int nbands,
                                    const bool is_first_node) const
 {
     if (first_iter) return;
+    if (!is_first_node && std::getenv("ABACUS_EXCHANGE_SHIFT_SKIP_EXX_IN_HAMILTONIAN") != nullptr)
+    {
+        return;
+    }
     // std::cout << cal_exx_energy_ace(&psi) << " EXX energy" << std::endl;
     // MPI_Abort(MPI_COMM_WORLD, 0);
     // return;

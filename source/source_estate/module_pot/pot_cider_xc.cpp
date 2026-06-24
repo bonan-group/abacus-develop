@@ -31,6 +31,9 @@ constexpr double CIDER_BRIDGE_MGGA_RHO_THRESHOLD = 1.0e-8;
 constexpr double CIDER_BRIDGE_MGGA_GRHO_THRESHOLD = 1.0e-12;
 constexpr double CIDER_BRIDGE_MGGA_TAU_THRESHOLD = 1.0e-8;
 
+ModuleBase::matrix g_last_cider_feature_v;
+bool g_last_cider_feature_v_valid = false;
+
 void log_same_density_xc_comparison(
     const Charge* const chg,
     const UnitCell* const ucell,
@@ -489,6 +492,11 @@ double integrate_role_exc(
 namespace elecstate
 {
 
+const ModuleBase::matrix* PotCiderXC::debug_last_feature_potential()
+{
+    return g_last_cider_feature_v_valid ? &g_last_cider_feature_v : nullptr;
+}
+
 PotCiderXC::PotCiderXC(
     const ModulePW::PW_Basis* rho_basis_in,
     const UnitCell* ucell_in,
@@ -832,6 +840,8 @@ void PotCiderXC::cal_v_eff(
     ModuleBase::matrix v_bridge = std::get<1>(vtxc_v_baseline);
     const ModuleBase::matrix& v_baseline = std::get<1>(vtxc_v_baseline);
     const ModuleBase::matrix& v_feature = std::get<1>(vtxc_v_feature);
+    g_last_cider_feature_v = v_feature;
+    g_last_cider_feature_v_valid = true;
     for (int is = 0; is < v_bridge.nr; ++is) {
         for (int ir = 0; ir < v_bridge.nc; ++ir) {
             v_bridge(is, ir) += v_feature(is, ir);

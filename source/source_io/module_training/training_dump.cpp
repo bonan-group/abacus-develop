@@ -573,8 +573,8 @@ void write_training_dump(const UnitCell& ucell,
     js << "    \"energy_evaluated\": true,\n";
     js << "    \"energy_source\": \"one_shot_pbe0_full_range_exx_on_pbe_state\",\n";
     js << "    \"energy_Ha\": " << ry_to_ha(elec.f_en.exx) << ",\n";
-    js << "    \"raw_exx_energy_available\": false,\n";
-    js << "    \"hybrid_scaled\": true,\n";
+    js << "    \"raw_exx_energy_available\": true,\n";
+    js << "    \"hybrid_scaled\": false,\n";
     js << "    \"hybrid_alpha\": 0.25,\n";
     js << "    \"range\": \"full\",\n";
     js << "    \"screening\": \"none\",\n";

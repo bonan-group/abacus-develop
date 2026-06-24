@@ -2,6 +2,7 @@
 #define EXX_HELPER_BASE_H
 
 #include "source_base/matrix.h"
+#include <vector>
 
 class Charge;
 class UnitCell;
@@ -31,6 +32,8 @@ class Exx_HelperBase
     virtual bool exx_after_converge(int& iter, bool ene_conv) = 0;
 
     virtual double cal_exx_energy(void* psi) = 0;
+
+    virtual bool cal_exx_hybrid_band_diagonal(void* psi, std::vector<double>& diagonal_ry) = 0;
 
     virtual bool get_op_first_iter() const = 0;
     virtual void set_op_first_iter(bool flag) = 0;

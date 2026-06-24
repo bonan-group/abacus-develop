@@ -24,6 +24,8 @@ class PotCiderXC : public PotBase
                    const UnitCell* const ucell,
                    ModuleBase::matrix& v_eff) override;
 
+    static const ModuleBase::matrix* debug_last_feature_potential();
+
   private:
     cider_bridge_ctx* ctx_ = nullptr;
     double* etxc_ = nullptr;

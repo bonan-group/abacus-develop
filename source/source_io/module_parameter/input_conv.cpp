@@ -38,6 +38,7 @@
 
 #include "source_base/module_device/device.h"
 #include "source_base/timer.h"
+#include <cstdlib>
 #include "source_estate/elecstate_lcao.h"
 #include "source_estate/module_pot/efield.h"
 #include "source_estate/module_pot/gatefield.h"
@@ -470,9 +471,15 @@ void Input_Conv::Convert()
         }
         if (GlobalC::exx_info.info_global.cal_exx)
         {
-            ModuleBase::WARNING_QUIT(
+            if (std::getenv("ABACUS_CIDER_ALLOW_NATIVE_EXX_DEBUG") == nullptr)
+            {
+                ModuleBase::WARNING_QUIT(
+                    "Input_Conv",
+                    "Do not combine cider_model with native hybrid/EXX dft_functional settings");
+            }
+            ModuleBase::WARNING(
                 "Input_Conv",
-                "Do not combine cider_model with native hybrid/EXX dft_functional settings");
+                "Combining cider_model with native hybrid/EXX because ABACUS_CIDER_ALLOW_NATIVE_EXX_DEBUG is set");
         }
         if (cider_model_requests_ked(PARAM.inp.cider_model))
         {
