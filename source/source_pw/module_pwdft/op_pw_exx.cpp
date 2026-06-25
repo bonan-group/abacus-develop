@@ -31,6 +31,10 @@
 #include <type_traits>
 #include <utility>
 
+#if defined(__CUDA)
+#include <cuda_runtime.h>
+#endif
+
 #if defined(__ROCM) && !defined(__CUDA)
 #error "PW EXX q-tile GPU implementation is not implemented for ROCm in this merge."
 #endif
@@ -70,6 +74,18 @@ bool consecutive_integers(const int* arr, std::size_t size)
     }
     return true;
 }
+
+#if defined(__CUDA)
+void clear_stale_cuda_error(const char* where)
+{
+    const cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess && GlobalV::MY_RANK == 0)
+    {
+        GlobalV::ofs_warning << where << ": clearing stale CUDA error before PW EXX: "
+                             << cudaGetErrorString(status) << " (" << static_cast<int>(status) << ")" << std::endl;
+    }
+}
+#endif
 }
 
 template <typename T, typename Device>
@@ -1736,6 +1752,12 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     ModuleBase::timer::start("OperatorEXXPW", "cal_exx_energy_qtile");
 
     const bool is_cpu = std::is_same<Device, base_device::DEVICE_CPU>::value;
+#if defined(__CUDA)
+    if (!is_cpu)
+    {
+        clear_stale_cuda_error("OperatorEXXPW::cal_exx_energy_op_qtile");
+    }
+#endif
     if (!is_cpu && GlobalV::KPAR > 1)
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
