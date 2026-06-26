@@ -15,6 +15,7 @@
 #include "source_relax/lattice_change_basic.h"
 
 #include <algorithm>
+#include <cctype>
 
 #ifdef __EXX
 #include "source_lcao/module_ri/exx_abfs-jle.h"
@@ -171,6 +172,26 @@ bool cider_model_requests_ked(const std::string& model_path)
     std::string upper = model_path;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
     return upper.find("MGGA") != std::string::npos;
+}
+
+void normalize_cider_feature_density()
+{
+    std::string policy = PARAM.inp.cider_feature_density;
+    std::transform(policy.begin(), policy.end(), policy.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (policy == "total")
+    {
+        ModuleBase::GlobalFunc::OUT(
+            GlobalV::ofs_running,
+            "cider_feature_density=total is deprecated; using valence_pseudo_core");
+        return;
+    }
+    if (policy != "auto" && policy != "valence" && policy != "valence_pseudo_core")
+    {
+        ModuleBase::WARNING_QUIT(
+            "Input_Conv",
+            "cider_feature_density must be auto, valence, or valence_pseudo_core");
+    }
 }
 }
 
@@ -451,6 +472,7 @@ void Input_Conv::Convert()
 
     if (!PARAM.inp.cider_model.empty())
     {
+        normalize_cider_feature_density();
         if (PARAM.inp.basis_type != "pw")
         {
             ModuleBase::WARNING_QUIT(

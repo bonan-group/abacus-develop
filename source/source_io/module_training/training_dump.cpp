@@ -356,7 +356,7 @@ void write_training_dump(const UnitCell& ucell,
     if (dft_functional_lower != "pbe")
     {
         ModuleBase::WARNING_QUIT("write_training_dump",
-                                 "out_training_data currently requires dft_functional = PBE for the PBE-base EXX label workflow");
+                                 "out_training_data currently requires dft_functional = PBE for the PBE-base training workflow");
     }
     if (PARAM.inp.nspin != 1 && PARAM.inp.nspin != 2)
     {
@@ -504,6 +504,7 @@ void write_training_dump(const UnitCell& ucell,
         write_npy(dump_dir + "/kspin_k.npy", {static_cast<unsigned long>(nks)}, kspins(elec));
     }
 
+    const bool exx_label_present = PARAM.inp.out_exx_label;
     std::ofstream js((dump_dir + "/record.json").c_str());
     if (!js)
     {
@@ -514,7 +515,10 @@ void write_training_dump(const UnitCell& ucell,
     js << "  \"schema_name\": \"abacus_pw_nldx_training_dump\",\n";
     js << "  \"schema_version\": 2,\n";
     js << "  \"record_kind\": \"pbe_base_state\",\n";
-    js << "  \"label_mode\": \"pbe_base_state_one_shot_pbe0_exx_label\",\n";
+    js << "  \"label_mode\": "
+       << json_string(exx_label_present ? "pbe_base_state_one_shot_pbe0_exx_label"
+                                        : "pbe_base_state_density_only")
+       << ",\n";
     js << "  \"energy_unit\": \"Ha\",\n";
     js << "  \"length_unit\": \"Bohr\",\n";
     js << "  \"density_unit\": \"Bohr^-3\",\n";
@@ -525,8 +529,9 @@ void write_training_dump(const UnitCell& ucell,
     js << "  \"pseudo_type_required\": \"ncp\",\n";
     js << "  \"parallel_policy\": \"kpar_1_bndpar_1_required\",\n";
     js << "  \"source_state\": \"self_consistent_pbe_base\",\n";
-    js << "  \"exx_energy_evaluated\": true,\n";
-    js << "  \"exx_energy_source\": \"one_shot_pbe0_full_range_exx_on_pbe_state\",\n";
+    js << "  \"exx_energy_evaluated\": " << (exx_label_present ? "true" : "false") << ",\n";
+    js << "  \"exx_energy_source\": "
+       << (exx_label_present ? json_string("one_shot_pbe0_full_range_exx_on_pbe_state") : "null") << ",\n";
     js << "  \"nspin\": " << nspin << ",\n";
     js << "  \"nsigma\": " << nsigma << ",\n";
     js << "  \"nbands\": " << elec.ekb.nc << ",\n";
@@ -552,6 +557,13 @@ void write_training_dump(const UnitCell& ucell,
     js << "  \"cider_model\": " << json_string(PARAM.inp.cider_model) << ",\n";
     js << "  \"cider_xmix\": " << PARAM.inp.cider_xmix << ",\n";
     js << "  \"cider_tf_tau\": " << (PARAM.inp.cider_tf_tau ? "true" : "false") << ",\n";
+    js << "  \"cider_feature_density_input\": " << json_string(PARAM.inp.cider_feature_density) << ",\n";
+    js << "  \"feature_density_policy_default\": \"valence\",\n";
+    js << "  \"feature_density_policy_available\": [\"valence\", \"valence_pseudo_core\"],\n";
+    js << "  \"feature_density_roles\": {\n";
+    js << "    \"valence\": {\"rho\": \"rho_valence_sg\", \"sigma\": \"sigma_valence_xg\", \"tau\": \"tau_valence_sg\"},\n";
+    js << "    \"valence_pseudo_core\": {\"rho\": \"rho_sg\", \"sigma\": \"sigma_xg\", \"tau\": \"tau_sg\"}\n";
+    js << "  },\n";
     js << "  \"tau_present\": " << (!tau.empty() ? "true" : "false") << ",\n";
     js << "  \"efermi_Ha\": " << ry_to_ha(elec.eferm.ef) << ",\n";
     js << "  \"vbm_Ha\": " << ry_to_ha(vbm) << ",\n";
@@ -568,18 +580,26 @@ void write_training_dump(const UnitCell& ucell,
     js << "    \"local_pp\": " << ry_to_ha(elec.f_en.e_local_pp) << "\n";
     js << "  },\n";
     js << "  \"exx_label\": {\n";
-    js << "    \"present\": true,\n";
-    js << "    \"definition\": \"one-shot PBE0 full-range EXX energy evaluated on the converged PBE density and plane-wave wavefunctions\",\n";
-    js << "    \"energy_evaluated\": true,\n";
-    js << "    \"energy_source\": \"one_shot_pbe0_full_range_exx_on_pbe_state\",\n";
-    js << "    \"energy_Ha\": " << ry_to_ha(elec.f_en.exx) << ",\n";
-    js << "    \"raw_exx_energy_available\": true,\n";
-    js << "    \"hybrid_scaled\": false,\n";
-    js << "    \"hybrid_alpha\": 0.25,\n";
-    js << "    \"range\": \"full\",\n";
-    js << "    \"screening\": \"none\",\n";
-    js << "    \"base_state\": \"pbe_scf_density_and_pw_wavefunctions\",\n";
-    js << "    \"self_consistent_hybrid_required\": false\n";
+    if (exx_label_present)
+    {
+        js << "    \"present\": true,\n";
+        js << "    \"definition\": \"one-shot PBE0 full-range EXX energy evaluated on the converged PBE density and plane-wave wavefunctions\",\n";
+        js << "    \"energy_evaluated\": true,\n";
+        js << "    \"energy_source\": \"one_shot_pbe0_full_range_exx_on_pbe_state\",\n";
+        js << "    \"energy_Ha\": " << ry_to_ha(elec.f_en.exx) << ",\n";
+        js << "    \"raw_exx_energy_available\": true,\n";
+        js << "    \"hybrid_scaled\": false,\n";
+        js << "    \"hybrid_alpha\": 0.25,\n";
+        js << "    \"range\": \"full\",\n";
+        js << "    \"screening\": \"none\",\n";
+        js << "    \"base_state\": \"pbe_scf_density_and_pw_wavefunctions\",\n";
+        js << "    \"self_consistent_hybrid_required\": false\n";
+    }
+    else
+    {
+        js << "    \"present\": false,\n";
+        js << "    \"energy_evaluated\": false\n";
+    }
     js << "  },\n";
     js << "  \"arrays\": {\n";
     js << "    \"rho_valence_sg\": \"rho_valence_sg.npy\",\n";

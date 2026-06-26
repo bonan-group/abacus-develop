@@ -12,6 +12,7 @@
 #include "source_io/module_parameter/parameter.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +34,26 @@ constexpr double CIDER_BRIDGE_MGGA_TAU_THRESHOLD = 1.0e-8;
 
 ModuleBase::matrix g_last_cider_feature_v;
 bool g_last_cider_feature_v_valid = false;
+
+std::string canonical_cider_feature_density(std::string policy)
+{
+    std::transform(policy.begin(), policy.end(), policy.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (policy == "total") {
+        return "valence_pseudo_core";
+    }
+    return policy;
+}
+
+bool cider_features_use_pseudo_core(const std::string& policy)
+{
+    return policy == "valence_pseudo_core";
+}
+
+double cider_feature_policy_code(const std::string& policy)
+{
+    return cider_features_use_pseudo_core(policy) ? 1.0 : 0.0;
+}
 
 void log_same_density_xc_comparison(
     const Charge* const chg,
@@ -364,6 +385,7 @@ void maybe_write_abacus_cider_debug_dump(
     const std::size_t nrxx,
     const double grid_weight,
     const double xmix,
+    const double feature_density_policy_code,
     const std::vector<double>& rho_baseline_sm,
     const std::vector<double>& sigma_baseline_sm,
     const std::vector<double>& tau_baseline_sm,
@@ -409,7 +431,7 @@ void maybe_write_abacus_cider_debug_dump(
 
     const char magic[8] = {'A', 'C', 'D', 'D', 'U', 'M', 'P', '1'};
     out.write(magic, sizeof(magic));
-    const std::uint32_t version = 1;
+    const std::uint32_t version = 2;
     out.write(reinterpret_cast<const char*>(&version), sizeof(version));
     const std::uint32_t nspin_u = static_cast<std::uint32_t>(nspin);
     const std::uint32_t nsigma_u = static_cast<std::uint32_t>(nsigma);
@@ -419,6 +441,7 @@ void maybe_write_abacus_cider_debug_dump(
     out.write(reinterpret_cast<const char*>(&nrxx_u), sizeof(nrxx_u));
     out.write(reinterpret_cast<const char*>(&grid_weight), sizeof(grid_weight));
     out.write(reinterpret_cast<const char*>(&xmix), sizeof(xmix));
+    out.write(reinterpret_cast<const char*>(&feature_density_policy_code), sizeof(feature_density_policy_code));
     out.write(reinterpret_cast<const char*>(&etxc_baseline_ry), sizeof(etxc_baseline_ry));
     out.write(reinterpret_cast<const char*>(&etxc_feature_ry), sizeof(etxc_feature_ry));
     out.write(reinterpret_cast<const char*>(&vtxc_baseline_ry), sizeof(vtxc_baseline_ry));
@@ -528,10 +551,15 @@ PotCiderXC::PotCiderXC(
         ModuleBase::WARNING_QUIT("PotCiderXC", "cider_model path is empty");
     }
 
+    const std::string raw_feature_density = PARAM.inp.cider_feature_density;
+    const std::string requested_feature_density =
+        canonical_cider_feature_density(raw_feature_density);
+
     GlobalV::ofs_running
         << "PotCiderXC: constructing bridge-owned XC context"
         << " model=" << model_path
         << " xmix=" << PARAM.inp.cider_xmix
+        << " requested_feature_density=" << requested_feature_density
         << " nspin=" << PARAM.inp.nspin
         << " grid=(" << N_c[0] << "," << N_c[1] << "," << N_c[2] << ")"
         << std::endl;
@@ -542,9 +570,30 @@ PotCiderXC::PotCiderXC(
         ModuleBase::WARNING_QUIT("PotCiderXC", "Failed to create CIDER bridge context");
     }
     is_mgga_ = cider_bridge_is_mgga(ctx_);
+    const std::string model_expected_policy =
+        cider_bridge_feature_density_policy_expected(ctx_);
+    const std::string model_policy_source =
+        cider_bridge_feature_density_policy_source(ctx_);
+    if (requested_feature_density == "auto") {
+        feature_density_policy_ =
+            model_expected_policy.empty() ? "valence" : model_expected_policy;
+    } else {
+        feature_density_policy_ = requested_feature_density;
+        if (!model_expected_policy.empty()
+            && model_expected_policy != feature_density_policy_) {
+            ModuleBase::WARNING_QUIT(
+                "PotCiderXC",
+                "cider_feature_density conflicts with loaded CIDER model metadata");
+        }
+    }
     GlobalV::ofs_running
         << "PotCiderXC: bridge context ready"
         << " is_mgga=" << (is_mgga_ ? "true" : "false")
+        << " feature_density=" << feature_density_policy_
+        << " model_expected_feature_density="
+        << (model_expected_policy.empty() ? "<unset>" : model_expected_policy)
+        << " model_feature_density_source="
+        << (model_policy_source.empty() ? "<unset>" : model_policy_source)
         << std::endl;
 }
 
@@ -590,7 +639,10 @@ void PotCiderXC::cal_v_eff(
 
     // === 1. Build role-specific densities in ABACUS interleaved layout ===
     // Baseline XC follows the normal NLCC path: valence + pseudo-core.
-    // CIDER ML exchange features follow the training density: valence-only.
+    // CIDER ML exchange features are selectable: valence for new ABACUS
+    // models, or valence plus NLCC pseudo-core for legacy CIDER23x models.
+    const bool feature_uses_pseudo_core =
+        cider_features_use_pseudo_core(feature_density_policy_);
     std::vector<double> rho_baseline_interleaved(nrxx * nspin);
     std::vector<double> rho_feature_interleaved(nrxx * nspin);
 #ifdef _OPENMP
@@ -599,9 +651,11 @@ void PotCiderXC::cal_v_eff(
     for (int is = 0; is < nspin; ++is) {
         for (std::size_t ir = 0; ir < nrxx; ++ir) {
             const double rho_valence = chg->rho[is][ir];
-            rho_feature_interleaved[ir * nspin + is] = rho_valence;
-            rho_baseline_interleaved[ir * nspin + is] =
+            const double rho_baseline =
                 rho_valence + chg->rho_core[ir] / static_cast<double>(nspin);
+            rho_baseline_interleaved[ir * nspin + is] = rho_baseline;
+            rho_feature_interleaved[ir * nspin + is] =
+                feature_uses_pseudo_core ? rho_baseline : rho_valence;
         }
     }
 
@@ -632,8 +686,9 @@ void PotCiderXC::cal_v_eff(
                     const double rho_cps = std::max(chg->rho_core[ir] / nspin, 0.0);
                     tau_baseline += TF_FACTOR * std::pow(rho_cps, 5.0 / 3.0);
                 }
-                tau_feature_interleaved[ir * nspin + is] = tau_valence;
                 tau_baseline_interleaved[ir * nspin + is] = tau_baseline;
+                tau_feature_interleaved[ir * nspin + is] =
+                    feature_uses_pseudo_core ? tau_baseline : tau_valence;
             }
         }
     }
@@ -642,9 +697,15 @@ void PotCiderXC::cal_v_eff(
     if (!density_policy_logged) {
         GlobalV::ofs_running
             << "PotCiderXC: dual-density policy"
+            << " raw_feature_density=" << PARAM.inp.cider_feature_density
+            << " resolved_feature_density=" << feature_density_policy_
             << " baseline_rho_sigma=valence_plus_core"
-            << " feature_rho_sigma=valence_only"
-            << " tau_feature=valence_only"
+            << " feature_rho_sigma="
+            << (feature_uses_pseudo_core ? "valence_plus_core" : "valence_only")
+            << " tau_feature="
+            << (feature_uses_pseudo_core
+                    ? (PARAM.inp.cider_tf_tau ? "valence_plus_tf_core" : "valence_only")
+                    : "valence_only")
             << " tau_baseline="
             << (PARAM.inp.cider_tf_tau ? "valence_plus_tf_core" : "valence_only")
             << std::endl;
@@ -868,6 +929,7 @@ void PotCiderXC::cal_v_eff(
         nrxx,
         grid_weight,
         PARAM.inp.cider_xmix,
+        cider_feature_policy_code(feature_density_policy_),
         rho_baseline_sm,
         sigma_baseline_sm,
         tau_baseline_sm,

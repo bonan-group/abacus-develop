@@ -6,6 +6,8 @@
 #include "pot_base.h"
 #include "cider_bridge.h"
 
+#include <string>
+
 namespace elecstate
 {
 
@@ -33,6 +35,7 @@ class PotCiderXC : public PotBase
     ModuleBase::matrix* vofk_ = nullptr;
     bool is_mgga_ = false;
     int nspin_ = 1;
+    std::string feature_density_policy_ = "valence";
 };
 
 } // namespace elecstate

@@ -261,6 +261,7 @@ struct Input_para
     std::string cider_model = "";   ///< Path to CIDER model file (.yaml or .joblib)
     double cider_xmix = 0.25;       ///< Exchange mixing parameter for CIDER
     bool cider_tf_tau = false;      ///< Add TF core tau for CIDER MGGA functionals
+    std::string cider_feature_density = "auto"; ///< CIDER feature density: auto, valence, or valence_pseudo_core
 
     // ==============   #Parameters (7.stochastic DFT) ===========================
     int method_sto = 2;        ///< different methods for sdft, 1: slow, less memory 2:
@@ -387,6 +388,7 @@ struct Input_para
     std::vector<int> out_xc_r = {-1, 3};  ///< output xc(r). -1: no; >=0: output the order of xc(r)
     std::vector<int> out_pot = {0, 8};    ///< output potential
     bool out_training_data = false;        ///< output PW NLDX/CIDER training data dump
+    bool out_exx_label = false;            ///< evaluate and output PW EXX label in training data dump
     int out_wfc_pw = 0;                   ///< 0: no; 1: txt; 2: dat
     std::vector<int> out_band = {0, 8};   ///< band calculation pengfei 2014-10-13
     int out_dos = 0;                      ///< dos calculation. mohan add 20090909

@@ -276,7 +276,7 @@ In molecular dynamics calculations, the output frequency is controlled by out_fr
         item.annotation = "output PW NLDX/CIDER training data";
         item.category = "Output information";
         item.type = "Boolean";
-        item.description = R"(Whether to output a PW training-data record for NLDX/CIDER model development. The record is written under OUT.${suffix}/training_dump and contains JSON metadata plus NumPy arrays for the real-space density ingredients, ABACUS/CIDER-compatible sigma, optional tau, eigenvalues, occupations, and k-point metadata. For PBE base-state training runs, ABACUS evaluates a one-shot PBE0 full-range EXX energy label on the converged PBE density and plane-wave wavefunctions; this does not require a fully self-consistent PBE0 run.)";
+        item.description = R"(Whether to output a PW training-data record for NLDX/CIDER model development. The record is written under OUT.${suffix}/training_dump and contains JSON metadata plus NumPy arrays for the real-space density ingredients, ABACUS/CIDER-compatible sigma, optional tau, eigenvalues, occupations, and k-point metadata. Use out_exx_label to additionally evaluate and write the one-shot PBE0 full-range EXX energy label.)";
         item.default_value = "False";
         item.unit = "";
         item.availability = "Plane wave basis with Libxc";
@@ -296,7 +296,7 @@ In molecular dynamics calculations, the output frequency is controlled by out_fr
                 if (dft_functional_lower != "pbe")
                 {
                     ModuleBase::WARNING_QUIT("ReadInput",
-                                             "out_training_data currently requires dft_functional = PBE for the PBE-base EXX label workflow");
+                                             "out_training_data currently requires dft_functional = PBE for the PBE-base training workflow");
                 }
 #ifndef USE_LIBXC
                 ModuleBase::WARNING_QUIT("ReadInput", "out_training_data requires Libxc");
@@ -313,6 +313,24 @@ In molecular dynamics calculations, the output frequency is controlled by out_fr
                 {
                     ModuleBase::WARNING_QUIT("ReadInput", "out_training_data currently requires bndpar = 1");
                 }
+            }
+        };
+        this->add_item(item);
+    }
+    {
+        Input_Item item("out_exx_label");
+        item.annotation = "output one-shot PBE0 EXX label in PW training data";
+        item.category = "Output information";
+        item.type = "Boolean";
+        item.description = R"(Whether to evaluate and write a one-shot PBE0 full-range EXX energy label on the converged PBE density and plane-wave wavefunctions. This option only controls the EXX label; out_training_data controls the training dump arrays and metadata.)";
+        item.default_value = "False";
+        item.unit = "";
+        item.availability = "Requires out_training_data";
+        read_sync_bool(input.out_exx_label);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.out_exx_label && !para.input.out_training_data)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "out_exx_label requires out_training_data");
             }
         };
         this->add_item(item);

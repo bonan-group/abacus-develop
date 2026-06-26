@@ -100,15 +100,22 @@ CIDER support is wired through:
 - Bridge library/header lookup: `libciderbridge` and `cider_bridge.h`
 - Potential implementation: `source/source_estate/module_pot/pot_cider_xc.*`
 - PW Hamiltonian registration: `source/source_pw/module_pwdft/hamilt_pw.cpp`
-- Input parameters: `cider_model`, `cider_xmix`, and `cider_tf_tau`
+- Input parameters: `cider_model`, `cider_xmix`, `cider_tf_tau`, and `cider_feature_density`
 
 Current CIDER restrictions enforced by input conversion:
 
 - `basis_type` must be `pw`
 - `nspin` must be `1` or `2`
 - `cider_xmix` must be in `[0, 1]`
+- `cider_feature_density` must be `valence` or `valence_pseudo_core`
 - Do not combine `cider_model` with native hybrid/EXX `dft_functional` settings
 - MGGA CIDER models request kinetic-energy density and may need NLCC-aware handling
+
+CIDER feature-density policy:
+
+- Use the default `cider_feature_density valence` for ABACUS-trained or in-house models.
+- Use `cider_feature_density valence_pseudo_core` for legacy pretrained CIDER23x NLDF models when the CIDER features must include valence plus NLCC pseudo-core density.
+- The old spelling `total` is accepted only as a deprecated compatibility alias for `valence_pseudo_core`.
 
 CIDER examples are under:
 

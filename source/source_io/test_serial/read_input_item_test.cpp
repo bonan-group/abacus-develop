@@ -392,6 +392,18 @@ TEST_F(InputTest, Item_test)
         EXPECT_EQ(param.input.out_pot[0], 1);
         EXPECT_EQ(param.input.out_pot[1], 2);
     }
+    { // out_exx_label
+        auto it = find_label("out_exx_label", readinput.input_lists);
+        ASSERT_NE(it, readinput.input_lists.end());
+        EXPECT_FALSE(param.input.out_exx_label);
+
+        param.input.out_training_data = false;
+        param.input.out_exx_label = true;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("out_exx_label requires out_training_data"));
+    }
     { // out_dos
         auto it = find_label("out_dos", readinput.input_lists);
         param.input.calculation = "get_wf";

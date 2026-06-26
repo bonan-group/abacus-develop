@@ -560,8 +560,9 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
     ModuleBase::timer::start("ESolver_KS_PW", "after_scf");
 
     const bool write_training_data = PARAM.inp.out_training_data;
+    const bool write_exx_label = PARAM.inp.out_exx_label;
     const double saved_exx_energy = this->pelec->f_en.exx;
-    if (write_training_data)
+    if (write_training_data && write_exx_label)
     {
         ModuleBase::TITLE("ESolver_KS_PW", "training_pbe0_exx_label");
         ModuleBase::timer::start("ESolver_KS_PW", "training_pbe0_exx_label");
@@ -589,7 +590,7 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
 
     // Call 'after_scf' of ESolver_KS
     ESolver_KS::after_scf(ucell, istep, conv_esolver);
-    if (write_training_data)
+    if (write_training_data && write_exx_label)
     {
         this->pelec->f_en.exx = saved_exx_energy;
     }

@@ -864,5 +864,17 @@ Note: Even dimensions may cause slight errors in FFT. It should be ignorable in 
         read_sync_bool(input.cider_tf_tau);
         this->add_item(item);
     }
+    {
+        Input_Item item("cider_feature_density");
+        item.annotation = "CIDER feature-density policy";
+        item.category = "CIDER NLDF XC";
+        item.type = "String";
+        item.description = "Density tuple used for CIDER rho/sigma semilocal and NLDF features. Use auto to follow model metadata, valence for ABACUS-trained models, and valence_pseudo_core for legacy CIDER23x NLDF models. Pseudo-core tau for MGGA additionally requires cider_tf_tau.";
+        item.default_value = "auto";
+        item.unit = "";
+        item.availability = "";
+        read_sync_string(input.cider_feature_density);
+        this->add_item(item);
+    }
 }
 } // namespace ModuleIO
