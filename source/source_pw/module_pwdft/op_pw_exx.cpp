@@ -1545,35 +1545,15 @@ void OperatorEXXPW<T, Device>::load_full_point_real_uncached(const K_Vectors::Ex
     }
     else
     {
-        const auto& remap = point_spatial_remap(point, point_rep_spin);
         const T* psi_point_exx = wave_recip_to_exx_recip(psi_point, point_rep_spin, psi_mq_exx_recip);
         if (std::is_same<Device, base_device::DEVICE_CPU>::value)
         {
-            if (point.time_reversal)
-            {
-                wfcpw_exx->recip2real_remapped_conjugate(psi_point_exx,
-                                                         out,
-                                                         static_cast<int>(remap.rep_igl.size()),
-                                                         remap.rep_igl.data(),
-                                                         remap.fft_isz.data(),
-                                                         remap.phase.data(),
-                                                         false,
-                                                         Real(1.0));
-            }
-            else
-            {
-                wfcpw_exx->recip2real_remapped(psi_point_exx,
-                                               out,
-                                               static_cast<int>(remap.rep_igl.size()),
-                                               remap.rep_igl.data(),
-                                               remap.fft_isz.data(),
-                                               remap.phase.data(),
-                                               false,
-                                               Real(1.0));
-            }
+            wfcpw_exx->recip_to_real(ctx, psi_point_exx, out, point_rep_spin, false, Real(1.0));
+            rotate_exx_realspace_symmetry_cpu(wfcpw_exx, point, point_rep_spin, out, out);
         }
         else
         {
+            const auto& remap = point_spatial_remap(point, point_rep_spin);
             if (point.time_reversal)
             {
                 wfcpw_exx->recip2real_remapped_conjugate(psi_point_exx,
@@ -1704,35 +1684,15 @@ void OperatorEXXPW<T, Device>::accumulate_full_point_recip(const K_Vectors::ExxF
     }
     else
     {
-        const auto& remap = point_spatial_remap(point, point_rep_spin);
         setmem_complex_op()(h_psi_exx_recip, 0, wfcpw_exx->npwk_max);
         if (std::is_same<Device, base_device::DEVICE_CPU>::value)
         {
-            if (point.time_reversal)
-            {
-                wfcpw_exx->real2recip_remapped_conjugate(full_real,
-                                                         h_psi_exx_recip,
-                                                         static_cast<int>(remap.rep_igl.size()),
-                                                         remap.rep_igl.data(),
-                                                         remap.fft_isz.data(),
-                                                         remap.phase.data(),
-                                                         false,
-                                                         Real(1.0));
-            }
-            else
-            {
-                wfcpw_exx->real2recip_remapped(full_real,
-                                               h_psi_exx_recip,
-                                               static_cast<int>(remap.rep_igl.size()),
-                                               remap.rep_igl.data(),
-                                               remap.fft_isz.data(),
-                                               remap.phase.data(),
-                                               false,
-                                               Real(1.0));
-            }
+            rotate_exx_realspace_symmetry_adjoint_cpu(wfcpw_exx, point, point_rep_spin, full_real, density_real);
+            wfcpw_exx->real_to_recip(ctx, density_real, h_psi_exx_recip, point_rep_spin, false, Real(1.0));
         }
         else
         {
+            const auto& remap = point_spatial_remap(point, point_rep_spin);
             if (point.time_reversal)
             {
                 wfcpw_exx->real2recip_remapped_conjugate(full_real,

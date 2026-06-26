@@ -238,29 +238,8 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
             const T* psi_mq_exx = wave_recip_to_exx_recip(psi_mq, iq_rep_spin);
             if (std::is_same<Device, base_device::DEVICE_CPU>::value)
             {
-                const auto remap = hamilt::build_exx_symmetry_remap(wfcpw_exx, qpoint, iq_rep_spin, false);
-                if (qpoint.time_reversal)
-                {
-                    wfcpw_exx->recip2real_remapped_conjugate(psi_mq_exx,
-                                                             out,
-                                                             static_cast<int>(remap.rep_igl.size()),
-                                                             remap.rep_igl.data(),
-                                                             remap.fft_isz.data(),
-                                                             remap.phase.data(),
-                                                             false,
-                                                             Real(1.0));
-                }
-                else
-                {
-                    wfcpw_exx->recip2real_remapped(psi_mq_exx,
-                                                   out,
-                                                   static_cast<int>(remap.rep_igl.size()),
-                                                   remap.rep_igl.data(),
-                                                   remap.fft_isz.data(),
-                                                   remap.phase.data(),
-                                                   false,
-                                                   Real(1.0));
-                }
+                wfcpw_exx->template recip_to_real<T, Device>(psi_mq_exx, out, iq_rep_spin);
+                hamilt::rotate_exx_realspace_symmetry_cpu(wfcpw_exx, qpoint, iq_rep_spin, out, out);
             }
             else
             {
@@ -308,29 +287,8 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
             const T* psi_nk_exx = wave_recip_to_exx_recip(psi_nk, ik_rep_spin);
             if (std::is_same<Device, base_device::DEVICE_CPU>::value)
             {
-                const auto remap = hamilt::build_exx_symmetry_remap(wfcpw_exx, kpoint, ik_rep_spin, false);
-                if (kpoint.time_reversal)
-                {
-                    wfcpw_exx->recip2real_remapped_conjugate(psi_nk_exx,
-                                                             out,
-                                                             static_cast<int>(remap.rep_igl.size()),
-                                                             remap.rep_igl.data(),
-                                                             remap.fft_isz.data(),
-                                                             remap.phase.data(),
-                                                             false,
-                                                             Real(1.0));
-                }
-                else
-                {
-                    wfcpw_exx->recip2real_remapped(psi_nk_exx,
-                                                   out,
-                                                   static_cast<int>(remap.rep_igl.size()),
-                                                   remap.rep_igl.data(),
-                                                   remap.fft_isz.data(),
-                                                   remap.phase.data(),
-                                                   false,
-                                                   Real(1.0));
-                }
+                wfcpw_exx->template recip_to_real<T, Device>(psi_nk_exx, out, ik_rep_spin);
+                hamilt::rotate_exx_realspace_symmetry_cpu(wfcpw_exx, kpoint, ik_rep_spin, out, out);
             }
             else
             {

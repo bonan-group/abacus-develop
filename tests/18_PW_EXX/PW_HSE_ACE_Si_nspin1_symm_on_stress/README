@@ -1,1 +1,1 @@
-PW HSE ACE stress smoke test on Si with ABACUS symmetry enabled.
+PW HSE ACE stress smoke test on Si with ABACUS symmetry enabled. This case covers the CPU MPI real-space EXX symmetry rotation path.
