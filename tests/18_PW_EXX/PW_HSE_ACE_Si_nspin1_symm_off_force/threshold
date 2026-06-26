@@ -1,2 +1,2 @@
-totalforceref 5e-4
-etotref 5e-4
+force_threshold 5e-4
+threshold 5e-4
