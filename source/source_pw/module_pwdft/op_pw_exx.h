@@ -135,6 +135,18 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     Real* get_exx_potential_cached(const K_Vectors::ExxFullKPoint& kpoint,
                                    const K_Vectors::ExxFullQPoint& qpoint) const;
     void clear_exx_potential_cache() const;
+    void reset_exx_potential_cache_for_kpoint(int full_k_index) const;
+    double exx_potential_cache_mb() const;
+    void log_exx_energy_memory(const char* stage) const;
+    void log_exx_energy_progress(int ispin,
+                                 int nspin_fac,
+                                 int k_index,
+                                 int k_total,
+                                 const K_Vectors::ExxFullKPoint& kpoint,
+                                 int q_count,
+                                 int source_tile_size,
+                                 int q_tile_size,
+                                 int chunk_size) const;
     int resolve_qtile_chunk_size() const;
     void ensure_qtile_workspace(std::size_t target_size, std::size_t q_size, int batch_limit) const;
     void fill_target_tile(const T* tmpsi_in,
@@ -299,7 +311,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     mutable Real* weight_real_device = nullptr;
     mutable std::size_t weight_real_capacity = 0;
     mutable std::map<std::pair<int, int>, Real*> pot_cache;
-    mutable int cached_potential_ik = std::numeric_limits<int>::min();
+    mutable int cached_potential_full_k = std::numeric_limits<int>::min();
 
     // Lin Lin's ACE memory, 10.1021/acs.jctc.6b00092
     mutable T* h_psi_ace = nullptr; // H \Psi, W in the paper

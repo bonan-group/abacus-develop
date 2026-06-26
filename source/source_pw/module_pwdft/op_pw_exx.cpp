@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <iomanip>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -64,6 +65,28 @@ void clear_stale_cuda_error(const char* where)
         GlobalV::ofs_warning << where << ": clearing stale CUDA error before PW EXX: "
                              << cudaGetErrorString(status) << " (" << static_cast<int>(status) << ")" << std::endl;
     }
+}
+
+void query_cuda_memory_mb(double& free_mb, double& total_mb)
+{
+    std::size_t free_bytes = 0;
+    std::size_t total_bytes = 0;
+    const cudaError_t status = cudaMemGetInfo(&free_bytes, &total_bytes);
+    if (status != cudaSuccess)
+    {
+        free_mb = -1.0;
+        total_mb = -1.0;
+        if (GlobalV::MY_RANK == 0)
+        {
+            GlobalV::ofs_warning << "OperatorEXXPW: cudaMemGetInfo failed while logging EXX memory: "
+                                 << cudaGetErrorString(status) << " (" << static_cast<int>(status) << ")"
+                                 << std::endl;
+        }
+        return;
+    }
+    constexpr double bytes_per_mb = 1024.0 * 1024.0;
+    free_mb = static_cast<double>(free_bytes) / bytes_per_mb;
+    total_mb = static_cast<double>(total_bytes) / bytes_per_mb;
 }
 #endif
 }
@@ -1218,11 +1241,7 @@ typename OperatorEXXPW<T, Device>::Real*
 OperatorEXXPW<T, Device>::get_exx_potential_cached(const K_Vectors::ExxFullKPoint& kpoint,
                                                    const K_Vectors::ExxFullQPoint& qpoint) const
 {
-    if (cached_potential_ik != this->ik)
-    {
-        clear_exx_potential_cache();
-        cached_potential_ik = this->ik;
-    }
+    reset_exx_potential_cache_for_kpoint(kpoint.full_index);
 
     const auto cache_key = std::make_pair(kpoint.full_index, qpoint.full_index);
     auto cache_it = pot_cache.find(cache_key);
@@ -1257,6 +1276,84 @@ void OperatorEXXPW<T, Device>::clear_exx_potential_cache() const
         delmem_real_op()(entry.second);
     }
     pot_cache.clear();
+    cached_potential_full_k = std::numeric_limits<int>::min();
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::reset_exx_potential_cache_for_kpoint(int full_k_index) const
+{
+    if (cached_potential_full_k == full_k_index)
+    {
+        return;
+    }
+    clear_exx_potential_cache();
+    cached_potential_full_k = full_k_index;
+}
+
+template <typename T, typename Device>
+double OperatorEXXPW<T, Device>::exx_potential_cache_mb() const
+{
+    constexpr double bytes_per_mb = 1024.0 * 1024.0;
+    const double bytes = static_cast<double>(pot_cache.size()) * static_cast<double>(rhopw_dev->npw)
+                         * static_cast<double>(sizeof(Real));
+    return bytes / bytes_per_mb;
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::log_exx_energy_memory(const char* stage) const
+{
+    if (GlobalV::MY_RANK != 0)
+    {
+        return;
+    }
+
+    const std::ios::fmtflags saved_flags = GlobalV::ofs_running.flags();
+    const std::streamsize saved_precision = GlobalV::ofs_running.precision();
+    GlobalV::ofs_running << " EXX energy memory [" << stage << "]: potential cache entries = "
+                         << pot_cache.size() << ", estimated cache = " << std::fixed << std::setprecision(1)
+                         << exx_potential_cache_mb() << " MB";
+#if defined(__CUDA)
+    if (!std::is_same<Device, base_device::DEVICE_CPU>::value)
+    {
+        double free_mb = 0.0;
+        double total_mb = 0.0;
+        query_cuda_memory_mb(free_mb, total_mb);
+        if (free_mb >= 0.0)
+        {
+            GlobalV::ofs_running << ", CUDA free = " << std::fixed << std::setprecision(1) << free_mb
+                                 << " MB / " << total_mb << " MB";
+        }
+    }
+#endif
+    GlobalV::ofs_running << std::endl;
+    GlobalV::ofs_running.flags(saved_flags);
+    GlobalV::ofs_running.precision(saved_precision);
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::log_exx_energy_progress(int ispin,
+                                                       int nspin_fac,
+                                                       int k_index,
+                                                       int k_total,
+                                                       const K_Vectors::ExxFullKPoint& kpoint,
+                                                       int q_count,
+                                                       int source_tile_size,
+                                                       int q_tile_size,
+                                                       int chunk_size) const
+{
+    if (GlobalV::MY_RANK != 0)
+    {
+        return;
+    }
+
+    GlobalV::ofs_running << " EXX energy progress: spin " << (ispin + 1) << "/" << nspin_fac
+                         << ", k " << (k_index + 1) << "/" << k_total
+                         << ", full k = " << kpoint.full_index
+                         << ", representative local k = " << kpoint.rep_local_index
+                         << ", q points = " << q_count
+                         << ", band tile size = " << source_tile_size
+                         << ", q tile size = " << q_tile_size
+                         << ", FFT batch/chunk size = " << chunk_size << std::endl;
 }
 
 template <typename T, typename Device>
@@ -1976,6 +2073,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     const std::size_t q_weight_count = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size);
 
     ensure_qtile_workspace(0, q_size, std::max(chunk_size, static_cast<int>(q_weight_count)));
+    log_exx_energy_memory("start");
 
     std::vector<T> q_real;
     if (is_cpu)
@@ -1992,9 +2090,22 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
 
     for (int ispin = 0; ispin < nspin_fac; ++ispin)
     {
-        for (const auto* kpoint: k_points)
+        for (int ik_full = 0; ik_full < static_cast<int>(k_points.size()); ++ik_full)
         {
+            const auto* kpoint = k_points[ik_full];
             ensure_full_point_supported(*kpoint);
+            reset_exx_potential_cache_for_kpoint(kpoint->full_index);
+            log_exx_energy_progress(ispin,
+                                    nspin_fac,
+                                    ik_full,
+                                    static_cast<int>(k_points.size()),
+                                    *kpoint,
+                                    static_cast<int>(q_points.size()),
+                                    source_tile_size,
+                                    q_tile_size,
+                                    chunk_size);
+            log_exx_energy_memory("k start");
+
             const int ik_rep_spin = rep_spin_index(*kpoint, ispin);
             const bool own_kpoint = kpoint->rep_pool == GlobalV::MY_POOL;
             for (int q_start = 0; q_start < static_cast<int>(q_points.size()); q_start += q_tile_size)
@@ -2085,6 +2196,9 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
                     }
                 }
             }
+            log_exx_energy_memory("k end");
+            clear_exx_potential_cache();
+            log_exx_energy_memory("k cache cleared");
         }
     }
 
@@ -2097,6 +2211,8 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     setmem_complex_op()(h_psi_real, 0, rhopw_dev->nrxx);
     setmem_complex_op()(density_real, 0, rhopw_dev->nrxx);
     setmem_complex_op()(density_recip, 0, rhopw_dev->npw);
+    clear_exx_potential_cache();
+    log_exx_energy_memory("end");
 
     set_psi_for_cache(psi_saved);
     ModuleBase::timer::end("OperatorEXXPW", "cal_exx_energy_qtile");

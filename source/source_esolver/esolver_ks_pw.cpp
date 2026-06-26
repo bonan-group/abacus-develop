@@ -130,6 +130,14 @@ double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
         options.hybrid_alpha = 0.25;
         options.fock_params = {{{"alpha", "1"}}};
 
+        if (GlobalV::MY_RANK == 0)
+        {
+            GlobalV::ofs_running << " training_pbe0_exx_label: one-shot EXX uses batch FFT size = "
+                                 << options.batch_fft_size
+                                 << ", band tile size = " << options.band_tile_size
+                                 << ", q tile size = " << options.q_tile_size << std::endl;
+        }
+
         OperatorEXX op_exx(isk, wfcpw, rhopw, kv, &ucell, options);
         op_exx.set_psi(*psi);
         op_exx.set_wg(wg);
