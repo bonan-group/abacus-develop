@@ -1,0 +1,2 @@
+PW HSE ACE GPU smoke test for the supported KPAR-only path.
+It is registered only in CUDA builds.

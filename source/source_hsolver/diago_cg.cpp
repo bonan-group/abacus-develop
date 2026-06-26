@@ -264,6 +264,12 @@ void DiagoCG<T, Device>::orth_grad(const ct::Tensor& psi,
                                    ct::Tensor& scg,
                                    ct::Tensor& lagrange)
 {
+    if (m == 0)
+    {
+        this->spsi_func_(grad.data<T>(), scg.data<T>(), this->n_basis_, 1);
+        return;
+    }
+
     this->spsi_func_(grad.data<T>(), scg.data<T>(), this->n_basis_, 1); // scg = S|grad>
     ModuleBase::gemv_op<T, Device>()('C',
                                      this->n_basis_,
@@ -508,17 +514,20 @@ void DiagoCG<T, Device>::schmit_orth(const int& m, const ct::Tensor& psi, const 
 
     //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     // haozhihan replace 2022-10-6
-    ModuleBase::gemv_op<T, Device>()('N',
-                                     this->n_basis_,
-                                     m,
-                                     this->neg_one_,
-                                     psi.data<T>(),
-                                     this->n_basis_,
-                                     lagrange_so.data<T>(),
-                                     inc,
-                                     this->one_,
-                                     phi_m.data<T>(),
-                                     inc);
+    if (m > 0)
+    {
+        ModuleBase::gemv_op<T, Device>()('N',
+                                         this->n_basis_,
+                                         m,
+                                         this->neg_one_,
+                                         psi.data<T>(),
+                                         this->n_basis_,
+                                         lagrange_so.data<T>(),
+                                         inc,
+                                         this->one_,
+                                         phi_m.data<T>(),
+                                         inc);
+    }
 
     //======================================================================
     /*for (int j = 0; j < m; j++)

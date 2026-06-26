@@ -40,6 +40,12 @@ class PSIPrepare : public PSIPrepareBase
                         hamilt::Hamilt<T, Device>* p_hamilt,
                         std::ofstream& ofs_running);
 
+    void initialize_psi_ik(Psi<std::complex<double>>* psi,
+                           psi::Psi<T, Device>* kspw_psi,
+                           hamilt::Hamilt<T, Device>* p_hamilt,
+                           std::ofstream& ofs_running,
+                           const int ik);
+
     /**
      * @brief initialize NAOs in plane wave basis, only for LCAO_IN_PW
      *
@@ -87,7 +93,12 @@ class PSIPrepare : public PSIPrepareBase
 };
 
 ///@brief allocate the wavefunction
-void allocate_psi(Psi<std::complex<double>>*& psi, const int& nks, const std::vector<int>& ngk, const int& nbands, const int& npwx);
+void allocate_psi(Psi<std::complex<double>>*& psi,
+                  const int& nks,
+                  const std::vector<int>& ngk,
+                  const int& nbands,
+                  const int& npwx,
+                  const bool save_memory);
 
 } // namespace psi
 #endif

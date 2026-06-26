@@ -136,7 +136,8 @@ public:
     int ig_gge0=-1;    //ig when gg == 0
 
     //distribute plane waves and grids and set up fft
-    void setuptransform(int batch_fft_size = 1);
+    void setuptransform();
+    void setuptransform(int batch_fft_size);
 
 protected:
     int *startnsz_per=nullptr;//useless intermediate variable// startnsz_per[ip]: starting is * nz stick in the ip^th proc.

@@ -7,6 +7,16 @@ namespace hamilt
 {
 namespace
 {
+inline bool use_mp_gamma_mask(const ExxSingularCorrectionMode mode)
+{
+    return mode == ExxSingularCorrectionMode::ScfMp;
+}
+
+inline bool use_finite_singularity_compensation(const ExxSingularCorrectionMode mode)
+{
+    return mode != ExxSingularCorrectionMode::ScfMp;
+}
+
 const K_Vectors::ExxFullQPoint& get_exx_qpoint(const K_Vectors* kv, int iq_full)
 {
     if (iq_full < 0 || iq_full >= static_cast<int>(kv->exx_full_q_map.size()))
@@ -22,7 +32,9 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
                                 ModulePW::PW_Basis* rhopw_dev,
                                 Real* pot,
                                 double tpiba,
-                                bool gamma_extrapolation,
+                                ExxSingularCorrectionMode singular_correction_mode,
+                                const std::vector<Real>* fock_div_override,
+                                const std::vector<Real>* erfc_div_override,
                                 double ucell_omega,
                                 const ModuleBase::Vector3<double>& k_c,
                                 const ModuleBase::Vector3<double>& k_d,
@@ -49,7 +61,9 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
     for (int i = 0; i < param_fock.size(); i++)
     {
         auto param = param_fock[i];
-        double exx_div = OperatorEXXPW<std::complex<Real>, Device>::fock_div[i];
+        double exx_div = fock_div_override != nullptr && i < fock_div_override->size()
+                             ? (*fock_div_override)[i]
+                             : OperatorEXXPW<std::complex<Real>, Device>::fock_div[i];
         double alpha = std::stod(param["alpha"]);
 
 #ifdef _OPENMP
@@ -64,7 +78,7 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
             // grid_factor is designed for the 7/8 of the grid to function like all of the points
             Real grid_factor = 1;
             double extrapolate_grid = 8.0 / 7.0;
-            if (gamma_extrapolation)
+            if (use_mp_gamma_mask(singular_correction_mode))
             {
                 // if isint(kqg_d[0] * nqs_half1) && isint(kqg_d[1] * nqs_half2) && isint(kqg_d[2] * nqs_half3)
                 auto isint = [](double x) {
@@ -106,14 +120,16 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
         double erfc_omega2 = erfc_omega * erfc_omega;
         double alpha = std::stod(param["alpha"]);
         // double exx_div = OperatorEXXPW<std::complex<Real>, Device>::erfc_div[i];
-        double exx_div = exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
-                                          erfc_omega,
-                                          kv,
-                                          wfcpw,
-                                          rhopw_dev,
-                                          tpiba,
-                                          gamma_extrapolation,
-                                          ucell_omega);
+        double exx_div = erfc_div_override != nullptr && i < erfc_div_override->size()
+                             ? (*erfc_div_override)[i]
+                             : exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
+                                              erfc_omega,
+                                              kv,
+                                              wfcpw,
+                                              rhopw_dev,
+                                              tpiba,
+                                              singular_correction_mode,
+                                              ucell_omega);
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -127,7 +143,7 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
             // grid_factor is designed for the 7/8 of the grid to function like all of the points
             Real grid_factor = 1;
             double extrapolate_grid = 8.0 / 7.0;
-            if (gamma_extrapolation)
+            if (use_mp_gamma_mask(singular_correction_mode))
             {
                 // if isint(kqg_d[0] * nqs_half1) && isint(kqg_d[1] * nqs_half2) && isint(kqg_d[2] * nqs_half3)
                 auto isint = [](double x) {
@@ -159,7 +175,7 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
             else
             {
                 // if (PARAM.inp.dft_functional == "hse")
-                if (!gamma_extrapolation)
+                if (use_finite_singularity_compensation(singular_correction_mode))
                 {
                     if (is_stress)
                         pot_cpu[ig] += (- ModuleBase::PI * ModuleBase::e2 / erfc_omega2) * alpha;
@@ -203,7 +219,9 @@ void get_exx_potential(const K_Vectors* kv,
                        ModulePW::PW_Basis* rhopw_dev,
                        Real* pot,
                        double tpiba,
-                       bool gamma_extrapolation,
+                       ExxSingularCorrectionMode singular_correction_mode,
+                       const std::vector<Real>* fock_div_override,
+                       const std::vector<Real>* erfc_div_override,
                        double ucell_omega,
                        int ik,
                        int iq,
@@ -219,7 +237,9 @@ void get_exx_potential(const K_Vectors* kv,
                                              rhopw_dev,
                                              pot,
                                              tpiba,
-                                             gamma_extrapolation,
+                                             singular_correction_mode,
+                                             fock_div_override,
+                                             erfc_div_override,
                                              ucell_omega,
                                              wfcpw->kvec_c[ik],
                                              wfcpw->kvec_d[ik],
@@ -234,7 +254,9 @@ void get_exx_potential(const K_Vectors* kv,
                        ModulePW::PW_Basis* rhopw_dev,
                        Real* pot,
                        double tpiba,
-                       bool gamma_extrapolation,
+                       ExxSingularCorrectionMode singular_correction_mode,
+                       const std::vector<Real>* fock_div_override,
+                       const std::vector<Real>* erfc_div_override,
                        double ucell_omega,
                        const K_Vectors::ExxFullKPoint& kpoint,
                        const K_Vectors::ExxFullQPoint& qpoint,
@@ -245,7 +267,9 @@ void get_exx_potential(const K_Vectors* kv,
                                              rhopw_dev,
                                              pot,
                                              tpiba,
-                                             gamma_extrapolation,
+                                             singular_correction_mode,
+                                             fock_div_override,
+                                             erfc_div_override,
                                              ucell_omega,
                                              kpoint.full_kvec_c,
                                              kpoint.full_kvec_d,
@@ -480,7 +504,7 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
                       const ModulePW::PW_Basis_K* wfcpw,
                       ModulePW::PW_Basis* rhopw_dev,
                       double tpiba,
-                      bool gamma_extrapolation,
+                      ExxSingularCorrectionMode singular_correction_mode,
                       double ucell_omega)
 {
     double exx_div = 0;
@@ -518,7 +542,7 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
             // grid_factor is designed for the 7/8 of the grid to function like all of the points
             double grid_factor = 1;
             double extrapolate_grid = 8.0 / 7.0;
-            if (gamma_extrapolation)
+            if (use_mp_gamma_mask(singular_correction_mode))
             {
                 auto isint = [](double x) {
                     double epsilon = 1e-6; // this follows the isint judgement in q-e
@@ -555,7 +579,7 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
     // std::cout << "EXX div: " << div << std::endl;
 
     // if (PARAM.inp.dft_functional == "hse")
-    if (!gamma_extrapolation)
+    if (use_finite_singularity_compensation(singular_correction_mode))
     {
         if (coulomb_type == Conv_Coulomb_Pot_K::Coulomb_Type::Erfc)
         {
@@ -608,7 +632,9 @@ template void get_exx_potential<float, base_device::DEVICE_CPU>(const K_Vectors*
                                                                 ModulePW::PW_Basis*,
                                                                 float*,
                                                                 double,
-                                                                bool,
+                                                                ExxSingularCorrectionMode,
+                                                                const std::vector<float>*,
+                                                                const std::vector<float>*,
                                                                 double,
                                                                 int,
                                                                 int,
@@ -618,7 +644,9 @@ template void get_exx_potential<float, base_device::DEVICE_CPU>(const K_Vectors*
                                                                 ModulePW::PW_Basis*,
                                                                 float*,
                                                                 double,
-                                                                bool,
+                                                                ExxSingularCorrectionMode,
+                                                                const std::vector<float>*,
+                                                                const std::vector<float>*,
                                                                 double,
                                                                 const K_Vectors::ExxFullKPoint&,
                                                                 const K_Vectors::ExxFullQPoint&,
@@ -628,7 +656,9 @@ template void get_exx_potential<double, base_device::DEVICE_CPU>(const K_Vectors
                                                                  ModulePW::PW_Basis*,
                                                                  double*,
                                                                  double,
-                                                                 bool,
+                                                                 ExxSingularCorrectionMode,
+                                                                 const std::vector<double>*,
+                                                                 const std::vector<double>*,
                                                                  double,
                                                                  int,
                                                                  int,
@@ -638,7 +668,9 @@ template void get_exx_potential<double, base_device::DEVICE_CPU>(const K_Vectors
                                                                  ModulePW::PW_Basis*,
                                                                  double*,
                                                                  double,
-                                                                 bool,
+                                                                 ExxSingularCorrectionMode,
+                                                                 const std::vector<double>*,
+                                                                 const std::vector<double>*,
                                                                  double,
                                                                  const K_Vectors::ExxFullKPoint&,
                                                                  const K_Vectors::ExxFullQPoint&,
@@ -687,7 +719,9 @@ template void get_exx_potential<float, base_device::DEVICE_GPU>(const K_Vectors*
                                                                 ModulePW::PW_Basis*,
                                                                 float*,
                                                                 double,
-                                                                bool,
+                                                                ExxSingularCorrectionMode,
+                                                                const std::vector<float>*,
+                                                                const std::vector<float>*,
                                                                 double,
                                                                 int,
                                                                 int,
@@ -697,7 +731,9 @@ template void get_exx_potential<float, base_device::DEVICE_GPU>(const K_Vectors*
                                                                 ModulePW::PW_Basis*,
                                                                 float*,
                                                                 double,
-                                                                bool,
+                                                                ExxSingularCorrectionMode,
+                                                                const std::vector<float>*,
+                                                                const std::vector<float>*,
                                                                 double,
                                                                 const K_Vectors::ExxFullKPoint&,
                                                                 const K_Vectors::ExxFullQPoint&,
@@ -707,7 +743,9 @@ template void get_exx_potential<double, base_device::DEVICE_GPU>(const K_Vectors
                                                                  ModulePW::PW_Basis*,
                                                                  double*,
                                                                  double,
-                                                                 bool,
+                                                                 ExxSingularCorrectionMode,
+                                                                 const std::vector<double>*,
+                                                                 const std::vector<double>*,
                                                                  double,
                                                                  int,
                                                                  int,
@@ -717,7 +755,9 @@ template void get_exx_potential<double, base_device::DEVICE_GPU>(const K_Vectors
                                                                  ModulePW::PW_Basis*,
                                                                  double*,
                                                                  double,
-                                                                 bool,
+                                                                 ExxSingularCorrectionMode,
+                                                                 const std::vector<double>*,
+                                                                 const std::vector<double>*,
                                                                  double,
                                                                  const K_Vectors::ExxFullKPoint&,
                                                                  const K_Vectors::ExxFullQPoint&,

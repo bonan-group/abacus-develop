@@ -4,7 +4,6 @@
 #include "source_base/kernels/math_kernel_op.h"
 #include "source_base/macros.h"
 #include "source_cell/klist.h"
-#include "source_esolver/esolver_ks_pw.h"
 #include "source_estate/module_pot/potential_new.h"
 #include "source_hamilt/hamilt.h"
 #include "source_lcao/module_dftu/dftu.h" // mohan add 2025-11-06
@@ -13,6 +12,9 @@
 
 namespace hamilt
 {
+
+template <typename T, typename Device>
+class OperatorEXXPW;
 
 template <typename T, typename Device = base_device::DEVICE_CPU>
 class HamiltPW : public Hamilt<T, Device>
@@ -30,6 +32,14 @@ class HamiltPW : public Hamilt<T, Device>
              pseudopot_cell_vnl* nlpp,
              Plus_U* p_dftu, // mohan add 2025-11-06
              const UnitCell* ucell);
+
+    HamiltPW(elecstate::Potential* pot_in,
+             ModulePW::PW_Basis_K* wfc_basis,
+             K_Vectors* p_kv,
+             pseudopot_cell_vnl* nlpp,
+             Plus_U* p_dftu, // mohan add 2025-11-06
+             const UnitCell* ucell,
+             OperatorEXXPW<T, Device>* source_exx);
 
     ~HamiltPW();
 

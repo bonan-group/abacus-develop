@@ -1,0 +1,30 @@
+INPUT_PARAMETERS
+suffix            autotest
+calculation       scf
+nspin             2
+pseudo_dir        ../../PP_ORB
+
+ecutwfc           30
+basis_type        pw
+scf_thr           1e-6
+scf_nmax          100
+smearing_method   gaussian
+smearing_sigma    0.015
+mixing_type       pulay
+mixing_ndim       8
+mixing_beta       0.2
+
+dft_functional    pbe0
+symmetry          -1
+init_wfc          random
+pw_seed           1
+device            cpu
+exx_separate_loop 1
+exxace            1
+exx_hybrid_step   1
+exx_thr_type      energy
+exx_ene_thr       5e-2
+exx_gamma_extrapolation false
+exx_batch_fft_size 4
+exx_band_tile_size 2
+exx_q_tile_size   1

@@ -6,7 +6,12 @@
 
 #include <complex>
 #include <cmath>
+#include <vector>
 #include <unordered_map>
+
+#ifdef __MPI
+#include <mpi.h>
+#endif
 
 namespace hamilt
 {
@@ -77,6 +82,100 @@ ModuleBase::Vector3<double> k_g_direct_from_igl(const ModulePW::PW_Basis_K* wfcp
 {
     return generic_g_direct_from_ig(wfcpw, wfcpw->igl2ig_k[ik * wfcpw->npwk_max + igl]);
 }
+
+int positive_mod(int value, int modulus)
+{
+    int result = value % modulus;
+    if (result < 0)
+    {
+        result += modulus;
+    }
+    return result;
+}
+
+ModuleBase::Vector3<double> real_grid_direct_from_global_index(const ModulePW::PW_Basis_K* wfcpw, int global_index)
+{
+    const int iz = global_index % wfcpw->nz;
+    const int ixy = global_index / wfcpw->nz;
+    const int iy = ixy % wfcpw->ny;
+    const int ix = ixy / wfcpw->ny;
+    return ModuleBase::Vector3<double>(static_cast<double>(ix) / wfcpw->nx,
+                                       static_cast<double>(iy) / wfcpw->ny,
+                                       static_cast<double>(iz) / wfcpw->nz);
+}
+
+ModuleBase::Vector3<double> negative_direct(const ModuleBase::Vector3<double>& direct)
+{
+    return ModuleBase::Vector3<double>(-direct.x, -direct.y, -direct.z);
+}
+
+int global_real_index_from_grid(const ModulePW::PW_Basis_K* wfcpw, int ix, int iy, int iz)
+{
+    return positive_mod(iz, wfcpw->nz)
+           + positive_mod(iy, wfcpw->ny) * wfcpw->nz
+           + positive_mod(ix, wfcpw->nx) * wfcpw->ny * wfcpw->nz;
+}
+
+int global_real_index_from_direct(const ModulePW::PW_Basis_K* wfcpw, const ModuleBase::Vector3<double>& direct)
+{
+    const int ix = static_cast<int>(std::lround(direct.x * wfcpw->nx));
+    const int iy = static_cast<int>(std::lround(direct.y * wfcpw->ny));
+    const int iz = static_cast<int>(std::lround(direct.z * wfcpw->nz));
+    return global_real_index_from_grid(wfcpw, ix, iy, iz);
+}
+
+void validate_exx_realspace_symmetry_grid(const ModulePW::PW_Basis_K* wfcpw,
+                                          const K_Vectors::ExxFullPoint& full_point)
+{
+    auto is_integral = [](double value) {
+        return std::abs(value - std::round(value)) < 1.0e-8;
+    };
+
+    if (!is_integral(full_point.gmatrix.e21 * wfcpw->nx / wfcpw->ny)
+        || !is_integral(full_point.gmatrix.e31 * wfcpw->nx / wfcpw->nz)
+        || !is_integral(full_point.gmatrix.e12 * wfcpw->ny / wfcpw->nx)
+        || !is_integral(full_point.gmatrix.e32 * wfcpw->ny / wfcpw->nz)
+        || !is_integral(full_point.gmatrix.e13 * wfcpw->nz / wfcpw->nx)
+        || !is_integral(full_point.gmatrix.e23 * wfcpw->nz / wfcpw->ny))
+    {
+        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_cpu",
+                                 "PW EXX real-space symmetry rotation is incompatible with the FFT grid");
+    }
+
+    if (!is_integral(full_point.gtrans.x * wfcpw->nx)
+        || !is_integral(full_point.gtrans.y * wfcpw->ny)
+        || !is_integral(full_point.gtrans.z * wfcpw->nz))
+    {
+        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_cpu",
+                                 "PW EXX fractional symmetry translation is incompatible with the FFT grid");
+    }
+}
+
+std::complex<double> exx_realspace_bloch_phase(const K_Vectors::ExxFullPoint& full_point,
+                                               const ModuleBase::Vector3<double>& rep_kvec_d,
+                                               const ModuleBase::Vector3<double>& full_direct,
+                                               const ModuleBase::Vector3<double>& rep_direct)
+{
+    const double phase_arg = ModuleBase::TWO_PI * (rep_kvec_d * rep_direct - full_point.full_kvec_d * full_direct);
+    return std::complex<double>(std::cos(phase_arg), std::sin(phase_arg));
+}
+
+#ifdef __MPI
+template <typename T>
+MPI_Datatype mpi_complex_type();
+
+template <>
+MPI_Datatype mpi_complex_type<std::complex<float>>()
+{
+    return MPI_COMPLEX;
+}
+
+template <>
+MPI_Datatype mpi_complex_type<std::complex<double>>()
+{
+    return MPI_DOUBLE_COMPLEX;
+}
+#endif
 } // namespace
 
 ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
@@ -84,6 +183,14 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
                                           int rep_spin_index,
                                           bool need_gpu_fft_index)
 {
+    if (wfcpw->get_device() == "cpu" && wfcpw->poolnproc > 1)
+    {
+        ModuleBase::WARNING_QUIT("build_exx_symmetry_remap",
+                                 "PW EXX symmetry-remapped wavefunctions are not supported with "
+                                 "multi-rank CPU plane-wave distribution. CPU callers should use "
+                                 "the real-space EXX symmetry rotation path.");
+    }
+
     const ModuleBase::Vector3<double> raw_rep = full_point.full_kvec_d * full_point.kgmatrix;
     const ModuleBase::Vector3<double> rep_shift = raw_rep - wfcpw->kvec_d[rep_spin_index];
 
@@ -150,6 +257,165 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
     }
     return remap;
 }
+
+template <typename T>
+void rotate_exx_realspace_symmetry_cpu(const ModulePW::PW_Basis_K* wfcpw,
+                                       const K_Vectors::ExxFullPoint& full_point,
+                                       int rep_spin_index,
+                                       const T* representative_real,
+                                       T* full_real)
+{
+    if (wfcpw->get_device() != "cpu")
+    {
+        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_cpu",
+                                 "real-space EXX symmetry rotation is implemented only for CPU");
+    }
+    validate_exx_realspace_symmetry_grid(wfcpw, full_point);
+
+    const int local_size = wfcpw->nrxx;
+    const int global_size = wfcpw->nxyz;
+    std::vector<T> representative_global(global_size, T(0));
+    const ModuleBase::Vector3<double> rep_kvec_d = wfcpw->kvec_d[rep_spin_index];
+
+    for (int ir = 0; ir < local_size; ++ir)
+    {
+        const int local_iz = ir % wfcpw->nplane;
+        const int ixy = ir / wfcpw->nplane;
+        const int global_iz = wfcpw->startz_current + local_iz;
+        representative_global[ixy * wfcpw->nz + global_iz] = representative_real[ir];
+    }
+
+#ifdef __MPI
+    if (wfcpw->poolnproc > 1)
+    {
+        MPI_Allreduce(MPI_IN_PLACE,
+                      representative_global.data(),
+                      global_size,
+                      mpi_complex_type<T>(),
+                      MPI_SUM,
+                      wfcpw->pool_world);
+    }
+#endif
+
+    for (int ir = 0; ir < local_size; ++ir)
+    {
+        const int local_iz = ir % wfcpw->nplane;
+        const int ixy = ir / wfcpw->nplane;
+        const int global_iz = wfcpw->startz_current + local_iz;
+        const int global_ir = ixy * wfcpw->nz + global_iz;
+        const ModuleBase::Vector3<double> full_direct = real_grid_direct_from_global_index(wfcpw, global_ir);
+        const ModuleBase::Vector3<double> source_direct
+            = full_point.time_reversal ? negative_direct(full_direct) : full_direct;
+        const ModuleBase::Vector3<double> rep_direct = source_direct * full_point.gmatrix + full_point.gtrans;
+        ModuleBase::Vector3<double> rep_direct_wrapped = rep_direct;
+        rep_direct_wrapped.x -= std::floor(rep_direct_wrapped.x);
+        rep_direct_wrapped.y -= std::floor(rep_direct_wrapped.y);
+        rep_direct_wrapped.z -= std::floor(rep_direct_wrapped.z);
+        const T phase = static_cast<T>(exx_realspace_bloch_phase(full_point, rep_kvec_d, source_direct, rep_direct));
+        T value = phase * representative_global[global_real_index_from_direct(wfcpw, rep_direct_wrapped)];
+        if (full_point.time_reversal)
+        {
+            value = std::conj(value);
+        }
+        full_real[ir] = value;
+    }
+}
+
+template void rotate_exx_realspace_symmetry_cpu<std::complex<float>>(const ModulePW::PW_Basis_K* wfcpw,
+                                                                     const K_Vectors::ExxFullPoint& full_point,
+                                                                     int rep_spin_index,
+                                                                     const std::complex<float>* representative_real,
+                                                                     std::complex<float>* full_real);
+template void rotate_exx_realspace_symmetry_cpu<std::complex<double>>(const ModulePW::PW_Basis_K* wfcpw,
+                                                                      const K_Vectors::ExxFullPoint& full_point,
+                                                                      int rep_spin_index,
+                                                                      const std::complex<double>* representative_real,
+                                                                      std::complex<double>* full_real);
+
+template <typename T>
+void rotate_exx_realspace_symmetry_adjoint_cpu(const ModulePW::PW_Basis_K* wfcpw,
+                                               const K_Vectors::ExxFullPoint& full_point,
+                                               int rep_spin_index,
+                                               const T* full_real,
+                                               T* representative_real)
+{
+    if (wfcpw->get_device() != "cpu")
+    {
+        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_adjoint_cpu",
+                                 "real-space EXX symmetry rotation is implemented only for CPU");
+    }
+    validate_exx_realspace_symmetry_grid(wfcpw, full_point);
+
+    const int local_size = wfcpw->nrxx;
+    const int global_size = wfcpw->nxyz;
+    std::vector<T> full_global(global_size, T(0));
+    std::vector<T> representative_global(global_size, T(0));
+    const ModuleBase::Vector3<double> rep_kvec_d = wfcpw->kvec_d[rep_spin_index];
+
+    for (int ir = 0; ir < local_size; ++ir)
+    {
+        const int local_iz = ir % wfcpw->nplane;
+        const int ixy = ir / wfcpw->nplane;
+        const int global_iz = wfcpw->startz_current + local_iz;
+        full_global[ixy * wfcpw->nz + global_iz] = full_real[ir];
+    }
+
+#ifdef __MPI
+    if (wfcpw->poolnproc > 1)
+    {
+        MPI_Allreduce(MPI_IN_PLACE,
+                      full_global.data(),
+                      global_size,
+                      mpi_complex_type<T>(),
+                      MPI_SUM,
+                      wfcpw->pool_world);
+    }
+#endif
+
+    for (int global_ir = 0; global_ir < global_size; ++global_ir)
+    {
+        const ModuleBase::Vector3<double> full_direct = real_grid_direct_from_global_index(wfcpw, global_ir);
+        const ModuleBase::Vector3<double> source_direct
+            = full_point.time_reversal ? negative_direct(full_direct) : full_direct;
+        const ModuleBase::Vector3<double> rep_direct = source_direct * full_point.gmatrix + full_point.gtrans;
+        ModuleBase::Vector3<double> rep_direct_wrapped = rep_direct;
+        rep_direct_wrapped.x -= std::floor(rep_direct_wrapped.x);
+        rep_direct_wrapped.y -= std::floor(rep_direct_wrapped.y);
+        rep_direct_wrapped.z -= std::floor(rep_direct_wrapped.z);
+        const T phase = static_cast<T>(exx_realspace_bloch_phase(full_point, rep_kvec_d, source_direct, rep_direct));
+        T value = full_global[global_ir];
+        if (full_point.time_reversal)
+        {
+            value = phase * std::conj(value);
+        }
+        else
+        {
+            value = std::conj(phase) * value;
+        }
+        representative_global[global_real_index_from_direct(wfcpw, rep_direct_wrapped)] += value;
+    }
+
+    for (int ir = 0; ir < local_size; ++ir)
+    {
+        const int local_iz = ir % wfcpw->nplane;
+        const int ixy = ir / wfcpw->nplane;
+        const int global_iz = wfcpw->startz_current + local_iz;
+        representative_real[ir] = representative_global[ixy * wfcpw->nz + global_iz];
+    }
+}
+
+template void rotate_exx_realspace_symmetry_adjoint_cpu<std::complex<float>>(
+    const ModulePW::PW_Basis_K* wfcpw,
+    const K_Vectors::ExxFullPoint& full_point,
+    int rep_spin_index,
+    const std::complex<float>* full_real,
+    std::complex<float>* representative_real);
+template void rotate_exx_realspace_symmetry_adjoint_cpu<std::complex<double>>(
+    const ModulePW::PW_Basis_K* wfcpw,
+    const K_Vectors::ExxFullPoint& full_point,
+    int rep_spin_index,
+    const std::complex<double>* full_real,
+    std::complex<double>* representative_real);
 
 template <typename FPTYPE>
 struct exx_conjugate_real_op<std::complex<FPTYPE>, base_device::DEVICE_CPU>

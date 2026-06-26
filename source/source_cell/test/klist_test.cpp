@@ -498,6 +498,210 @@ TEST_F(KlistTest, ReadKpointsDirect)
     EXPECT_TRUE(kv->kd_done);
 }
 
+TEST_F(KlistTest, ReadKpointsMixedBandLine)
+{
+    ModuleSymmetry::Symmetry::symm_flag = 0;
+    std::string k_file = "./support/KPT_mixed_band_line";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+
+    EXPECT_TRUE(kv->has_band_kpoints());
+    EXPECT_EQ(kv->get_nkstot(), 8);
+    EXPECT_EQ(kv->band_kvec_d.size(), 3);
+    EXPECT_EQ(kv->band_kl_segids.size(), 3);
+    EXPECT_TRUE(kv->band_kd_done);
+    EXPECT_FALSE(kv->band_kc_done);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[0].x, 0.0);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[1].x, 0.25);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[2].x, 0.5);
+    EXPECT_EQ(kv->band_kl_segids[0], kv->band_kl_segids[1]);
+}
+
+TEST_F(KlistTest, ReadKpointsMixedBandLineAfterMpWithoutOffsets)
+{
+    ModuleSymmetry::Symmetry::symm_flag = 0;
+    std::string k_file = "./support/KPT_mixed_band_line_no_offsets";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+
+    EXPECT_TRUE(kv->has_band_kpoints());
+    EXPECT_EQ(kv->get_nkstot(), 8);
+    EXPECT_EQ(kv->band_kvec_d.size(), 3);
+    EXPECT_TRUE(kv->band_kd_done);
+    EXPECT_FALSE(kv->band_kc_done);
+    EXPECT_DOUBLE_EQ(kv->koffset[0], 0.0);
+    EXPECT_DOUBLE_EQ(kv->koffset[1], 0.0);
+    EXPECT_DOUBLE_EQ(kv->koffset[2], 0.0);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[2].x, 0.5);
+}
+
+TEST_F(KlistTest, ReadKpointsMixedBandDirect)
+{
+    std::string k_file = "./support/KPT_mixed_band_direct";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+
+    EXPECT_TRUE(kv->has_band_kpoints());
+    EXPECT_EQ(kv->get_nkstot(), 8);
+    EXPECT_EQ(kv->band_kvec_d.size(), 4);
+    EXPECT_EQ(kv->band_kl_segids.size(), 4);
+    EXPECT_TRUE(kv->band_kd_done);
+    EXPECT_FALSE(kv->band_kc_done);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[0].x, 0.0);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[1].x, 0.5);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[2].y, 0.5);
+    EXPECT_DOUBLE_EQ(kv->band_kvec_d[3].z, 0.5);
+    EXPECT_EQ(kv->band_kl_segids[0], 0);
+    EXPECT_EQ(kv->band_kl_segids[3], 0);
+}
+
+TEST_F(KlistTest, SetMixedBandCartesianUsesReciprocalTranspose)
+{
+    std::string k_file = "./support/KPT_mixed_band_cartesian";
+    kv->nspin = 1;
+    ASSERT_TRUE(kv->read_kpoints(ucell, k_file));
+    ASSERT_TRUE(kv->has_band_kpoints());
+    ASSERT_EQ(kv->band_kvec_c.size(), 2);
+    EXPECT_TRUE(kv->band_kc_done);
+    EXPECT_FALSE(kv->band_kd_done);
+
+    ModuleBase::Matrix3 latvec;
+    latvec.e11 = 1.0;
+    latvec.e12 = 2.0;
+    latvec.e13 = 3.0;
+    latvec.e21 = 4.0;
+    latvec.e22 = 6.0;
+    latvec.e23 = 8.0;
+    latvec.e31 = 2.0;
+    latvec.e32 = 5.0;
+    latvec.e33 = 9.0;
+
+    KVectorUtils::band_kvec_c2d(*kv, latvec);
+    ASSERT_EQ(kv->band_kvec_d.size(), 2);
+
+    const ModuleBase::Vector3<double> expected = kv->band_kvec_c[0] * latvec.Transpose();
+    EXPECT_NEAR(kv->band_kvec_d[0].x, expected.x, 1e-12);
+    EXPECT_NEAR(kv->band_kvec_d[0].y, expected.y, 1e-12);
+    EXPECT_NEAR(kv->band_kvec_d[0].z, expected.z, 1e-12);
+}
+
+TEST_F(KlistTest, MakeBandTargetKvectorsSpinExpanded)
+{
+#ifdef __MPI
+    int mpi_initialized = 0;
+    MPI_Initialized(&mpi_initialized);
+    if (!mpi_initialized)
+    {
+        MPI_Init(nullptr, nullptr);
+    }
+#endif
+    GlobalV::KPAR = 1;
+    GlobalV::MY_POOL = 0;
+    GlobalV::RANK_IN_POOL = 0;
+    GlobalV::NPROC = 1;
+
+    kv->nspin = 1;
+    kv->band_kvec_d = {{0.0, 0.0, 0.0}, {0.5, 0.0, 0.0}, {0.5, 0.5, 0.0}, {0.5, 0.5, 0.5}};
+    kv->band_kvec_c = kv->band_kvec_d;
+    kv->band_kl_segids = {0, 0, 1, 1};
+    kv->band_kd_done = true;
+    kv->band_kc_done = true;
+
+    K_Vectors band_kv = kv->make_band_target_kvectors(2);
+
+    EXPECT_EQ(band_kv.get_nkstot(), 8);
+    EXPECT_EQ(band_kv.get_nkstot_full(), 4);
+    EXPECT_EQ(band_kv.get_nks(), 8);
+    EXPECT_EQ(band_kv.kvec_d.size(), 8);
+    EXPECT_EQ(band_kv.kvec_d[4].x, band_kv.kvec_d[0].x);
+    EXPECT_EQ(band_kv.isk[0], 0);
+    EXPECT_EQ(band_kv.isk[4], 1);
+    EXPECT_NEAR(band_kv.wk[0], 0.25, 1e-12);
+    EXPECT_EQ(band_kv.exx_rep_spin_index(band_kv.exx_full_q_map[1], 1), 5);
+}
+
+TEST_F(KlistTest, FinalizeExxFullQMapNormalizesRepresentativeWeights)
+{
+    kv->nspin = 1;
+    kv->set_nkstot(2);
+    kv->set_nkstot_full(2);
+    kv->set_nks(2);
+    kv->wk = {0.6, 0.4};
+    kv->para_k.nks_pool = {2};
+
+    K_Vectors::ExxFullPoint point0;
+    point0.full_index = 0;
+    point0.rep_index = 0;
+    point0.rep_local_index = 0;
+    point0.weight = 0.25;
+
+    K_Vectors::ExxFullPoint point1 = point0;
+    point1.full_index = 1;
+    point1.weight = 0.75;
+
+    kv->exx_full_q_map = {point0, point1};
+    kv->exx_full_k_map = {point0, point1};
+    kv->normalize_exx_full_q_map_weights();
+    kv->finalize_exx_full_q_map();
+
+    EXPECT_NEAR(kv->exx_full_q_map[0].weight, 0.075, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[1].weight, 0.225, 1e-12);
+    EXPECT_EQ(kv->exx_full_q_map[1].rep_pool, 0);
+    EXPECT_EQ(kv->exx_full_q_map[1].rep_local_index, 0);
+}
+
+TEST_F(KlistTest, FinalizeExxFullQMapNormalizesSpinPolarizedWeights)
+{
+    kv->nspin = 2;
+    kv->set_nkstot(2);
+    kv->set_nkstot_full(3);
+    kv->set_nks(2);
+    kv->wk = {0.2, 0.8};
+    kv->para_k.nks_pool = {2};
+
+    K_Vectors::ExxFullPoint point0;
+    point0.full_index = 0;
+    point0.rep_index = 0;
+    point0.rep_local_index = 0;
+    point0.weight = 0.25;
+
+    K_Vectors::ExxFullPoint point1 = point0;
+    point1.full_index = 1;
+    point1.weight = 0.75;
+
+    K_Vectors::ExxFullPoint point2 = point0;
+    point2.full_index = 2;
+    point2.rep_index = 1;
+    point2.rep_local_index = 1;
+    point2.weight = 0.5;
+
+    kv->exx_full_q_map = {point0, point1, point2};
+    kv->exx_full_k_map = {point0, point1, point2};
+    kv->normalize_exx_full_q_map_weights();
+    kv->finalize_exx_full_q_map();
+
+    EXPECT_NEAR(kv->exx_full_q_map[0].weight, 0.05, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[1].weight, 0.15, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[2].weight, 0.8, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[0].weight, 0.05, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[1].weight, 0.15, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[2].weight, 0.8, 1e-12);
+}
+
+TEST_F(KlistTest, ExxRepSpinIndexUsesPoolLocalSpinBlocks)
+{
+    kv->nspin = 2;
+    kv->set_nks(6);
+    kv->para_k.nks_pool = {3};
+
+    K_Vectors::ExxFullPoint point;
+    point.rep_pool = 0;
+    point.rep_local_index = 2;
+
+    EXPECT_EQ(kv->exx_rep_spin_index(point, 0), 2);
+    EXPECT_EQ(kv->exx_rep_spin_index(point, 1), 5);
+}
+
 TEST_F(KlistTest, ReadKpointsWarning1)
 {
     std::string k_file = "arbitrary_1";
@@ -1046,4 +1250,3 @@ TEST_F(KlistTest, IbzKpointCustomWeights)
     ClearUcell();
     remove("tmp_klist_custom_weights");
 }
-

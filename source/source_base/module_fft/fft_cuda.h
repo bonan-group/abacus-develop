@@ -63,7 +63,7 @@ class FFT_CUDA : public FFT_BASE<FPTYPE>
          * Must be called after initfft(). Creates cuFFTPlanMany with
          * the specified batch size and allocates device memory.
          */
-        void setupBatchFFT(int batch_size_in = 8);
+        void setupBatchFFT(int batch_size_in);
 
         /**
          * @brief Clean up batch FFT plans

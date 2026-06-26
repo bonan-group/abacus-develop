@@ -485,21 +485,26 @@ Available options are:
     }
     {
         Input_Item item("mem_saver");
-        item.annotation = "Only for nscf calculations. if set to 1, then a "
-                          "memory saving technique will be used for "
-                          "many k point calculations.";
+        item.annotation = "Use memory-saving wavefunction storage for many-k calculations.";
         item.category = "System variables";
         item.type = "Integer";
-        item.description = R"(Save memory when performing nscf calculations.
+        item.description = R"(Save memory when performing many k-point calculations.
 * 0: no memory saving techniques are used.
-* 1: a memory saving technique will be used for many k point calculations.)";
+* 1: a memory saving technique will be used for many k point calculations.
+For scf PW hybrid calculations with K_POINTS_BAND, target band k-points are solved in an eigenvalue-only path.)";
         item.default_value = "0";
-        item.availability = "Used only for nscf calculations with plane wave basis set.";
+        item.availability = "Used for nscf calculations with plane wave basis set and for scf PW hybrid K_POINTS_BAND target calculations.";
         read_sync_int(input.mem_saver);
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            if (para.input.mem_saver != 0 && para.input.mem_saver != 1)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "mem_saver should be 0 or 1");
+            }
+        };
         item.reset_value = [](const Input_Item& item, Parameter& para) {
             if (para.input.mem_saver == 1)
             {
-                if (para.input.calculation == "scf" || para.input.calculation == "relax")
+                if (para.input.calculation == "relax")
                 {
                     para.input.mem_saver = 0;
                     ModuleBase::GlobalFunc::AUTO_SET("mem_saver", "0");

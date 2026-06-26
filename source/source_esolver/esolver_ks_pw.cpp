@@ -36,12 +36,16 @@
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 #include "source_base/kernels/math_kernel_op.h"
 #include "source_base/parallel_device.h"
+#include "source_io/module_energy/write_bands.h"
+#include "source_pw/module_pwdft/op_pw_exx.h"
 #include "source_pw/module_pwdft/op_pw_veff.h"
+#include "source_pw/module_pwdft/setup_pwwfc.h"
 
 #if defined(ENABLE_CIDER) && defined(USE_LIBXC)
 #include "source_estate/module_pot/pot_cider_xc.h"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -67,7 +71,7 @@ void setup_training_pbe0_exx_label()
     GlobalC::exx_info.info_global.hybrid_step = 1;
     GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock] = {
         {{"alpha", "1"}}};
-    }
+}
 
 template <typename T, typename Device>
 double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
@@ -113,7 +117,20 @@ double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
                                      "missing PW wavefunction data for one-shot EXX label evaluation");
         }
 
-        OperatorEXX op_exx(isk, wfcpw, rhopw, kv, &ucell);
+        hamilt::ExxOperatorOptions options;
+        options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
+        options.band_tile_size = PARAM.inp.exx_band_tile_size;
+        options.q_tile_size = PARAM.inp.exx_q_tile_size;
+        options.nspin = PARAM.inp.nspin;
+        options.ecutexx = PARAM.inp.ecutexx;
+        options.ecutrho = PARAM.inp.ecutrho;
+        options.gamma_extrapolation = false;
+        options.exxace = false;
+        options.separate_loop = false;
+        options.hybrid_alpha = 0.25;
+        options.fock_params = {{{"alpha", "1"}}};
+
+        OperatorEXX op_exx(isk, wfcpw, rhopw, kv, &ucell, options);
         op_exx.set_psi(*psi);
         op_exx.set_wg(wg);
         const double raw_exx = op_exx.cal_exx_energy(psi);
@@ -130,7 +147,7 @@ double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
         restore_exx_state();
         throw;
     }
-	}
+}
 
 template <typename T, typename Device>
 std::vector<double> cal_local_potential_band_diagonal(const ModuleBase::matrix& potential,
@@ -321,12 +338,65 @@ void ESolver_KS_PW<T, Device>::allocate_hamilt(const UnitCell& ucell)
 			&ucell);
 }
 
+template <typename T, typename Device>
+void ESolver_KS_PW<T, Device>::validate_mixed_band_targets(const Input_para& inp) const
+{
+    if (inp.mem_saver == 1 && inp.calculation == "scf" && !this->kv.has_band_kpoints())
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mem_saver=1 for scf PW calculations requires K_POINTS_BAND target k-points");
+    }
+    if (!this->kv.has_band_kpoints())
+    {
+        return;
+    }
+
+    if (inp.calculation != "scf")
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mixed hybrid band targets require calculation scf");
+    }
+    if (inp.basis_type != "pw")
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mixed hybrid band targets require basis_type pw");
+    }
+    if (!inp.out_band[0])
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "K_POINTS_BAND requires out_band 1");
+    }
+    if (!GlobalC::exx_info.info_global.cal_exx || !inp.exxace || !GlobalC::exx_info.info_global.separate_loop)
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mixed hybrid band targets require PW hybrid EXX with exx_ace 1 and exx_separate_loop 1");
+    }
+    if (GlobalV::KPAR > 1)
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mixed hybrid band targets do not support KPAR>1 in v1");
+    }
+    if (inp.mem_saver == 1 && inp.ks_solver == "cg")
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mem_saver=1 for mixed hybrid band targets does not support ks_solver cg; "
+                                 "use dav, dav_subspace, or bpcg");
+    }
+    if (inp.mem_saver == 1 && inp.out_wfc_pw != 0)
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::validate_mixed_band_targets",
+                                 "mixed hybrid band targets write eigenvalues only and do not support out_wfc_pw "
+                                 "with mem_saver=1");
+    }
+}
+
 
 
 template <typename T, typename Device>
 void ESolver_KS_PW<T, Device>::before_all_runners(UnitCell& ucell, const Input_para& inp)
 {
     ESolver_KS::before_all_runners(ucell, inp);
+    this->validate_mixed_band_targets(inp);
 
     //! setup and allocation for pelec, potentials, etc. 
     elecstate::setup_estate_pw(ucell, this->kv, this->sf, this->pelec, this->chr,
@@ -600,7 +670,182 @@ void ESolver_KS_PW<T, Device>::after_scf(UnitCell& ucell, const int istep, const
               this->pw_rho, this->pw_rhod, this->pw_big, this->stp,
               this->Pgrid, PARAM.inp);
 
+    if (conv_esolver)
+    {
+        this->solve_mixed_band_targets(ucell);
+    }
+
     ModuleBase::timer::end("ESolver_KS_PW", "after_scf");
+}
+
+template <typename T, typename Device>
+void ESolver_KS_PW<T, Device>::solve_mixed_band_targets(UnitCell& ucell)
+{
+    if (!this->kv.has_band_kpoints())
+    {
+        return;
+    }
+
+    ModuleBase::TITLE("ESolver_KS_PW", "solve_mixed_band_targets");
+    ModuleBase::timer::start("ESolver_KS_PW", "mixed_band_targets");
+
+    auto* source_exx = static_cast<hamilt::OperatorEXXPW<T, Device>*>(this->exx_helper->get_op_exx());
+    if (source_exx == nullptr)
+    {
+        ModuleBase::WARNING_QUIT("ESolver_KS_PW::solve_mixed_band_targets",
+                                 "SCF EXX source operator is not initialized");
+    }
+
+    if (PARAM.inp.mem_saver == 1)
+    {
+        this->solve_mixed_band_targets_mem_saver(ucell, source_exx);
+    }
+    else
+    {
+        this->solve_mixed_band_targets_full(ucell, source_exx);
+    }
+
+    ModuleBase::timer::end("ESolver_KS_PW", "mixed_band_targets");
+}
+
+template <typename T, typename Device>
+void ESolver_KS_PW<T, Device>::solve_mixed_band_targets_full(UnitCell& ucell,
+                                                             hamilt::OperatorEXXPW<T, Device>* source_exx)
+{
+    K_Vectors band_kv = this->kv.make_band_target_kvectors(PARAM.inp.nspin);
+    ModulePW::PW_Basis_K* band_pw_wfc = nullptr;
+    pw::setup_pwwfc(PARAM.inp, ucell, *this->pw_rho, band_kv, band_pw_wfc);
+
+    pseudopot_cell_vnl band_ppcell;
+    band_ppcell.init(ucell, &this->sf, band_pw_wfc);
+    band_ppcell.init_vnl(ucell, this->pw_rhod);
+    ModuleBase::matrix veff = this->pelec->pot->get_eff_v();
+    band_ppcell.cal_effective_D(veff, this->pw_rhod, ucell);
+
+    Setup_Psi_pw band_stp;
+    band_stp.before_runner(ucell, band_kv, this->sf, *band_pw_wfc, band_ppcell, PARAM.inp);
+
+    auto* band_hamilt = new hamilt::HamiltPW<T, Device>(this->pelec->pot,
+                                                         band_pw_wfc,
+                                                         &band_kv,
+                                                         &band_ppcell,
+                                                         &this->dftu,
+                                                         &ucell,
+                                                         source_exx);
+    band_stp.init(band_hamilt);
+
+    elecstate::ElecStatePW<T, Device> band_elec(band_pw_wfc,
+                                                &this->chr,
+                                                &band_kv,
+                                                &ucell,
+                                                &band_ppcell,
+                                                this->pw_rho,
+                                                this->pw_big);
+    band_elec.pot = this->pelec->pot;
+    band_elec.skip_weights = true;
+    band_elec.wg.zero_out();
+
+    const double target_ethr = std::max(PARAM.inp.scf_thr, 1.0e-8);
+    hsolver::setup_diago_params_pw<T, Device>(0, 1, target_ethr, PARAM.inp);
+    hsolver::HSolverPW<T, Device> hsolver_pw_obj(band_pw_wfc,
+                                                 "nscf",
+                                                 PARAM.inp.basis_type,
+                                                 PARAM.inp.ks_solver,
+                                                 PARAM.globalv.use_uspp,
+                                                 PARAM.inp.nspin,
+                                                 hsolver::DiagoIterAssist<T, Device>::SCF_ITER,
+                                                 hsolver::DiagoIterAssist<T, Device>::PW_DIAG_NMAX,
+                                                 hsolver::DiagoIterAssist<T, Device>::PW_DIAG_THR,
+                                                 hsolver::DiagoIterAssist<T, Device>::need_subspace,
+                                                 false);
+
+    hsolver_pw_obj.solve(static_cast<hamilt::Hamilt<T, Device>*>(band_hamilt),
+                         *band_stp.template get_psi_t<T, Device>(),
+                         &band_elec,
+                         band_elec.ekb.c,
+                         GlobalV::RANK_IN_POOL,
+                         GlobalV::NPROC_IN_POOL,
+                         true,
+                         ucell.tpiba,
+                         ucell.nat);
+
+    ModuleIO::write_bands(PARAM.inp, band_elec.ekb, band_kv);
+    band_elec.pot = nullptr;
+    delete band_hamilt;
+    band_stp.clean();
+    pw::teardown_pwwfc(band_pw_wfc);
+}
+
+template <typename T, typename Device>
+void ESolver_KS_PW<T, Device>::solve_mixed_band_targets_mem_saver(UnitCell& ucell,
+                                                                  hamilt::OperatorEXXPW<T, Device>* source_exx)
+{
+    K_Vectors band_kv = this->kv.make_band_target_kvectors(PARAM.inp.nspin);
+    ModulePW::PW_Basis_K* band_pw_wfc = nullptr;
+    pw::setup_pwwfc(PARAM.inp, ucell, *this->pw_rho, band_kv, band_pw_wfc);
+
+    pseudopot_cell_vnl band_ppcell;
+    band_ppcell.init(ucell, &this->sf, band_pw_wfc);
+    band_ppcell.init_vnl(ucell, this->pw_rhod);
+
+    ModuleBase::matrix band_ekb(band_kv.get_nks(), PARAM.globalv.nbands_l);
+    const double target_ethr = std::max(PARAM.inp.scf_thr, 1.0e-8);
+    ModuleBase::matrix veff = this->pelec->pot->get_eff_v();
+    band_ppcell.cal_effective_D(veff, this->pw_rhod, ucell);
+
+    Setup_Psi_pw band_stp;
+    band_stp.before_runner(ucell, band_kv, this->sf, *band_pw_wfc, band_ppcell, PARAM.inp, true);
+
+    auto* band_hamilt = new hamilt::HamiltPW<T, Device>(this->pelec->pot,
+                                                         band_pw_wfc,
+                                                         &band_kv,
+                                                         &band_ppcell,
+                                                         &this->dftu,
+                                                         &ucell,
+                                                         source_exx);
+    elecstate::ElecStatePW<T, Device> band_elec(band_pw_wfc,
+                                                &this->chr,
+                                                &band_kv,
+                                                &ucell,
+                                                &band_ppcell,
+                                                this->pw_rho,
+                                                this->pw_big);
+    band_elec.pot = this->pelec->pot;
+    band_elec.skip_weights = true;
+    band_elec.wg.zero_out();
+
+    hsolver::setup_diago_params_pw<T, Device>(0, 1, target_ethr, PARAM.inp);
+    hsolver::HSolverPW<T, Device> hsolver_pw_obj(band_pw_wfc,
+                                                 "nscf",
+                                                 PARAM.inp.basis_type,
+                                                 PARAM.inp.ks_solver,
+                                                 PARAM.globalv.use_uspp,
+                                                 PARAM.inp.nspin,
+                                                 hsolver::DiagoIterAssist<T, Device>::SCF_ITER,
+                                                 hsolver::DiagoIterAssist<T, Device>::PW_DIAG_NMAX,
+                                                 hsolver::DiagoIterAssist<T, Device>::PW_DIAG_THR,
+                                                 hsolver::DiagoIterAssist<T, Device>::need_subspace,
+                                                 false);
+
+    for (int ik = 0; ik < band_pw_wfc->nks; ++ik)
+    {
+        band_stp.init_ik(band_hamilt, ik);
+        hsolver_pw_obj.solve_ik(static_cast<hamilt::Hamilt<T, Device>*>(band_hamilt),
+                                *band_stp.template get_psi_t<T, Device>(),
+                                &band_elec,
+                                band_ekb.c + ik * PARAM.globalv.nbands_l,
+                                ik,
+                                GlobalV::RANK_IN_POOL,
+                                GlobalV::NPROC_IN_POOL,
+                                true);
+    }
+
+    band_elec.pot = nullptr;
+    delete band_hamilt;
+    band_stp.clean();
+    pw::teardown_pwwfc(band_pw_wfc);
+
+    ModuleIO::write_bands(PARAM.inp, band_ekb, band_kv);
 }
 
 template <typename T, typename Device>

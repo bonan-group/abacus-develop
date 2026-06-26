@@ -49,6 +49,7 @@ struct Exx_Helper : public Exx_HelperBase
     bool get_op_first_iter() const override { return op_exx ? op_exx->first_iter : false; }
     void set_op_first_iter(bool flag) override { if (op_exx) op_exx->first_iter = flag; }
     void set_op_exx(void* op) override { op_exx = reinterpret_cast<OperatorEXX*>(op); }
+    void* get_op_exx() const override { return op_exx; }
 
   private:
     bool first_iter = false;

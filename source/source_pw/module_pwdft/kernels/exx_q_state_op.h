@@ -33,6 +33,20 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
                                           int rep_spin_index,
                                           bool need_gpu_fft_index);
 
+template <typename T>
+void rotate_exx_realspace_symmetry_cpu(const ModulePW::PW_Basis_K* wfcpw,
+                                       const K_Vectors::ExxFullPoint& full_point,
+                                       int rep_spin_index,
+                                       const T* representative_real,
+                                       T* full_real);
+
+template <typename T>
+void rotate_exx_realspace_symmetry_adjoint_cpu(const ModulePW::PW_Basis_K* wfcpw,
+                                               const K_Vectors::ExxFullPoint& full_point,
+                                               int rep_spin_index,
+                                               const T* full_real,
+                                               T* representative_real);
+
 template <typename T, typename Device>
 struct exx_conjugate_real_op
 {

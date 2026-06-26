@@ -16,6 +16,8 @@ void kvec_d2c(K_Vectors& kv, const ModuleBase::Matrix3& reciprocal_vec);
 
 void kvec_c2d(K_Vectors& kv, const ModuleBase::Matrix3& latvec);
 
+void band_kvec_c2d(K_Vectors& kv, const ModuleBase::Matrix3& latvec);
+
 /**
  * @brief Sets both the direct and Cartesian k-vectors.
  *

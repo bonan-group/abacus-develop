@@ -43,6 +43,11 @@ public:
 
     int nmp[3]={0};                 /// Number of Monhorst-Pack
     std::vector<int> kl_segids; /// index of kline segment
+    std::vector<ModuleBase::Vector3<double>> band_kvec_c; /// target-only band k-points in Cartesian coordinates
+    std::vector<ModuleBase::Vector3<double>> band_kvec_d; /// target-only band k-points in Direct coordinates
+    std::vector<int> band_kl_segids; /// target-only band k-line segment ids
+    bool band_kc_done = false;
+    bool band_kd_done = false;
 
     /// @brief equal k points to each ibz-kpont, corresponding to a certain symmetry operations. 
     /// dim: [iks_ibz][(isym, kvec_d)]
@@ -53,6 +58,8 @@ public:
 
     K_Vectors(){};
     ~K_Vectors(){};
+    K_Vectors(const K_Vectors&) = default;
+    K_Vectors(K_Vectors&& rhs) = default;
     K_Vectors& operator=(const K_Vectors&) = default;
     K_Vectors& operator=(K_Vectors&& rhs) = default;
 
@@ -155,6 +162,12 @@ public:
     void normalize_exx_full_q_map_weights();
     void finalize_exx_full_q_map();
     int exx_rep_spin_index(const ExxFullPoint& point, int ispin) const;
+    bool has_band_kpoints() const
+    {
+        return !this->band_kvec_c.empty() || !this->band_kvec_d.empty();
+    }
+
+    K_Vectors make_band_target_kvectors(const int nspin_in) const;
 
     /**
      * @brief Updates the k-points to use the irreducible Brillouin zone (IBZ).

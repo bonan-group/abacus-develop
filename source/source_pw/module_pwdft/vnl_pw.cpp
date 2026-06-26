@@ -32,7 +32,7 @@ void pseudopot_cell_vnl::release_memory()
 {
     if (this->nhm <= 0 || memory_released) {
         return;
-}
+    }
     if (this->use_gpu_)
     {
         delmem_sd_op()(this->s_deeq);

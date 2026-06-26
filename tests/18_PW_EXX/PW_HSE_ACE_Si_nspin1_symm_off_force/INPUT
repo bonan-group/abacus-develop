@@ -1,0 +1,32 @@
+INPUT_PARAMETERS
+suffix            autotest
+calculation       scf
+nbands            4
+stru_file         STRU
+kpoint_file       KPT
+pseudo_dir        ../../PP_ORB
+pw_seed           1
+init_wfc          random
+
+ecutwfc           10
+basis_type        pw
+scf_thr           1e-5
+scf_nmax          60
+smearing_method   fixed
+mixing_beta       0.4
+
+cal_force         1
+cal_stress        0
+
+dft_functional    hse
+symmetry          -1
+device            cpu
+exx_separate_loop 1
+exxace            1
+exx_hybrid_step   1
+exx_thr_type      energy
+exx_ene_thr       1e-4
+exx_gamma_extrapolation false
+exx_batch_fft_size 4
+exx_band_tile_size 2
+exx_q_tile_size   1

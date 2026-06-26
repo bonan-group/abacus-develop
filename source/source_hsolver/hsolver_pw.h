@@ -55,6 +55,15 @@ class HSolverPW
                const double tpiba,
                const int nat);
 
+    void solve_ik(hamilt::Hamilt<T, Device>* pHamilt,
+                  psi::Psi<T, Device>& psi,
+                  elecstate::ElecState* pes,
+                  double* out_eigenvalues_ik,
+                  const int ik,
+                  const int rank_in_pool_in,
+                  const int nproc_in_pool_in,
+                  const bool hamiltonian_prepared);
+
 
   protected:
     // diago caller

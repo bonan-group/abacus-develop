@@ -85,7 +85,8 @@ public:
 
 public:
     //prepare for transforms between real and reciprocal spaces
-    void setuptransform(int batch_fft_size = 1);
+    void setuptransform();
+    void setuptransform(int batch_fft_size);
 
     int *igl2isz_k=nullptr, * d_igl2isz_k = nullptr; //[npwk_max*nks] map (igl,ik) to (is,iz)
     int *igl2ig_k=nullptr;//[npwk_max*nks] map (igl,ik) to ig
@@ -145,8 +146,8 @@ public:
                              const int* rep_igl,
                              const int* fft_isz,
                              const std::complex<double>* phase,
-                             const bool add = false,
-                             const FPTYPE factor = 1.0) const;
+                             const bool add,
+                             const FPTYPE factor) const;
     template <typename FPTYPE>
     void recip2real_remapped_conjugate(const std::complex<FPTYPE>* in,
                                        std::complex<FPTYPE>* out,
@@ -154,8 +155,8 @@ public:
                                        const int* rep_igl,
                                        const int* fft_isz,
                                        const std::complex<double>* phase,
-                                       const bool add = false,
-                                       const FPTYPE factor = 1.0) const;
+                                       const bool add,
+                                       const FPTYPE factor) const;
     template <typename FPTYPE, typename Device>
     void recip2real_remapped_batch(const Device* ctx,
                                    const std::complex<FPTYPE>* in_batch,
@@ -168,8 +169,8 @@ public:
                                    const std::complex<FPTYPE>* phase_device,
                                    int batch_count,
                                    const bool conjugate,
-                                   const bool add = false,
-                                   const FPTYPE factor = 1.0) const;
+                                   const bool add,
+                                   const FPTYPE factor) const;
     template <typename FPTYPE>
     void real2recip_remapped_conjugate(const std::complex<FPTYPE>* in,
                                        std::complex<FPTYPE>* out,
@@ -177,8 +178,8 @@ public:
                                        const int* rep_igl,
                                        const int* fft_isz,
                                        const std::complex<double>* phase,
-                                       const bool add = false,
-                                       const FPTYPE factor = 1.0) const;
+                                       const bool add,
+                                       const FPTYPE factor) const;
     template <typename FPTYPE>
     void real2recip_remapped(const std::complex<FPTYPE>* in,
                              std::complex<FPTYPE>* out,
@@ -186,8 +187,8 @@ public:
                              const int* rep_igl,
                              const int* fft_isz,
                              const std::complex<double>* phase,
-                             const bool add = false,
-                             const FPTYPE factor = 1.0) const;
+                             const bool add,
+                             const FPTYPE factor) const;
     #if defined(__DSP)
     template <typename FPTYPE, typename Device>
     void convolution(const Device* ctx,
@@ -249,8 +250,8 @@ public:
                              std::complex<FPTYPE>* out_batch,
                              const int ik,
                              int batch_count,
-                             const bool add = false,
-                             const FPTYPE factor = 1.0) const;
+                             const bool add,
+                             const FPTYPE factor) const;
 
     /**
      * @brief Batch transform from reciprocal space to real space
@@ -271,8 +272,8 @@ public:
                              std::complex<FPTYPE>* out_batch,
                              const int ik,
                              int batch_count,
-                             const bool add = false,
-                             const FPTYPE factor = 1.0) const;
+                             const bool add,
+                             const FPTYPE factor) const;
 
 
     template <typename TK,
