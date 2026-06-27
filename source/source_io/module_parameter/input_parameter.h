@@ -687,6 +687,8 @@ struct Input_para
     int exx_batch_fft_size = 8;          ///< batch size for PW EXX batched FFTs; values <= 1 use scalar chunks
     int exx_band_tile_size = 8;          ///< target/source band tile size for PW EXX q-tile real-space reuse
     int exx_q_tile_size = 4;             ///< q-point tile size for PW EXX q-state fetching
+    bool exx_auto_tiling = false;         ///< automatically choose PW EXX tile sizes from a memory budget
+    double exx_tile_memory_budget_mb = 0.0; ///< memory budget for automatic PW EXX tiling; 0 uses internal default
     std::string exx_thr_type = "density"; ///< threshold type for exx outer loop
     double exx_ene_thr = 1e-5;            ///< threshold when exx_thr_type = energy
     double ecutexx = 0.0;                 ///< energy cutoff for exx calculation, Ry

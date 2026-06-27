@@ -14,9 +14,12 @@
 #include "source_base/module_container/ATen/kernels/lapack.h"
 
 #include <complex>
+#include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <map>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -47,7 +50,236 @@ struct ExxOperatorOptions
     double hybrid_alpha = 0.0;
     std::vector<std::map<std::string, std::string>> fock_params;
     std::vector<std::map<std::string, std::string>> erfc_params;
+    bool auto_tiling = false;
+    double tile_memory_budget_mb = 0.0;
+    bool tile_options_resolved = false;
+    double tile_budget_mb = 0.0;
+    double tile_effective_budget_mb = 0.0;
+    double tile_estimated_memory_mb = 0.0;
+    double tile_cufft_workspace_mb = 0.0;
 };
+
+struct ExxTilePolicyInput
+{
+    bool auto_tiling = false;
+    std::string device = "cpu";
+    std::string precision = "double";
+    double memory_budget_mb = 0.0;
+    int nbands = 1;
+    int active_q_count = 1;
+    std::size_t nrxx = 0;
+    std::size_t npw = 0;
+    std::size_t npwk_max = 0;
+    int fft_nx = 0;
+    int fft_ny = 0;
+    int fft_nz = 0;
+    int requested_batch_fft_size = 1;
+    int requested_band_tile_size = 1;
+    int requested_q_tile_size = 1;
+    double safety_factor = 0.75;
+};
+
+struct ExxTilePolicyResult
+{
+    int batch_fft_size = 1;
+    int band_tile_size = 1;
+    int q_tile_size = 1;
+    bool auto_tiling_used = false;
+    double budget_mb = 0.0;
+    double effective_budget_mb = 0.0;
+    double estimated_memory_mb = 0.0;
+    double cufft_workspace_mb = 0.0;
+};
+
+namespace exx_tile_policy
+{
+constexpr double BYTES_PER_MB = 1024.0 * 1024.0;
+
+inline int clamp_positive(int value)
+{
+    return std::max(1, value);
+}
+
+inline std::size_t complex_bytes_for_precision(const std::string& precision)
+{
+    return precision == "single" ? sizeof(float) * 2 : sizeof(double) * 2;
+}
+
+inline std::size_t real_bytes_for_precision(const std::string& precision)
+{
+    return precision == "single" ? sizeof(float) : sizeof(double);
+}
+
+inline double mb_from_bytes(double bytes)
+{
+    return bytes / BYTES_PER_MB;
+}
+
+inline int largest_power_of_two_at_most(int value)
+{
+    int result = 1;
+    while (result * 2 <= value && result < 128)
+    {
+        result *= 2;
+    }
+    return result;
+}
+
+inline std::size_t estimate_cufft_batch_workspace_bytes(const std::string& precision,
+                                                        int nx,
+                                                        int ny,
+                                                        int nz,
+                                                        int batch_size)
+{
+    if (nx <= 0 || ny <= 0 || nz <= 0 || batch_size <= 1)
+    {
+        return 0;
+    }
+
+    const std::size_t complex_bytes = complex_bytes_for_precision(precision);
+    const std::size_t nxyz = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)
+                             * static_cast<std::size_t>(nz);
+    return static_cast<std::size_t>(batch_size) * nxyz * complex_bytes;
+}
+
+inline double estimate_memory_bytes(const ExxTilePolicyInput& input,
+                                    int batch_fft_size,
+                                    int band_tile_size,
+                                    int q_tile_size)
+{
+    const std::size_t complex_bytes = complex_bytes_for_precision(input.precision);
+    const std::size_t real_bytes = real_bytes_for_precision(input.precision);
+    const std::size_t batch = static_cast<std::size_t>(batch_fft_size);
+    const std::size_t bands = static_cast<std::size_t>(band_tile_size);
+    const std::size_t q = static_cast<std::size_t>(q_tile_size);
+    const std::size_t fft_grid_size = static_cast<std::size_t>(std::max(1, input.fft_nx))
+                                      * static_cast<std::size_t>(std::max(1, input.fft_ny))
+                                      * static_cast<std::size_t>(std::max(1, input.fft_nz));
+    const std::size_t nrxx = input.nrxx > 0 ? input.nrxx : fft_grid_size;
+    const std::size_t npw = input.npw > 0 ? input.npw : fft_grid_size;
+    const std::size_t npwk_max = input.npwk_max > 0 ? input.npwk_max : npw;
+
+    double bytes = 0.0;
+
+    // FFT_CUDA batch input/output buffers are full-grid buffers, not MPI-local nrxx buffers.
+    bytes += 2.0 * static_cast<double>(batch) * fft_grid_size * complex_bytes;
+
+    bytes += static_cast<double>(batch) * nrxx * complex_bytes;     // psi_mq_batch_real
+    bytes += static_cast<double>(batch) * npwk_max * complex_bytes; // psi_mq_batch_recip
+    bytes += static_cast<double>(batch) * nrxx * complex_bytes;     // density_real_batch
+    bytes += static_cast<double>(batch) * npw * complex_bytes;      // density_recip_batch
+    bytes += static_cast<double>(batch) * npw * real_bytes;         // density_norm_batch
+    bytes += static_cast<double>(batch) * real_bytes;               // energy_batch
+
+    bytes += 2.0 * bands * nrxx * complex_bytes; // qtile_target_real and qtile_h_real
+    bytes += static_cast<double>(q) * bands * nrxx * complex_bytes;
+    bytes += static_cast<double>(q) * bands * real_bytes;
+
+    bytes += static_cast<double>(input.active_q_count) * npw * real_bytes;
+    bytes += static_cast<double>(estimate_cufft_batch_workspace_bytes(input.precision,
+                                                                      input.fft_nx,
+                                                                      input.fft_ny,
+                                                                      input.fft_nz,
+                                                                      batch_fft_size));
+
+    return bytes;
+}
+
+inline ExxTilePolicyResult choose_exx_tiles(const ExxTilePolicyInput& input)
+{
+    ExxTilePolicyResult result;
+    result.batch_fft_size = clamp_positive(input.requested_batch_fft_size);
+    result.band_tile_size = clamp_positive(input.requested_band_tile_size);
+    result.q_tile_size = clamp_positive(input.requested_q_tile_size);
+
+    if (!input.auto_tiling)
+    {
+        return result;
+    }
+
+    const int nbands = clamp_positive(input.nbands);
+    const int active_q_count = clamp_positive(input.active_q_count);
+    const double budget_mb = input.memory_budget_mb > 0.0 ? input.memory_budget_mb : 1024.0;
+    const double safety_factor = std::min(1.0, std::max(0.1, input.safety_factor));
+    const double effective_budget_bytes = budget_mb * safety_factor * BYTES_PER_MB;
+
+    result.auto_tiling_used = true;
+    result.budget_mb = budget_mb;
+    result.effective_budget_mb = budget_mb * safety_factor;
+
+    const int max_candidate_batch = input.device == "gpu" ? std::min({128, nbands, largest_power_of_two_at_most(nbands)})
+                                                          : 1;
+    for (int batch = max_candidate_batch; batch >= 1; batch /= 2)
+    {
+        const int max_band = std::max(batch, (nbands / batch) * batch);
+        for (int band = max_band; band >= batch; band -= batch)
+        {
+            if (estimate_memory_bytes(input, batch, band, 1) > effective_budget_bytes)
+            {
+                continue;
+            }
+
+            int q_tile = 1;
+            for (int q = active_q_count; q >= 1; --q)
+            {
+                if (estimate_memory_bytes(input, batch, band, q) <= effective_budget_bytes)
+                {
+                    q_tile = q;
+                    break;
+                }
+            }
+
+            result.batch_fft_size = batch;
+            result.band_tile_size = band;
+            result.q_tile_size = q_tile;
+            result.estimated_memory_mb = mb_from_bytes(estimate_memory_bytes(input, batch, band, q_tile));
+            result.cufft_workspace_mb = mb_from_bytes(static_cast<double>(
+                estimate_cufft_batch_workspace_bytes(input.precision,
+                                                     input.fft_nx,
+                                                     input.fft_ny,
+                                                     input.fft_nz,
+                                                     batch)));
+            return result;
+        }
+
+        if (batch == 1)
+        {
+            break;
+        }
+    }
+
+    result.batch_fft_size = 1;
+    result.band_tile_size = 1;
+    result.q_tile_size = 1;
+    result.estimated_memory_mb = mb_from_bytes(estimate_memory_bytes(input, 1, 1, 1));
+    return result;
+}
+} // namespace exx_tile_policy
+
+inline ExxOperatorOptions resolve_exx_auto_tiling(ExxOperatorOptions options, const ExxTilePolicyInput& input)
+{
+    if (!options.auto_tiling)
+    {
+        return options;
+    }
+
+    ExxTilePolicyInput resolved_input = input;
+    resolved_input.auto_tiling = true;
+    resolved_input.memory_budget_mb = options.tile_memory_budget_mb;
+    resolved_input.requested_batch_fft_size = options.batch_fft_size;
+    resolved_input.requested_band_tile_size = options.band_tile_size;
+    resolved_input.requested_q_tile_size = options.q_tile_size;
+    const ExxTilePolicyResult tile_result = exx_tile_policy::choose_exx_tiles(resolved_input);
+    options.batch_fft_size = tile_result.batch_fft_size;
+    options.band_tile_size = tile_result.band_tile_size;
+    options.q_tile_size = tile_result.q_tile_size;
+    options.tile_options_resolved = true;
+    options.tile_budget_mb = tile_result.budget_mb;
+    options.tile_effective_budget_mb = tile_result.effective_budget_mb;
+    options.tile_estimated_memory_mb = tile_result.estimated_memory_mb;
+    options.tile_cufft_workspace_mb = tile_result.cufft_workspace_mb;
+    return options;
+}
 
 template <typename T, typename Device>
 class OperatorEXXPW : public OperatorPW<T, Device>
@@ -146,7 +378,10 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                                  int q_count,
                                  int source_tile_size,
                                  int q_tile_size,
-                                 int chunk_size) const;
+                                 int chunk_size,
+                                 const char* stage,
+                                 double k_elapsed_sec,
+                                 double total_elapsed_sec) const;
     int resolve_qtile_chunk_size() const;
     void ensure_qtile_workspace(std::size_t target_size, std::size_t q_size, int batch_limit) const;
     void fill_target_tile(const T* tmpsi_in,

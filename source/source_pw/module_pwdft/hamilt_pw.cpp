@@ -34,6 +34,8 @@ ExxOperatorOptions make_exx_operator_options()
     options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
     options.fock_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock];
     options.erfc_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Erfc];
+    options.auto_tiling = PARAM.inp.exx_auto_tiling;
+    options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
     return options;
 }
 } // namespace

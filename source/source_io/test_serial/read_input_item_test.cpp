@@ -208,6 +208,25 @@ TEST_F(InputTest, Item_test)
         EXPECT_THAT(output, testing::HasSubstr("NOTICE"));
     }
     { // PW EXX tile sizes
+        auto it_auto = find_label("exx_auto_tiling", readinput.input_lists);
+        ASSERT_NE(it_auto, readinput.input_lists.end());
+        param.input.exx_auto_tiling = false;
+        it_auto->second.str_values = {"1"};
+        it_auto->second.read_value(it_auto->second, param);
+        EXPECT_TRUE(param.input.exx_auto_tiling);
+
+        auto it_budget = find_label("exx_tile_memory_budget_mb", readinput.input_lists);
+        ASSERT_NE(it_budget, readinput.input_lists.end());
+        param.input.exx_tile_memory_budget_mb = 0.0;
+        EXPECT_NO_THROW(it_budget->second.check_value(it_budget->second, param));
+        param.input.exx_tile_memory_budget_mb = 1024.0;
+        EXPECT_NO_THROW(it_budget->second.check_value(it_budget->second, param));
+        param.input.exx_tile_memory_budget_mb = -1.0;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it_budget->second.check_value(it_budget->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("exx_tile_memory_budget_mb"));
+
         auto it = find_label("exx_batch_fft_size", readinput.input_lists);
         param.input.exx_batch_fft_size = 1;
         EXPECT_NO_THROW(it->second.check_value(it->second, param));

@@ -1,4 +1,5 @@
 #include "source_pw/module_pwdft/radial_proj.h"
+#include "source_pw/module_pwdft/op_pw_exx.h"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <numeric>
@@ -6,6 +7,171 @@
 #include <random>
 
 #define DOUBLETHRESHOLD 1e-15
+
+namespace
+{
+
+hamilt::ExxTilePolicyInput base_exx_tile_input()
+{
+    hamilt::ExxTilePolicyInput input;
+    input.auto_tiling = true;
+    input.device = "gpu";
+    input.precision = "double";
+    input.memory_budget_mb = 1024.0;
+    input.nbands = 32;
+    input.active_q_count = 8;
+    input.nrxx = 4096;
+    input.npw = 2048;
+    input.npwk_max = 2048;
+    input.fft_nx = 16;
+    input.fft_ny = 16;
+    input.fft_nz = 16;
+    input.requested_batch_fft_size = 8;
+    input.requested_band_tile_size = 8;
+    input.requested_q_tile_size = 4;
+    return input;
+}
+
+} // namespace
+
+TEST(ExxTilePolicyTest, ManualModeKeepsRequestedTiles)
+{
+    auto input = base_exx_tile_input();
+    input.auto_tiling = false;
+    input.requested_batch_fft_size = 3;
+    input.requested_band_tile_size = 5;
+    input.requested_q_tile_size = 7;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_EQ(result.batch_fft_size, 3);
+    EXPECT_EQ(result.band_tile_size, 5);
+    EXPECT_EQ(result.q_tile_size, 7);
+    EXPECT_FALSE(result.auto_tiling_used);
+}
+
+TEST(ExxTilePolicyTest, TinyBudgetFallsBackToScalarTiles)
+{
+    auto input = base_exx_tile_input();
+    input.memory_budget_mb = 0.001;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_EQ(result.batch_fft_size, 1);
+    EXPECT_EQ(result.band_tile_size, 1);
+    EXPECT_EQ(result.q_tile_size, 1);
+    EXPECT_TRUE(result.auto_tiling_used);
+}
+
+TEST(ExxTilePolicyTest, BandTileIsMultipleOfBatch)
+{
+    auto input = base_exx_tile_input();
+    input.nbands = 30;
+    input.memory_budget_mb = 1024.0;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_GE(result.batch_fft_size, 1);
+    EXPECT_GE(result.band_tile_size, 1);
+    EXPECT_EQ(result.band_tile_size % result.batch_fft_size, 0);
+    EXPECT_LE(result.band_tile_size, input.nbands);
+}
+
+TEST(ExxTilePolicyTest, FewerBandsThanBatchClampCleanly)
+{
+    auto input = base_exx_tile_input();
+    input.nbands = 3;
+    input.memory_budget_mb = 1024.0;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_LE(result.batch_fft_size, input.nbands);
+    EXPECT_LE(result.band_tile_size, input.nbands);
+    EXPECT_EQ(result.band_tile_size % result.batch_fft_size, 0);
+}
+
+TEST(ExxTilePolicyTest, RemainingBudgetCanIncreaseQTile)
+{
+    auto input = base_exx_tile_input();
+    input.nbands = 8;
+    input.active_q_count = 6;
+    input.nrxx = 128;
+    input.npw = 64;
+    input.npwk_max = 64;
+    input.fft_nx = 4;
+    input.fft_ny = 4;
+    input.fft_nz = 8;
+    input.memory_budget_mb = 64.0;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_EQ(result.band_tile_size, 8);
+    EXPECT_GT(result.q_tile_size, 1);
+    EXPECT_LE(result.q_tile_size, input.active_q_count);
+}
+
+TEST(ExxTilePolicyTest, EstimatesMemoryBeforePlaneWaveCountsAreCollected)
+{
+    auto input = base_exx_tile_input();
+    input.nrxx = 0;
+    input.npw = 0;
+    input.npwk_max = 0;
+    input.fft_nx = 32;
+    input.fft_ny = 32;
+    input.fft_nz = 32;
+    input.memory_budget_mb = 64.0;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_TRUE(result.auto_tiling_used);
+    EXPECT_GT(result.estimated_memory_mb, 0.0);
+    EXPECT_GT(result.cufft_workspace_mb, 0.0);
+}
+
+TEST(ExxTilePolicyTest, ZeroBudgetUsesDefaultBudget)
+{
+    auto input = base_exx_tile_input();
+    input.memory_budget_mb = 0.0;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_TRUE(result.auto_tiling_used);
+    EXPECT_DOUBLE_EQ(result.budget_mb, 1024.0);
+    EXPECT_DOUBLE_EQ(result.effective_budget_mb, 768.0);
+}
+
+TEST(ExxTilePolicyTest, CpuAutoModeUsesScalarBatch)
+{
+    auto input = base_exx_tile_input();
+    input.device = "cpu";
+    input.memory_budget_mb = 1024.0;
+
+    const hamilt::ExxTilePolicyResult result = hamilt::exx_tile_policy::choose_exx_tiles(input);
+
+    EXPECT_EQ(result.batch_fft_size, 1);
+    EXPECT_EQ(result.band_tile_size, input.nbands);
+}
+
+TEST(ExxTilePolicyTest, CountsFullFftBatchAndApplyWorkspaces)
+{
+    auto input = base_exx_tile_input();
+    input.nbands = 8;
+    input.active_q_count = 1;
+    input.nrxx = 128;
+    input.npw = 64;
+    input.npwk_max = 64;
+    input.fft_nx = 32;
+    input.fft_ny = 32;
+    input.fft_nz = 32;
+    input.memory_budget_mb = 64.0;
+
+    const double estimated_bytes = hamilt::exx_tile_policy::estimate_memory_bytes(input, 8, 8, 1);
+    const double complex_bytes = static_cast<double>(sizeof(double) * 2);
+    const double minimum_expected_bytes = 2.0 * 8.0 * 32.0 * 32.0 * 32.0 * complex_bytes
+                                          + 2.0 * 8.0 * 128.0 * complex_bytes;
+
+    EXPECT_GE(estimated_bytes, minimum_expected_bytes);
+}
 
 TEST(RadialProjectionTest, BuildBackwardMapTest)
 {

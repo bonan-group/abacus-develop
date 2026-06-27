@@ -129,13 +129,17 @@ double evaluate_training_pbe0_exx_energy(const UnitCell& ucell,
         options.separate_loop = false;
         options.hybrid_alpha = 0.25;
         options.fock_params = {{{"alpha", "1"}}};
+        options.auto_tiling = PARAM.inp.exx_auto_tiling;
+        options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
 
         if (GlobalV::MY_RANK == 0)
         {
-            GlobalV::ofs_running << " training_pbe0_exx_label: one-shot EXX uses batch FFT size = "
+            GlobalV::ofs_running << " training_pbe0_exx_label: requested one-shot EXX tiles: batch FFT size = "
                                  << options.batch_fft_size
                                  << ", band tile size = " << options.band_tile_size
-                                 << ", q tile size = " << options.q_tile_size << std::endl;
+                                 << ", q tile size = " << options.q_tile_size
+                                 << ", auto tiling = " << (options.auto_tiling ? "on" : "off")
+                                 << ", memory budget = " << options.tile_memory_budget_mb << " MB" << std::endl;
         }
 
         OperatorEXX op_exx(isk, wfcpw, rhopw, kv, &ucell, options);

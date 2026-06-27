@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <iomanip>
 #include <map>
 #include <string>
 #include <type_traits>
@@ -35,6 +36,8 @@ hamilt::ExxOperatorOptions make_stress_exx_options()
     options.exxace = PARAM.inp.exxace;
     options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
     options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    options.auto_tiling = PARAM.inp.exx_auto_tiling;
+    options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
     return options;
 }
 } // namespace
@@ -47,7 +50,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                            const K_Vectors *p_kv,
                                            const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in, const UnitCell& ucell)
 {
-    const hamilt::ExxOperatorOptions exx_options = make_stress_exx_options();
+    hamilt::ExxOperatorOptions exx_options = make_stress_exx_options();
     bool gamma_extrapolation = exx_options.gamma_extrapolation;
     bool is_mp = p_kv->get_is_mp();
 #ifdef __MPI
@@ -122,9 +125,6 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
 #endif
         rhopw_exx_owned->initgrids(rhopw->lat0, rhopw->latvec, ecut_exx);
         rhopw_exx_owned->initparameters(rhopw->gamma_only, ecut_exx, rhopw->distribution_type, rhopw->xprime);
-        rhopw_exx_owned->setuptransform();
-        rhopw_exx_owned->collect_local_pw();
-        rhopw_exx = rhopw_exx_owned;
 
         wfcpw_exx = new ModulePW::PW_Basis_K(wfcpw->get_device(), exx_precision);
         wfcpw_exx->fft_bundle.setfft(wfcpw->get_device(), exx_precision);
@@ -138,8 +138,52 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                   wfcpw->kvec_d,
                                   wfcpw->distribution_type,
                                   wfcpw->xprime);
+        int active_full_q_count = 0;
+        if (exx_options.auto_tiling)
+        {
+            for (const auto& qpoint: p_kv->exx_full_q_map)
+            {
+                if (qpoint.active)
+                {
+                    ++active_full_q_count;
+                }
+            }
+
+            hamilt::ExxTilePolicyInput tile_input;
+            tile_input.device = wfcpw->get_device();
+            tile_input.precision = exx_precision;
+            tile_input.nbands = PARAM.inp.nbands > 0 ? PARAM.inp.nbands : exx_options.band_tile_size;
+            tile_input.active_q_count = std::max(1, active_full_q_count);
+            tile_input.nrxx = static_cast<std::size_t>(rhopw_exx_owned->nrxx);
+            tile_input.npw = static_cast<std::size_t>(rhopw_exx_owned->npw);
+            tile_input.npwk_max = static_cast<std::size_t>(wfcpw_exx->npwk_max);
+            tile_input.fft_nx = rhopw_exx_owned->nx;
+            tile_input.fft_ny = rhopw_exx_owned->ny;
+            tile_input.fft_nz = rhopw_exx_owned->nz;
+            exx_options = hamilt::resolve_exx_auto_tiling(exx_options, tile_input);
+        }
+        rhopw_exx_owned->setuptransform(exx_options.batch_fft_size);
+        rhopw_exx_owned->collect_local_pw();
+        rhopw_exx = rhopw_exx_owned;
         wfcpw_exx->setuptransform(exx_options.batch_fft_size);
         wfcpw_exx->collect_local_pw();
+        if (GlobalV::MY_RANK == 0 && GlobalV::ofs_running && exx_options.tile_options_resolved)
+        {
+            const std::ios::fmtflags saved_flags = GlobalV::ofs_running.flags();
+            const std::streamsize saved_precision = GlobalV::ofs_running.precision();
+            GlobalV::ofs_running << " EXX auto tiling: budget = " << std::fixed << std::setprecision(1)
+                                 << exx_options.tile_budget_mb
+                                 << " MB, effective budget = " << exx_options.tile_effective_budget_mb
+                                 << " MB, estimated tile memory = " << exx_options.tile_estimated_memory_mb
+                                 << " MB, cuFFT workspace estimate = " << exx_options.tile_cufft_workspace_mb
+                                 << " MB, nbands = " << (PARAM.inp.nbands > 0 ? PARAM.inp.nbands : exx_options.band_tile_size)
+                                 << ", active q = " << active_full_q_count
+                                 << ", nrxx = " << rhopw_exx->nrxx
+                                 << ", npw = " << rhopw_exx->npw
+                                 << ", npwk_max = " << wfcpw_exx->npwk_max << std::endl;
+            GlobalV::ofs_running.flags(saved_flags);
+            GlobalV::ofs_running.precision(saved_precision);
+        }
         if (rhopw_exx->nrxx != wfcpw_exx->nrxx)
         {
             ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",

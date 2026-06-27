@@ -186,6 +186,9 @@ check_out(){
         fi
         let ok++
     done
+    if ! check_log_contains "assert_log_contains"; then
+        ifail=1
+    fi
     if [ $ifail -eq 1 ]; then
         let failed++
         failed_case_list+=$dir'\n'
@@ -224,6 +227,32 @@ get_threshold()
     else
         echo $default_value
     fi
+}
+
+#---------------------------------------------
+# check optional log assertions in each case
+#---------------------------------------------
+check_log_contains()
+{
+    assert_file=$1
+    if [ ! -e "$assert_file" ]; then
+        return 0
+    fi
+
+    local failed_assert=0
+    while IFS= read -r pattern || [ -n "$pattern" ]; do
+        if [[ -z "$pattern" || "$pattern" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        if grep -Fq "$pattern" log.txt 2>/dev/null || grep -Fq "$pattern" OUT.autotest/running_scf.log 2>/dev/null; then
+            echo -e "\e[0;32m[      OK  ] \e[0m log contains: $pattern"
+        else
+            echo -e "\e[0;31m[ERROR     ]\e[0m missing log pattern: $pattern"
+            failed_assert=1
+        fi
+    done < "$assert_file"
+
+    return $failed_assert
 }
 
 #---------------------------------------------

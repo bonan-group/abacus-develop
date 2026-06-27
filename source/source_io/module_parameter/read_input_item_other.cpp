@@ -894,6 +894,36 @@ void ReadInput::item_others()
         this->add_item(item);
     }
     {
+        Input_Item item("exx_auto_tiling");
+        item.annotation = "automatically choose PW EXX tile sizes";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Boolean";
+        item.description = "Whether to automatically choose PW EXX batch FFT, band tile, and q tile sizes from a memory budget. Manual tile-size keywords are preserved when this is false.";
+        item.default_value = "False";
+        item.unit = "";
+        item.availability = "";
+        read_sync_bool(input.exx_auto_tiling);
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_tile_memory_budget_mb");
+        item.annotation = "memory budget for automatic PW EXX tiling";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Real";
+        item.description = "Memory budget in MB used when exx_auto_tiling is true. A value of 0 uses an internal conservative default.";
+        item.default_value = "0";
+        item.unit = "MB";
+        item.availability = "exx_auto_tiling==True.";
+        read_sync_double(input.exx_tile_memory_budget_mb);
+        item.check_value = [](const Input_Item& item, const Parameter& param) {
+            if (param.input.exx_tile_memory_budget_mb < 0.0)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_tile_memory_budget_mb must >= 0");
+            }
+        };
+        this->add_item(item);
+    }
+    {
         Input_Item item("exx_batch_fft_size");
         item.annotation = "batch size for PW EXX batched FFTs";
         item.category = "Exact Exchange (PW)";

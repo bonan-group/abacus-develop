@@ -18,15 +18,13 @@ mixing_beta       0.4
 cal_force         0
 cal_stress        0
 
-dft_functional    hse
+dft_functional    pbe
 symmetry          -1
 device            cpu
-exx_separate_loop 1
-exxace            0
-exx_hybrid_step   1
-exx_thr_type      energy
-exx_ene_thr       1e-4
-exx_gamma_extrapolation false
+
+out_training_data 1
+out_exx_label     1
+
 exx_batch_fft_size 4
 exx_band_tile_size 2
 exx_q_tile_size   1

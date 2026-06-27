@@ -1,0 +1,6 @@
+training_pbe0_exx_label: requested one-shot EXX tiles:
+auto tiling = on
+EXX auto tiling:
+EXX energy start:
+EXX energy done:
+write_training_dump: wrote

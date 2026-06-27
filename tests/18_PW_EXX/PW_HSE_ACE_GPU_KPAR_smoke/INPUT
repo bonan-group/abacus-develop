@@ -31,3 +31,5 @@ exx_gamma_extrapolation false
 exx_batch_fft_size 4
 exx_band_tile_size 2
 exx_q_tile_size   1
+exx_auto_tiling    1
+exx_tile_memory_budget_mb 256

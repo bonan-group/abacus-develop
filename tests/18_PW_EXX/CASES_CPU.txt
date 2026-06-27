@@ -4,4 +4,5 @@ PW_HSE_ACE_MgO_primitive_symm_on_stress
 PW_PBE0_ACE_nspin2_FM
 PW_PBE0_ACE_nspin2_AFM
 PW_HSE_direct_minimal
+PW_PBE_training_exx_label_auto
 PW_HSE_ACE_MPI_KPAR

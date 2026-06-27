@@ -6,6 +6,7 @@
 #include "source_base/parallel_device.h"
 #include "source_base/parallel_comm.h" // use KP_WORLD
 #include "source_base/parallel_reduce.h"
+#include "source_io/module_parameter/parameter.h"
 #include "source_base/module_external/lapack_connector.h"
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
@@ -23,9 +24,11 @@
 #include <complex>
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <new>
 #include <iomanip>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -149,6 +152,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     }
 
     const std::string exx_precision = std::is_same<Real, float>::value ? "single" : "double";
+
     rhopw_dev = new ModulePW::PW_Basis(wfcpw->get_device(), exx_precision);
     rhopw_dev->fft_bundle.setfft(wfcpw->get_device(), exx_precision);
 #ifdef __MPI
@@ -157,8 +161,6 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     // here we can actually use different ecut to init the grids
     rhopw_dev->initgrids(rhopw->lat0, rhopw->latvec, ecut_exx);
     rhopw_dev->initparameters(rhopw->gamma_only, ecut_exx, rhopw->distribution_type, rhopw->xprime);
-    rhopw_dev->setuptransform(options.batch_fft_size);
-    rhopw_dev->collect_local_pw();
 
     wfcpw_exx = new ModulePW::PW_Basis_K(wfcpw->get_device(), exx_precision);
     wfcpw_exx->fft_bundle.setfft(wfcpw->get_device(), exx_precision);
@@ -172,6 +174,34 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                               wfcpw->kvec_d,
                               wfcpw->distribution_type,
                               wfcpw->xprime);
+
+    if (options.auto_tiling)
+    {
+        int active_full_q_count = 0;
+        for (const auto& qpoint: kv->exx_full_q_map)
+        {
+            if (qpoint.active)
+            {
+                ++active_full_q_count;
+            }
+        }
+
+        ExxTilePolicyInput tile_input;
+        tile_input.device = wfcpw->get_device();
+        tile_input.precision = exx_precision;
+        tile_input.nbands = PARAM.inp.nbands > 0 ? PARAM.inp.nbands : options.band_tile_size;
+        tile_input.active_q_count = std::max(1, active_full_q_count);
+        tile_input.nrxx = static_cast<std::size_t>(rhopw_dev->nrxx);
+        tile_input.npw = static_cast<std::size_t>(rhopw_dev->npw);
+        tile_input.npwk_max = static_cast<std::size_t>(wfcpw_exx->npwk_max);
+        tile_input.fft_nx = rhopw_dev->nx;
+        tile_input.fft_ny = rhopw_dev->ny;
+        tile_input.fft_nz = rhopw_dev->nz;
+        options = resolve_exx_auto_tiling(options, tile_input);
+    }
+
+    rhopw_dev->setuptransform(options.batch_fft_size);
+    rhopw_dev->collect_local_pw();
     wfcpw_exx->setuptransform(options.batch_fft_size);
     wfcpw_exx->collect_local_pw();
     if (rhopw_dev->nrxx != wfcpw_exx->nrxx)
@@ -210,6 +240,23 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                              << ", q ownership = " << (GlobalV::KPAR > 1 ? "owner-local" : "local")
                              << ", reduced k = " << wfcpw->nks / nk_fac
                              << ", full q = " << active_full_q_count << std::endl;
+        if (options.tile_options_resolved)
+        {
+            const std::ios::fmtflags saved_flags = GlobalV::ofs_running.flags();
+            const std::streamsize saved_precision = GlobalV::ofs_running.precision();
+            GlobalV::ofs_running << " EXX auto tiling: budget = " << std::fixed << std::setprecision(1)
+                                 << options.tile_budget_mb
+                                 << " MB, effective budget = " << options.tile_effective_budget_mb
+                                 << " MB, estimated tile memory = " << options.tile_estimated_memory_mb
+                                 << " MB, cuFFT workspace estimate = " << options.tile_cufft_workspace_mb
+                                 << " MB, nbands = " << (PARAM.inp.nbands > 0 ? PARAM.inp.nbands : options.band_tile_size)
+                                 << ", active q = " << active_full_q_count
+                                 << ", nrxx = " << rhopw_dev->nrxx
+                                 << ", npw = " << rhopw_dev->npw
+                                 << ", npwk_max = " << wfcpw_exx->npwk_max << std::endl;
+            GlobalV::ofs_running.flags(saved_flags);
+            GlobalV::ofs_running.precision(saved_precision);
+        }
     }
 
     // allocate real-space work buffers on the actual EXX grid
@@ -241,7 +288,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
 
     fock_div.clear();
     erfc_div.clear();
-    for (const auto& param: options.fock_params)
+    for (const auto& param: this->options.fock_params)
     {
         fock_div.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Fock,
                                           0.0,
@@ -252,7 +299,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                                           singular_correction_mode,
                                           ucell->omega));
     }
-    for (const auto& param: options.erfc_params)
+    for (const auto& param: this->options.erfc_params)
     {
         erfc_div.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
                                           std::stod(param.at("omega")),
@@ -1339,21 +1386,35 @@ void OperatorEXXPW<T, Device>::log_exx_energy_progress(int ispin,
                                                        int q_count,
                                                        int source_tile_size,
                                                        int q_tile_size,
-                                                       int chunk_size) const
+                                                       int chunk_size,
+                                                       const char* stage,
+                                                       double k_elapsed_sec,
+                                                       double total_elapsed_sec) const
 {
     if (GlobalV::MY_RANK != 0)
     {
         return;
     }
 
-    GlobalV::ofs_running << " EXX energy progress: spin " << (ispin + 1) << "/" << nspin_fac
-                         << ", k " << (k_index + 1) << "/" << k_total
-                         << ", full k = " << kpoint.full_index
-                         << ", representative local k = " << kpoint.rep_local_index
-                         << ", q points = " << q_count
-                         << ", band tile size = " << source_tile_size
-                         << ", q tile size = " << q_tile_size
-                         << ", FFT batch/chunk size = " << chunk_size << std::endl;
+    const std::ios::fmtflags saved_flags = std::cout.flags();
+    const std::streamsize saved_precision = std::cout.precision();
+    std::cout << " EXX energy " << stage << ": spin " << (ispin + 1) << "/" << nspin_fac
+              << ", k " << (k_index + 1) << "/" << k_total
+              << ", full k = " << kpoint.full_index
+              << ", representative local k = " << kpoint.rep_local_index
+              << ", q points = " << q_count
+              << ", band tile size = " << source_tile_size
+              << ", q tile size = " << q_tile_size
+              << ", FFT batch/chunk size = " << chunk_size;
+    if (k_elapsed_sec >= 0.0)
+    {
+        std::cout << ", k time = " << std::fixed << std::setprecision(3) << k_elapsed_sec << " s"
+                  << ", cumulative EXX time = " << total_elapsed_sec << " s" << std::defaultfloat;
+    }
+    std::cout << std::endl;
+    std::cout.flags(saved_flags);
+    std::cout.precision(saved_precision);
+    std::cout.flush();
 }
 
 template <typename T, typename Device>
@@ -1935,7 +1996,22 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
                                     target_wfcpw->kvec_d,
                                     target_wfcpw->distribution_type,
                                     target_wfcpw->xprime);
-    this->wfcpw_exx->setuptransform(options.batch_fft_size);
+    if (this->options.auto_tiling)
+    {
+        ExxTilePolicyInput tile_input;
+        tile_input.device = target_wfcpw->get_device();
+        tile_input.precision = exx_precision;
+        tile_input.nbands = PARAM.inp.nbands > 0 ? PARAM.inp.nbands : this->options.band_tile_size;
+        tile_input.active_q_count = std::max(1, static_cast<int>(source_op->get_active_q_points().size()));
+        tile_input.nrxx = static_cast<std::size_t>(source_op->rhopw_dev->nrxx);
+        tile_input.npw = static_cast<std::size_t>(source_op->rhopw_dev->npw);
+        tile_input.npwk_max = static_cast<std::size_t>(this->wfcpw_exx->npwk_max);
+        tile_input.fft_nx = source_op->rhopw_dev->nx;
+        tile_input.fft_ny = source_op->rhopw_dev->ny;
+        tile_input.fft_nz = source_op->rhopw_dev->nz;
+        this->options = resolve_exx_auto_tiling(this->options, tile_input);
+    }
+    this->wfcpw_exx->setuptransform(this->options.batch_fft_size);
     this->wfcpw_exx->collect_local_pw();
 
     if (this->wfcpw_exx->nrxx != source_op->wfcpw_exx->nrxx
@@ -1977,6 +2053,21 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
     {
         GlobalV::ofs_running << " Mixed band target EXX singular correction = smooth target-k"
                              << " (source q mesh fixed, MP gamma mask disabled for target k)" << std::endl;
+        if (this->options.tile_options_resolved)
+        {
+            const std::ios::fmtflags saved_flags = GlobalV::ofs_running.flags();
+            const std::streamsize saved_precision = GlobalV::ofs_running.precision();
+            GlobalV::ofs_running << " Mixed band target EXX auto tiling: budget = " << std::fixed << std::setprecision(1)
+                                 << this->options.tile_budget_mb
+                                 << " MB, effective budget = " << this->options.tile_effective_budget_mb
+                                 << " MB, estimated tile memory = " << this->options.tile_estimated_memory_mb
+                                 << " MB, cuFFT workspace estimate = " << this->options.tile_cufft_workspace_mb
+                                 << " MB, batch FFT size = " << this->options.batch_fft_size
+                                 << ", band tile size = " << this->options.band_tile_size
+                                 << ", q tile size = " << this->options.q_tile_size << std::endl;
+            GlobalV::ofs_running.flags(saved_flags);
+            GlobalV::ofs_running.precision(saved_precision);
+        }
     }
 
     resmem_complex_op()(psi_nk_real, wfcpw_exx->nrxx);
@@ -2087,6 +2178,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
         q_weight_scaled_host.resize(q_weight_count);
     }
     T* q_real_data = is_cpu ? q_real.data() : qtile_q_real;
+    const auto exx_energy_start = std::chrono::steady_clock::now();
 
     for (int ispin = 0; ispin < nspin_fac; ++ispin)
     {
@@ -2095,6 +2187,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
             const auto* kpoint = k_points[ik_full];
             ensure_full_point_supported(*kpoint);
             reset_exx_potential_cache_for_kpoint(kpoint->full_index);
+            const auto k_start_time = std::chrono::steady_clock::now();
             log_exx_energy_progress(ispin,
                                     nspin_fac,
                                     ik_full,
@@ -2103,7 +2196,10 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
                                     static_cast<int>(q_points.size()),
                                     source_tile_size,
                                     q_tile_size,
-                                    chunk_size);
+                                    chunk_size,
+                                    "start",
+                                    -1.0,
+                                    -1.0);
             log_exx_energy_memory("k start");
 
             const int ik_rep_spin = rep_spin_index(*kpoint, ispin);
@@ -2196,6 +2292,21 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
                     }
                 }
             }
+            const auto k_end_time = std::chrono::steady_clock::now();
+            const double k_elapsed_sec = std::chrono::duration<double>(k_end_time - k_start_time).count();
+            const double total_elapsed_sec = std::chrono::duration<double>(k_end_time - exx_energy_start).count();
+            log_exx_energy_progress(ispin,
+                                    nspin_fac,
+                                    ik_full,
+                                    static_cast<int>(k_points.size()),
+                                    *kpoint,
+                                    static_cast<int>(q_points.size()),
+                                    source_tile_size,
+                                    q_tile_size,
+                                    chunk_size,
+                                    "done",
+                                    k_elapsed_sec,
+                                    total_elapsed_sec);
             log_exx_energy_memory("k end");
             clear_exx_potential_cache();
             log_exx_energy_memory("k cache cleared");
