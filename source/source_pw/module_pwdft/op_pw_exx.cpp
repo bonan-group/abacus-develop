@@ -1597,7 +1597,6 @@ void OperatorEXXPW<T, Device>::load_full_point_real_batch(const K_Vectors::ExxFu
     }
     ensure_full_point_supported(point);
     const int point_rep_spin = rep_spin_index(point, ispin);
-    const auto& remap = point_spatial_remap(point, point_rep_spin);
     const bool direct_source = consecutive_integers(band_indices, batch_count) && psi.get_k_first();
     const T* in_batch = nullptr;
     if (direct_source && (point.identity || point.conjugate_only))
@@ -1621,6 +1620,8 @@ void OperatorEXXPW<T, Device>::load_full_point_real_batch(const K_Vectors::ExxFu
         }
         return;
     }
+
+    const auto& remap = point_spatial_remap(point, point_rep_spin);
 
     {
         for (int ib = 0; ib < batch_count; ++ib)

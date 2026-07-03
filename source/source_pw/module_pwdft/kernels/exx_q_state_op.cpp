@@ -6,6 +6,7 @@
 
 #include <complex>
 #include <cmath>
+#include <sstream>
 #include <vector>
 #include <unordered_map>
 
@@ -214,7 +215,8 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
     {
         const ModuleBase::Vector3<double> g_cart = generic_g_cartesian_from_ig(wfcpw, ig);
         const ModuleBase::Vector3<double> gplus_full = g_cart + full_point.full_kvec_c;
-        if (gplus_full.norm2() > wfcpw->gk_ecut + 1e-10)
+        const double gplus_full_norm2 = gplus_full.norm2();
+        if (gplus_full_norm2 > wfcpw->gk_ecut)
         {
             continue;
         }
@@ -223,8 +225,23 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
         const auto it = rep_g_to_ig.find(make_int_g_key(g_rep));
         if (it == rep_g_to_ig.end())
         {
+            std::ostringstream message;
+            message << "failed to map full-point G vector to representative G vector"
+                    << "; ig = " << ig
+                    << ", gplus_full.norm2() - gk_ecut = " << (gplus_full_norm2 - wfcpw->gk_ecut)
+                    << ", g_full = (" << g_full.x << ", " << g_full.y << ", " << g_full.z << ")"
+                    << ", g_rep = (" << g_rep.x << ", " << g_rep.y << ", " << g_rep.z << ")"
+                    << ", full_index = " << full_point.full_index
+                    << ", rep_index = " << full_point.rep_index
+                    << ", rep_local_index = " << full_point.rep_local_index
+                    << ", rep_pool = " << full_point.rep_pool
+                    << ", symop = " << full_point.symop
+                    << ", identity = " << (full_point.identity ? "true" : "false")
+                    << ", conjugate_only = " << (full_point.conjugate_only ? "true" : "false")
+                    << ", time_reversal = " << (full_point.time_reversal ? "true" : "false")
+                    << ", need_gpu_fft_index = " << (need_gpu_fft_index ? "true" : "false");
             ModuleBase::WARNING_QUIT("build_exx_symmetry_remap",
-                                     "failed to map full-point G vector to representative G vector");
+                                     message.str());
         }
 
         const int ig_rep = it->second;

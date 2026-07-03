@@ -87,6 +87,35 @@ K_Vectors::ExxFullPoint time_reversal_rotation_2x2x2_point()
     return point;
 }
 
+ModuleBase::Vector3<double> test_generic_g_direct_from_ig(const ModulePW::PW_Basis_K& wfcpw, int ig)
+{
+    const int isz = wfcpw.ig2isz[ig];
+    const int iz_raw = isz % wfcpw.nz;
+    const int is = isz / wfcpw.nz;
+    const int ixy = wfcpw.is2fftixy[is];
+    int ix = ixy / wfcpw.fftny;
+    int iy = ixy % wfcpw.fftny;
+    int iz = iz_raw;
+    if (ix >= int(wfcpw.nx / 2) + 1)
+    {
+        ix -= wfcpw.nx;
+    }
+    if (iy >= int(wfcpw.ny / 2) + 1)
+    {
+        iy -= wfcpw.ny;
+    }
+    if (iz >= int(wfcpw.nz / 2) + 1)
+    {
+        iz -= wfcpw.nz;
+    }
+    return ModuleBase::Vector3<double>(ix, iy, iz);
+}
+
+ModuleBase::Vector3<double> test_generic_g_cartesian_from_ig(const ModulePW::PW_Basis_K& wfcpw, int ig)
+{
+    return test_generic_g_direct_from_ig(wfcpw, ig) * wfcpw.G;
+}
+
 void expect_complex_arrays_near(const std::vector<complexd>& got,
                                 const std::vector<complexd>& expected,
                                 const double tolerance)
@@ -156,6 +185,63 @@ TEST_F(PWTEST, exx_realspace_symmetry_rotation_matches_reciprocal_remap)
     hamilt::rotate_exx_realspace_symmetry_cpu(&wfcpw, point, 0, representative_real.data(), rotated.data());
 
     expect_complex_arrays_near(rotated, expected, 1e-10);
+}
+
+TEST_F(PWTEST, exx_symmetry_remap_uses_representative_basis_cutoff)
+{
+    if (nproc_in_pool > 1)
+    {
+        GTEST_SKIP() << "reciprocal-remap reference is single-rank only";
+    }
+
+    ModulePW::PW_Basis_K wfcpw(device_flag, precision_flag);
+#ifdef __MPI
+    wfcpw.initmpi(nproc_in_pool, rank_in_pool, POOL_WORLD);
+#endif
+
+    const ModuleBase::Vector3<double> kvec_d[1] = {ModuleBase::Vector3<double>(0.25, 0.0, 0.0)};
+    init_exx_pw(wfcpw, std::vector<ModuleBase::Vector3<double>>(kvec_d, kvec_d + 1));
+    const int representative_npw = wfcpw.npwk[0];
+
+    double boundary_gk2 = -1.0;
+    for (int igl = 0; igl < representative_npw; ++igl)
+    {
+        const int ig = wfcpw.igl2ig_k[igl];
+        const double gk2 = (test_generic_g_cartesian_from_ig(wfcpw, ig) + wfcpw.kvec_c[0]).norm2();
+        if (gk2 > boundary_gk2)
+        {
+            boundary_gk2 = gk2;
+        }
+    }
+    ASSERT_GT(boundary_gk2, 0.0);
+    ASSERT_LE(boundary_gk2, wfcpw.gk_ecut);
+
+    wfcpw.gk_ecut = boundary_gk2 - 5.0e-11;
+
+    K_Vectors::ExxFullPoint point;
+    point.identity = true;
+    point.conjugate_only = false;
+    point.time_reversal = false;
+    point.full_index = 0;
+    point.rep_index = 0;
+    point.rep_local_index = 0;
+    point.rep_pool = 0;
+    point.symop = 0;
+    point.full_kvec_d = kvec_d[0];
+    point.full_kvec_c = wfcpw.kvec_c[0];
+    point.gmatrix = ModuleBase::Matrix3(1.0, 0.0, 0.0,
+                                        0.0, 1.0, 0.0,
+                                        0.0, 0.0, 1.0);
+    point.kgmatrix = point.gmatrix;
+    point.gtrans = ModuleBase::Vector3<double>(0.0, 0.0, 0.0);
+
+    const auto remap = hamilt::build_exx_symmetry_remap(&wfcpw, point, 0, false);
+    for (const int rep_igl: remap.rep_igl)
+    {
+        const int ig = wfcpw.igl2ig_k[rep_igl];
+        const double gk2 = (test_generic_g_cartesian_from_ig(wfcpw, ig) + wfcpw.kvec_c[0]).norm2();
+        EXPECT_LE(gk2, wfcpw.gk_ecut);
+    }
 }
 
 TEST_F(PWTEST, exx_realspace_symmetry_adjoint_matches_reciprocal_remap)
