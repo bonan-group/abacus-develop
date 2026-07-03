@@ -1483,6 +1483,28 @@ TEST_F(InputTest, Item_test2)
         param.input.symmetry="0";
         it->second.reset_value(it->second, param);
         EXPECT_EQ(param.input.exx_symmetry_realspace, false);
+
+        param.input.exx_symmetry_realspace = true;
+        param.input.symmetry = "1";
+        param.input.device = "cpu";
+        it->second.str_values.clear();
+        it->second.reset_value(it->second, param);
+        EXPECT_EQ(param.input.exx_symmetry_realspace, true);
+
+        param.input.exx_symmetry_realspace = true;
+        param.input.symmetry = "1";
+        param.input.device = "gpu";
+        it->second.str_values.clear();
+        it->second.reset_value(it->second, param);
+        EXPECT_EQ(param.input.exx_symmetry_realspace, false);
+
+        param.input.exx_symmetry_realspace = true;
+        param.input.symmetry = "1";
+        param.input.device = "gpu";
+        it->second.str_values = {"1"};
+        it->second.reset_value(it->second, param);
+        EXPECT_EQ(param.input.exx_symmetry_realspace, true);
+        it->second.str_values.clear();
     }
     { // rpa_ccp_rmesh_times
         auto it = find_label("rpa_ccp_rmesh_times", readinput.input_lists);
