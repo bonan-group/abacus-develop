@@ -4,6 +4,7 @@
 #include "source_base/tool_quit.h"
 #include "source_basis/module_pw/pw_basis_k.h"
 
+#include <algorithm>
 #include <complex>
 #include <cmath>
 #include <sstream>
@@ -48,6 +49,16 @@ IntGKey make_int_g_key(const ModuleBase::Vector3<double>& g)
     key.y = static_cast<int>(std::lround(g.y));
     key.z = static_cast<int>(std::lround(g.z));
     return key;
+}
+
+ModuleBase::Vector3<double> int_g_key_to_direct(const IntGKey& key)
+{
+    return ModuleBase::Vector3<double>(key.x, key.y, key.z);
+}
+
+double exx_symmetry_remap_cutoff_tolerance(double gk_ecut)
+{
+    return std::max(1.0e-8 * std::abs(gk_ecut), 1.0e-4);
 }
 
 ModuleBase::Vector3<double> generic_g_direct_from_ig(const ModulePW::PW_Basis_K* wfcpw, int ig)
@@ -194,6 +205,7 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
 
     const ModuleBase::Vector3<double> raw_rep = full_point.full_kvec_d * full_point.kgmatrix;
     const ModuleBase::Vector3<double> rep_shift = raw_rep - wfcpw->kvec_d[rep_spin_index];
+    const double cutoff_tolerance = exx_symmetry_remap_cutoff_tolerance(wfcpw->gk_ecut);
 
     std::unordered_map<IntGKey, int, IntGKeyHash> rep_g_to_ig;
     rep_g_to_ig.reserve(wfcpw->npwk[rep_spin_index]);
@@ -210,6 +222,9 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
     {
         remap.fft_ixyz.reserve(wfcpw->npw);
     }
+    int skipped_boundary_misses = 0;
+    double max_abs_full_boundary_delta = 0.0;
+    double max_abs_rep_boundary_delta = 0.0;
 
     for (int ig = 0; ig < wfcpw->npw; ++ig)
     {
@@ -222,13 +237,29 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
         }
         const ModuleBase::Vector3<double> g_full = generic_g_direct_from_ig(wfcpw, ig);
         const ModuleBase::Vector3<double> g_rep = g_full * full_point.kgmatrix + rep_shift;
-        const auto it = rep_g_to_ig.find(make_int_g_key(g_rep));
+        const IntGKey g_rep_key = make_int_g_key(g_rep);
+        const auto it = rep_g_to_ig.find(g_rep_key);
         if (it == rep_g_to_ig.end())
         {
+            const ModuleBase::Vector3<double> gplus_rep
+                = (int_g_key_to_direct(g_rep_key) + wfcpw->kvec_d[rep_spin_index]) * wfcpw->G;
+            const double full_cutoff_delta = gplus_full_norm2 - wfcpw->gk_ecut;
+            const double rep_cutoff_delta = gplus_rep.norm2() - wfcpw->gk_ecut;
+            if (std::abs(full_cutoff_delta) <= cutoff_tolerance
+                && std::abs(rep_cutoff_delta) <= cutoff_tolerance)
+            {
+                ++skipped_boundary_misses;
+                max_abs_full_boundary_delta = std::max(max_abs_full_boundary_delta, std::abs(full_cutoff_delta));
+                max_abs_rep_boundary_delta = std::max(max_abs_rep_boundary_delta, std::abs(rep_cutoff_delta));
+                continue;
+            }
+
             std::ostringstream message;
             message << "failed to map full-point G vector to representative G vector"
                     << "; ig = " << ig
-                    << ", gplus_full.norm2() - gk_ecut = " << (gplus_full_norm2 - wfcpw->gk_ecut)
+                    << ", gplus_full.norm2() - gk_ecut = " << full_cutoff_delta
+                    << ", gplus_rep.norm2() - gk_ecut = " << rep_cutoff_delta
+                    << ", cutoff_tolerance = " << cutoff_tolerance
                     << ", g_full = (" << g_full.x << ", " << g_full.y << ", " << g_full.z << ")"
                     << ", g_rep = (" << g_rep.x << ", " << g_rep.y << ", " << g_rep.z << ")"
                     << ", full_index = " << full_point.full_index
@@ -262,6 +293,22 @@ ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
             const int ix = ixy / wfcpw->ny;
             remap.fft_ixyz.push_back(iz + iy * wfcpw->nz + ix * wfcpw->ny * wfcpw->nz);
         }
+    }
+
+    if (skipped_boundary_misses > 0)
+    {
+        std::ostringstream message;
+        message << "skipped " << skipped_boundary_misses
+                << " EXX symmetry-remap G-vector misses on the cutoff boundary"
+                << "; max_abs_full_delta = " << max_abs_full_boundary_delta
+                << ", max_abs_rep_delta = " << max_abs_rep_boundary_delta
+                << ", cutoff_tolerance = " << cutoff_tolerance
+                << ", full_index = " << full_point.full_index
+                << ", rep_index = " << full_point.rep_index
+                << ", rep_local_index = " << full_point.rep_local_index
+                << ", symop = " << full_point.symop
+                << ", need_gpu_fft_index = " << (need_gpu_fft_index ? "true" : "false");
+        ModuleBase::WARNING("build_exx_symmetry_remap", message.str());
     }
 
     if (remap.rep_igl.empty())

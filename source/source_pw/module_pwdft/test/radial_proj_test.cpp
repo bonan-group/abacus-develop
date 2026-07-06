@@ -1,3 +1,4 @@
+#include "source_pw/module_pwdft/op_pw_exx.h"
 #include "source_pw/module_pwdft/radial_proj.h"
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -6,6 +7,98 @@
 #include <random>
 
 #define DOUBLETHRESHOLD 1e-15
+
+namespace
+{
+K_Vectors::ExxFullKPoint make_exx_kpoint(int full_index,
+                                         int rep_index,
+                                         int rep_local_index,
+                                         int rep_pool,
+                                         bool active = true)
+{
+    K_Vectors::ExxFullKPoint point;
+    point.full_index = full_index;
+    point.rep_index = rep_index;
+    point.rep_local_index = rep_local_index;
+    point.rep_pool = rep_pool;
+    point.active = active;
+    point.identity = full_index == rep_index;
+    point.weight = 0.125 * (full_index + 1);
+    return point;
+}
+} // namespace
+
+TEST(ExxEnergyKPolicyTest, ChoosesLocalReducedKPointsForUnpolarizedEnergyLoop)
+{
+    K_Vectors kv;
+    kv.exx_full_k_map = {make_exx_kpoint(0, 0, 0, 0),
+                         make_exx_kpoint(1, 0, 0, 0),
+                         make_exx_kpoint(2, 2, 1, 0),
+                         make_exx_kpoint(3, 2, 1, 0)};
+
+    const std::vector<hamilt::ExxLocalEnergyKPoint> points
+        = hamilt::exx_energy_k_policy::choose_local_representative_k_points(kv, 2, 1, 0);
+
+    ASSERT_EQ(points.size(), 2);
+    EXPECT_EQ(points[0].ik_rep_spin, 0);
+    EXPECT_EQ(points[0].ispin, 0);
+    EXPECT_EQ(points[0].kpoint.full_index, 0);
+    EXPECT_EQ(points[0].kpoint.rep_local_index, 0);
+
+    EXPECT_EQ(points[1].ik_rep_spin, 1);
+    EXPECT_EQ(points[1].ispin, 0);
+    EXPECT_EQ(points[1].kpoint.full_index, 2);
+    EXPECT_EQ(points[1].kpoint.rep_local_index, 1);
+}
+
+TEST(ExxEnergyKPolicyTest, ChoosesSpinResolvedLocalReducedKPoints)
+{
+    K_Vectors kv;
+    kv.exx_full_k_map = {make_exx_kpoint(0, 0, 0, 1),
+                         make_exx_kpoint(1, 1, 1, 1),
+                         make_exx_kpoint(2, 2, 0, 0)};
+
+    const std::vector<hamilt::ExxLocalEnergyKPoint> points
+        = hamilt::exx_energy_k_policy::choose_local_representative_k_points(kv, 4, 2, 1);
+
+    ASSERT_EQ(points.size(), 4);
+    EXPECT_EQ(points[0].ik_rep_spin, 0);
+    EXPECT_EQ(points[0].ispin, 0);
+    EXPECT_EQ(points[0].kpoint.rep_local_index, 0);
+    EXPECT_EQ(points[1].ik_rep_spin, 1);
+    EXPECT_EQ(points[1].ispin, 0);
+    EXPECT_EQ(points[1].kpoint.rep_local_index, 1);
+    EXPECT_EQ(points[2].ik_rep_spin, 2);
+    EXPECT_EQ(points[2].ispin, 1);
+    EXPECT_EQ(points[2].kpoint.rep_local_index, 0);
+    EXPECT_EQ(points[3].ik_rep_spin, 3);
+    EXPECT_EQ(points[3].ispin, 1);
+    EXPECT_EQ(points[3].kpoint.rep_local_index, 1);
+}
+
+TEST(ExxEnergyKPolicyTest, SkipsNonlocalInactiveAndNonrepresentativeFullPoints)
+{
+    K_Vectors kv;
+    kv.exx_full_k_map = {make_exx_kpoint(5, 4, 0, 0),
+                         make_exx_kpoint(4, 4, 0, 2),
+                         make_exx_kpoint(4, 4, 0, 0, false),
+                         make_exx_kpoint(4, 4, 0, 0),
+                         make_exx_kpoint(7, 6, 1, 0),
+                         make_exx_kpoint(6, 6, 1, 0)};
+
+    const std::vector<hamilt::ExxLocalEnergyKPoint> points
+        = hamilt::exx_energy_k_policy::choose_local_representative_k_points(kv, 2, 1, 0);
+
+    ASSERT_EQ(points.size(), 2);
+    EXPECT_EQ(points[0].ik_rep_spin, 0);
+    EXPECT_EQ(points[0].kpoint.full_index, 4);
+    EXPECT_TRUE(points[0].kpoint.active);
+    EXPECT_EQ(points[0].kpoint.rep_pool, 0);
+
+    EXPECT_EQ(points[1].ik_rep_spin, 1);
+    EXPECT_EQ(points[1].kpoint.full_index, 6);
+    EXPECT_EQ(points[1].kpoint.rep_local_index, 1);
+}
 
 TEST(RadialProjectionTest, BuildBackwardMapTest)
 {

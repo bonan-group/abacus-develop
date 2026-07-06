@@ -1937,9 +1937,15 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     }
 
     double Eexx_ik_real = 0.0;
-    const int nspin_fac = options.nspin == 2 ? 2 : 1;
-    const Real k_spin_degeneracy = options.nspin == 1 ? 2.0 : 1.0;
-    const auto k_points = get_k_points();
+    const auto k_points = exx_energy_k_policy::choose_local_representative_k_points(*kv,
+                                                                                    wfcpw->nks,
+                                                                                    options.nspin,
+                                                                                    GlobalV::MY_POOL);
+    if (static_cast<int>(k_points.size()) != wfcpw->nks)
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                 "incomplete local representative k-point map for PW EXX energy");
+    }
     auto q_points = get_q_points(0);
     const int nbands_psi = psi.get_nbands();
     const int source_tile_size = std::max(1, std::min(options.band_tile_size, nbands_psi));
@@ -1965,98 +1971,79 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     }
     T* q_real_data = is_cpu ? q_real.data() : qtile_q_real;
 
-    for (int ispin = 0; ispin < nspin_fac; ++ispin)
+    for (const auto& energy_kpoint: k_points)
     {
-        for (const auto* kpoint: k_points)
+        const int ik_rep_spin = energy_kpoint.ik_rep_spin;
+        const int ispin = energy_kpoint.ispin;
+        const auto& kpoint = energy_kpoint.kpoint;
+        ensure_full_point_supported(kpoint);
+        for (int q_start = 0; q_start < static_cast<int>(q_points.size()); q_start += q_tile_size)
         {
-            ensure_full_point_supported(*kpoint);
-            const int ik_rep_spin = rep_spin_index(*kpoint, ispin);
-            const bool own_kpoint = kpoint->rep_pool == GlobalV::MY_POOL;
-            for (int q_start = 0; q_start < static_cast<int>(q_points.size()); q_start += q_tile_size)
+            const int q_count = std::min(q_tile_size, static_cast<int>(q_points.size()) - q_start);
+            for (int m_start = 0; m_start < nbands_psi; m_start += source_tile_size)
             {
-                const int q_count = std::min(q_tile_size, static_cast<int>(q_points.size()) - q_start);
-                for (int m_start = 0; m_start < nbands_psi; m_start += source_tile_size)
+                const int m_count = std::min(source_tile_size, nbands_psi - m_start);
+                if (is_cpu)
                 {
-                    const int m_count = std::min(source_tile_size, nbands_psi - m_start);
-                    if (is_cpu)
-                    {
-                        std::fill(q_real.begin(), q_real.end(), T(0));
-                    }
-                    else
-                    {
-                        setmem_complex_op()(qtile_q_real, 0, q_size);
-                    }
-                    std::fill(q_weights.begin(), q_weights.end(), Real(0));
-                    const Real tile_weight_sum = fill_q_tile_states(q_points,
-                                                                    q_start,
-                                                                    q_count,
-                                                                    ispin,
-                                                                    m_start,
-                                                                    m_count,
-                                                                    source_tile_size,
-                                                                    q_real_data,
-                                                                    q_weights.data(),
-                                                                    true);
-                    if (tile_weight_sum < std::numeric_limits<Real>::epsilon())
+                    std::fill(q_real.begin(), q_real.end(), T(0));
+                }
+                else
+                {
+                    setmem_complex_op()(qtile_q_real, 0, q_size);
+                }
+                std::fill(q_weights.begin(), q_weights.end(), Real(0));
+                const Real tile_weight_sum = fill_q_tile_states(q_points,
+                                                                q_start,
+                                                                q_count,
+                                                                ispin,
+                                                                m_start,
+                                                                m_count,
+                                                                source_tile_size,
+                                                                q_real_data,
+                                                                q_weights.data(),
+                                                                true);
+                if (tile_weight_sum < std::numeric_limits<Real>::epsilon())
+                {
+                    continue;
+                }
+
+                for (int n_iband = 0; n_iband < psi.get_nbands(); n_iband++)
+                {
+                    const double wg_ikb_real = (*wg)(ik_rep_spin, n_iband);
+                    const bool active_k = wg_ikb_real >= 1e-12;
+                    if (!active_k)
                     {
                         continue;
                     }
+                    // The outer full-k star weights are folded into the reduced-k occupation.
+                    // Keep the q side explicit through exx_full_q_map.
+                    const Real k_weight = static_cast<Real>(wg_ikb_real);
+                    load_full_point_real(kpoint, ispin, n_iband, psi_nk_real);
 
-                    for (int n_iband = 0; n_iband < psi.get_nbands(); n_iband++)
+                    const Real* q_weights_device = nullptr;
+                    if (!is_cpu)
                     {
-                        double wg_ikb_real = 0.0;
-                        double wk_ik_real = 0.0;
-                        if (own_kpoint)
+                        for (std::size_t iw = 0; iw < q_weight_count; ++iw)
                         {
-                            wg_ikb_real = (*wg)(ik_rep_spin, n_iband);
-                            wk_ik_real = kv->wk[ik_rep_spin];
+                            q_weight_scaled_host[iw] = k_weight * q_weights[iw];
                         }
-#ifdef __MPI
-                        MPI_Bcast(&wg_ikb_real,
-                                  1,
-                                  MPI_DOUBLE,
-                                  kv->para_k.get_startpro_pool(kpoint->rep_pool),
-                                  MPI_COMM_WORLD);
-                        MPI_Bcast(&wk_ik_real,
-                                  1,
-                                  MPI_DOUBLE,
-                                  kv->para_k.get_startpro_pool(kpoint->rep_pool),
-                                  MPI_COMM_WORLD);
-#endif
-                        const bool active_k = wg_ikb_real >= 1e-12;
-                        if (!active_k || !own_kpoint)
-                        {
-                            continue;
-                        }
-                        const Real k_weight = static_cast<Real>(wg_ikb_real / wk_ik_real * kpoint->weight
-                                                                * k_spin_degeneracy);
-                        load_full_point_real(*kpoint, ispin, n_iband, psi_nk_real);
+                        syncmem_real_c2d_op()(weight_real_device, q_weight_scaled_host.data(), q_weight_count);
+                        q_weights_device = weight_real_device;
+                    }
 
-                        const Real* q_weights_device = nullptr;
-                        if (!is_cpu)
-                        {
-                            for (std::size_t iw = 0; iw < q_weight_count; ++iw)
-                            {
-                                q_weight_scaled_host[iw] = k_weight * q_weights[iw];
-                            }
-                            syncmem_real_c2d_op()(weight_real_device, q_weight_scaled_host.data(), q_weight_count);
-                            q_weights_device = weight_real_device;
-                        }
-
-                        for (int q_local = 0; q_local < q_count; ++q_local)
-                        {
-                            Eexx_ik_real += process_qtile_energy_tile(*kpoint,
-                                                                      *q_points[q_start + q_local],
-                                                                      psi_nk_real,
-                                                                      q_real_data,
-                                                                      q_weights.data(),
-                                                                      q_weights_device,
-                                                                      k_weight,
-                                                                      q_local,
-                                                                      m_count,
-                                                                      source_tile_size,
-                                                                      chunk_size);
-                        }
+                    for (int q_local = 0; q_local < q_count; ++q_local)
+                    {
+                        Eexx_ik_real += process_qtile_energy_tile(kpoint,
+                                                                  *q_points[q_start + q_local],
+                                                                  psi_nk_real,
+                                                                  q_real_data,
+                                                                  q_weights.data(),
+                                                                  q_weights_device,
+                                                                  k_weight,
+                                                                  q_local,
+                                                                  m_count,
+                                                                  source_tile_size,
+                                                                  chunk_size);
                     }
                 }
             }

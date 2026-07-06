@@ -13,6 +13,7 @@
 #include "source_psi/psi.h"
 #include "source_base/module_container/ATen/kernels/lapack.h"
 
+#include <algorithm>
 #include <complex>
 #include <limits>
 #include <map>
@@ -48,6 +49,53 @@ struct ExxOperatorOptions
     std::vector<std::map<std::string, std::string>> fock_params;
     std::vector<std::map<std::string, std::string>> erfc_params;
 };
+
+struct ExxLocalEnergyKPoint
+{
+    int ik_rep_spin = -1;
+    int ispin = 0;
+    K_Vectors::ExxFullKPoint kpoint;
+};
+
+namespace exx_energy_k_policy
+{
+inline int spin_channel_count(int nspin)
+{
+    return nspin == 2 ? 2 : 1;
+}
+
+inline std::vector<ExxLocalEnergyKPoint> choose_local_representative_k_points(const K_Vectors& kv,
+                                                                              int local_nks,
+                                                                              int nspin,
+                                                                              int my_pool)
+{
+    const int nspin_fac = spin_channel_count(nspin);
+    const int local_nk_no_spin = local_nks / nspin_fac;
+    std::vector<ExxLocalEnergyKPoint> points;
+    points.reserve(std::max(0, local_nks));
+
+    for (int ispin = 0; ispin < nspin_fac; ++ispin)
+    {
+        for (int ik_local = 0; ik_local < local_nk_no_spin; ++ik_local)
+        {
+            const int ik_rep_spin = ik_local + ispin * local_nk_no_spin;
+            for (const auto& kpoint: kv.exx_full_k_map)
+            {
+                if (!kpoint.active || kpoint.rep_pool != my_pool || kpoint.rep_local_index != ik_local)
+                {
+                    continue;
+                }
+                if (kpoint.full_index == kpoint.rep_index)
+                {
+                    points.push_back({ik_rep_spin, ispin, kpoint});
+                    break;
+                }
+            }
+        }
+    }
+    return points;
+}
+} // namespace exx_energy_k_policy
 
 template <typename T, typename Device>
 class OperatorEXXPW : public OperatorPW<T, Device>
