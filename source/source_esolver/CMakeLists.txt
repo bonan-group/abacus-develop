@@ -13,8 +13,12 @@ list(APPEND objects
     esolver_of_interface.cpp
     esolver_of_tool.cpp
     pw_others.cpp
-    esolver_dfpt_pw.cpp
 )
+if(ENABLE_EXPERIMENTAL_DFPT)
+  list(APPEND objects
+      esolver_dfpt_pw.cpp
+  )
+endif()
 if(ENABLE_LCAO)
   list(APPEND objects
       esolver_ks_lcao.cpp
@@ -43,4 +47,3 @@ if(BUILD_TESTING)
     add_subdirectory(test)
   endif()
 endif()
-

@@ -179,6 +179,9 @@
     - [out\_mat\_l](#out_mat_l)
     - [out\_xc\_r](#out_xc_r)
     - [out\_eband\_terms](#out_eband_terms)
+    - [out\_hr\_npz](#out_hr_npz)
+    - [out\_hsr\_npz](#out_hsr_npz)
+    - [out\_dm\_npz](#out_dm_npz)
     - [out\_mul](#out_mul)
     - [out\_app\_flag](#out_app_flag)
     - [out\_ndigits](#out_ndigits)
@@ -368,6 +371,7 @@
     - [msst\_tscale](#msst_tscale)
     - [msst\_qmass](#msst_qmass)
     - [md\_damp](#md_damp)
+    - [md\_csvr\_tau](#md_csvr_tau)
     - [md\_tolerance](#md_tolerance)
     - [md\_nraise](#md_nraise)
     - [cal\_syns](#cal_syns)
@@ -700,10 +704,10 @@
 ### mem_saver
 
 - **Type**: Integer
-- **Availability**: *Used for nscf calculations with plane wave basis set, and for scf PW hybrid calculations with K_POINTS_BAND target k-points.*
-- **Description**: Save memory when performing many-k eigenvalue-only calculations.
+- **Availability**: *Used only for nscf calculations with plane wave basis set.*
+- **Description**: Save memory when performing nscf calculations.
   - 0: no memory saving techniques are used.
-  - 1: a memory saving technique will be used for many k point calculations. For scf PW hybrid calculations with `K_POINTS_BAND`, target band k-points are solved in a streaming eigenvalue-only path. This path requires `out_band 1`, `exxace 1`, `exx_separate_loop 1`, `KPAR=1`, and an iterative PW solver other than `cg`; target wavefunction output is not supported.
+  - 1: a memory saving technique will be used for many k point calculations.
 - **Default**: 0
 
 ### cal_stress
@@ -1828,7 +1832,7 @@
    - nspin = 1: pots1.cube;
    - nspin = 2: pots1.cube and pots2.cube;
    - nspin = 4: pots1.cube, pots2.cube, pots3.cube, and pots4.cube
-  - 2: Output the electrostatic potential on real space grids into OUT.{suffix}/pot_es.cube. The Python script named tools/average_pot/aveElecStatPot.py can be used to calculate the average electrostatic potential along the z-axis and outputs it into ElecStaticPot_AVE. Please note that the total local potential refers to the local component of the self-consistent potential, excluding the non-local pseudopotential. The distinction between the local potential and the electrostatic potential is as follows: local potential = electrostatic potential + XC potential.
+  - 2: Output the electrostatic potential on real space grids into OUT.{suffix}/pot_es.cube. The Python script named tools/02_postprocessing/average_pot/aveElecStatPot.py can be used to calculate the average electrostatic potential along the z-axis and outputs it into ElecStaticPot_AVE. Please note that the total local potential refers to the local component of the self-consistent potential, excluding the non-local pseudopotential. The distinction between the local potential and the electrostatic potential is as follows: local potential = electrostatic potential + XC potential.
   - 3: Apart from 1, also output the total local potential of the initial charge density. The files are named as:
    - out_freq_ion = 0:
    - nspin = 1: `pot_ini.cube`;
@@ -2011,7 +2015,7 @@
 
 - **Type**: Boolean \[Integer\](optional)
 - **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
-- **Description**: Whether to print the matrix representation of the position matrix into files named rxrs1_nao.csr, ryrs1_nao.csr, rzrs1_nao.csr in the directory OUT.${suffix}. If calculation is set to get_s, the position matrix can be obtained without scf iterations. For more information, please refer to position_matrix.md.
+- **Description**: Whether to print the matrix representation of the position matrix into files named rxrs1_nao.csr, ryrs1_nao.csr, rzrs1_nao.csr in the directory OUT.${suffix}. The optional second parameter controls text output precision. If calculation is set to get_s, the position matrix can be obtained without scf iterations. For more information, please refer to position_matrix.md.
 
   > Note: In the 3.10-LTS version, the file name is data-rR-sparse.csr.
 - **Default**: False 8
@@ -2021,7 +2025,7 @@
 
 - **Type**: Boolean \[Integer\](optional)
 - **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
-- **Description**: Generate files containing the kinetic energy matrix. The format will be the same as the Hamiltonian matrix and overlap matrix as mentioned in out_mat_hs2. The name of the files will be trs1_nao.csr and so on. Also controled by out_freq_ion and out_app_flag.
+- **Description**: Generate files containing the kinetic energy matrix. The optional second parameter controls text output precision. The format will be the same as the Hamiltonian matrix and overlap matrix as mentioned in out_mat_hs2. The name of the files will be trs1_nao.csr and so on. Also controled by out_freq_ion and out_app_flag.
 
   > Note: In the 3.10-LTS version, the file name is data-TR-sparse_SPIN0.csr.
 - **Default**: False 8
@@ -2029,9 +2033,9 @@
 
 ### out_mat_dh
 
-- **Type**: Integer
+- **Type**: Boolean \[Integer\](optional)
 - **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
-- **Description**: Whether to print files containing the derivatives of the Hamiltonian matrix. The format will be the same as the Hamiltonian matrix and overlap matrix as mentioned in out_mat_hs2. The name of the files will be dhrxs1_nao.csr, dhrys1_nao.csr, dhrzs1_nao.csr and so on. Also controled by out_freq_ion and out_app_flag.
+- **Description**: Whether to print files containing the derivatives of the Hamiltonian matrix. The optional second parameter controls text output precision. The format will be the same as the Hamiltonian matrix and overlap matrix as mentioned in out_mat_hs2. The name of the files will be dhrxs1_nao.csr, dhrys1_nao.csr, dhrzs1_nao.csr and so on. Also controled by out_freq_ion and out_app_flag.
 
   > Note: In the 3.10-LTS version, the file name is data-dHRx-sparse_SPIN0.csr and so on.
 - **Default**: 0 8
@@ -2041,7 +2045,7 @@
 
 - **Type**: Boolean \[Integer\](optional)
 - **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
-- **Description**: Whether to print files containing the derivatives of the overlap matrix. The format will be the same as the overlap matrix as mentioned in out_mat_dh. The name of the files will be dsxrs1_nao.csr and so on. Also controled by out_freq_ion and out_app_flag. This feature can be used with calculation get_s.
+- **Description**: Whether to print files containing the derivatives of the overlap matrix. The optional second parameter controls text output precision. The format will be the same as the overlap matrix as mentioned in out_mat_dh. The name of the files will be dsxrs1_nao.csr and so on. Also controled by out_freq_ion and out_app_flag. This feature can be used with calculation get_s.
 
   > Note: In the 3.10-LTS version, the file name is data-dSRx-sparse_SPIN0.csr and so on.
 - **Default**: False 8
@@ -2094,6 +2098,28 @@
 - **Type**: Boolean
 - **Availability**: *Numerical atomic orbital basis*
 - **Description**: Whether to print the band energy terms separately in the file OUT.{term}_out.dat. The terms include the kinetic, pseudopotential (local + nonlocal), Hartree and exchange-correlation (including exact exchange if calculated).
+- **Default**: False
+
+### out_hr_npz
+
+- **Type**: Boolean
+- **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
+- **Description**: Whether to print Hamiltonian matrices H(R) in npz format. The output files are named output_HR0.npz, output_HR1.npz, and so on according to spin channel. This feature requires ABACUS to be built with CNPY.
+- **Default**: False
+- **Unit**: Ry
+
+### out_hsr_npz
+
+- **Type**: Boolean
+- **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
+- **Description**: Whether to print Hamiltonian matrices H(R) and overlap matrix S(R) in npz format. The output files are named output_SR.npz, output_HR0.npz, output_HR1.npz, and so on according to spin channel. This feature requires ABACUS to be built with CNPY.
+- **Default**: False
+
+### out_dm_npz
+
+- **Type**: Boolean
+- **Availability**: *Numerical atomic orbital basis (not gamma-only algorithm)*
+- **Description**: Whether to print density matrices DM(R) in npz format. The output files are named output_DM0.npz, output_DM1.npz, and so on according to spin channel. This feature requires ABACUS to be built with CNPY.
 - **Default**: False
 
 ### out_mul
@@ -2452,9 +2478,9 @@
   - tf: Thomas-Fermi (TF) functional
   - vw: von Weizsacker (vW) functional
   - tf+: TF + vW functional
-  - wt: Wang-Teter (WT) functional
-  - ext-wt: Extended Wang-Teter functional
-  - xwm: XWM functional
+  - wt: Wang-Teter (WT) functional (supports GPU acceleration when device=gpu)
+  - ext-wt: Extended Wang-Teter (ext-WT) functional
+  - xwm: Xu-Wang-Ma (XWM) functional
   - lkt: Luo-Karasiev-Trickey (LKT) functional
   - ml: Machine learning KEDF
   - mpn: MPN KEDF (automatically sets ml parameters)
@@ -3225,6 +3251,7 @@
   - berendsen: Berendsen thermostat, see md_nraise in detail.
   - rescaling: velocity Rescaling method 1, see md_tolerance in detail.
   - rescale_v: velocity Rescaling method 2, see md_nraise in detail.
+  - csvr: Canonical Sampling through Velocity Rescaling, see md_csvr_tau in detail.
 - **Default**: nhc
 
 ### md_tfirst
@@ -3474,6 +3501,13 @@
 - **Type**: Real
 - **Description**: The damping parameter used to add fictitious force in the Langevin method.
 - **Default**: 1.0
+- **Unit**: fs
+
+### md_csvr_tau
+
+- **Type**: Real
+- **Description**: The characteristic time scale for the CSVR (Canonical Sampling through Velocity Rescaling) thermostat. Larger values give weaker coupling (longer relaxation time), smaller values give stronger coupling (shorter relaxation time). Recommended value: 100 * md_dt.
+- **Default**: 100.0
 - **Unit**: fs
 
 ### md_tolerance

@@ -87,7 +87,11 @@ inline std::vector<ExxLocalEnergyKPoint> choose_local_representative_k_points(co
                 }
                 if (kpoint.full_index == kpoint.rep_index)
                 {
-                    points.push_back({ik_rep_spin, ispin, kpoint});
+                    ExxLocalEnergyKPoint point;
+                    point.ik_rep_spin = ik_rep_spin;
+                    point.ispin = ispin;
+                    point.kpoint = kpoint;
+                    points.push_back(point);
                     break;
                 }
             }

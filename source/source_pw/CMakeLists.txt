@@ -1,4 +1,6 @@
 add_subdirectory(module_pwdft)
 add_subdirectory(module_ofdft)
 add_subdirectory(module_stodft)
-add_subdirectory(module_dfpt)
+if(ENABLE_EXPERIMENTAL_DFPT)
+  add_subdirectory(module_dfpt)
+endif()

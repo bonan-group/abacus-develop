@@ -385,6 +385,42 @@ Available options are:
         this->add_item(item);
     }
     {
+        Input_Item item("assume_isolated");
+        item.annotation = "isolated-system electrostatic correction";
+        item.category = "System variables";
+        item.type = "String";
+        item.description = R"(Used to perform a calculation assuming an isolated system in a 3D supercell.
+
+Available options are:
+* none: regular periodic calculation without isolated-system correction.
+* makov-payne, m-p, mp: compute the Makov-Payne correction to the total energy and estimate a corrected vacuum level for eigenvalue alignment. This option is available only for cubic lattices (latname = sc, fcc, or bcc).
+
+Theory: G. Makov and M. C. Payne, Phys. Rev. B 51, 4014 (1995).)";
+        item.default_value = "none";
+        read_sync_string(input.assume_isolated);
+        item.reset_value = [](const Input_Item& item, Parameter& para) {
+            if (para.input.assume_isolated == "m-p" || para.input.assume_isolated == "mp")
+            {
+                para.input.assume_isolated = "makov-payne";
+            }
+        };
+        item.check_value = [](const Input_Item& item, const Parameter& para) {
+            const std::vector<std::string> allowed = {"none", "makov-payne", "m-p", "mp"};
+            if (std::find(allowed.begin(), allowed.end(), para.input.assume_isolated) == allowed.end())
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", nofound_str(allowed, "assume_isolated"));
+            }
+            if ((para.input.assume_isolated == "makov-payne" || para.input.assume_isolated == "m-p"
+                 || para.input.assume_isolated == "mp")
+                && para.input.latname != "sc" && para.input.latname != "fcc" && para.input.latname != "bcc")
+            {
+                ModuleBase::WARNING_QUIT("ReadInput",
+                                         "Makov-Payne correction is available only for cubic lattices: latname = sc, fcc, or bcc.");
+            }
+        };
+        this->add_item(item);
+    }
+    {
         Input_Item item("init_wfc");
         item.annotation = "start wave functions are from 'atomic', "
                           "'atomic+random', 'random' or";
@@ -485,15 +521,14 @@ Available options are:
     }
     {
         Input_Item item("mem_saver");
-        item.annotation = "Use memory-saving wavefunction storage for many-k calculations.";
+        item.annotation = "Only for nscf calculations, use memory-saving wavefunction storage.";
         item.category = "System variables";
         item.type = "Integer";
-        item.description = R"(Save memory when performing many k-point calculations.
+        item.description = R"(Save memory when performing nscf calculations.
 * 0: no memory saving techniques are used.
-* 1: a memory saving technique will be used for many k point calculations.
-For scf PW hybrid calculations with K_POINTS_BAND, target band k-points are solved in an eigenvalue-only path.)";
+* 1: a memory saving technique will be used for many k point calculations.)";
         item.default_value = "0";
-        item.availability = "Used for nscf calculations with plane wave basis set and for scf PW hybrid K_POINTS_BAND target calculations.";
+        item.availability = "Used only for nscf calculations with plane wave basis set.";
         read_sync_int(input.mem_saver);
         item.check_value = [](const Input_Item& item, const Parameter& para) {
             if (para.input.mem_saver != 0 && para.input.mem_saver != 1)
@@ -504,7 +539,7 @@ For scf PW hybrid calculations with K_POINTS_BAND, target band k-points are solv
         item.reset_value = [](const Input_Item& item, Parameter& para) {
             if (para.input.mem_saver == 1)
             {
-                if (para.input.calculation == "relax")
+                if (para.input.calculation == "scf" || para.input.calculation == "relax")
                 {
                     para.input.mem_saver = 0;
                     ModuleBase::GlobalFunc::AUTO_SET("mem_saver", "0");
