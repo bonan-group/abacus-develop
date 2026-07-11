@@ -2,8 +2,23 @@
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
 #include "source_base/parallel_reduce.h"
+#include "source_base/tool_quit.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_base/module_device/types.h"
+
+void Charge_Mixing::validate_gpu_fft_poolnproc(const ModulePW::PW_Basis* rhopw, const std::string& caller)
+{
+    if (rhopw == nullptr)
+    {
+        return;
+    }
+    if (rhopw->poolnproc > 1)
+    {
+        ModuleBase::WARNING_QUIT(caller,
+                                 "GPU FFT with poolnproc > 1 is not supported. "
+                                 "Use one MPI rank per pool for GPU PW runs.");
+    }
+}
 
 double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 {
@@ -19,6 +34,8 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 #if __CUDA || __ROCM
         if (device_ == "gpu" && chr->get_device() == "gpu")
         {
+            validate_gpu_fft_poolnproc(chr->rhopw, "Charge_Mixing::get_drho");
+
             // GPU path: sync rho to GPU, then GPU FFT
             chr->sync_rho_to_device<base_device::DEVICE_GPU>();
             chr->sync_rho_save_to_device<base_device::DEVICE_GPU>();

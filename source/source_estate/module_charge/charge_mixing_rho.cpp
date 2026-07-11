@@ -20,6 +20,8 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
     if (device_ == "gpu" && chr->get_device() == "gpu" &&
         nspin == 1 && (mixing_mode == "broyden" || mixing_mode == "pulay") && !PARAM.globalv.double_grid)
     {
+        validate_gpu_fft_poolnproc(chr->rhopw, "Charge_Mixing::mix_rho_recip");
+
         // Restore timer context for GPU path
         ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip");
 

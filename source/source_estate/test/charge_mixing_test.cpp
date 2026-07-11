@@ -292,6 +292,19 @@ TEST_F(ChargeMixingTest, InitMixingTest)
     EXPECT_EQ(CMtest.rho_mdata.length, 2 * pw_basis.nrxx);
 }
 
+TEST_F(ChargeMixingTest, GPUFFTRejectsMultipleRanksPerPool)
+{
+    pw_basis.poolnproc = 2;
+
+    testing::internal::CaptureStdout();
+    EXPECT_EXIT(Charge_Mixing::validate_gpu_fft_poolnproc(&pw_basis, "Charge_Mixing::get_drho"),
+                ::testing::ExitedWithCode(1),
+                "");
+    const std::string output = testing::internal::GetCapturedStdout();
+    EXPECT_THAT(output, testing::HasSubstr("GPU FFT with poolnproc > 1 is not supported"));
+    EXPECT_THAT(output, testing::HasSubstr("Charge_Mixing::get_drho"));
+}
+
 TEST_F(ChargeMixingTest, InnerDotRealTest)
 {
     Charge_Mixing CMtest;

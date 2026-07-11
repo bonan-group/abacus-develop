@@ -1,14 +1,30 @@
 #include "source_base/timer.h"
+#include "source_base/tool_quit.h"
 #include "source_basis/module_pw/kernels/pw_op.h"
 #include "pw_basis.h"
+
+#include <string>
 namespace ModulePW
 {
 #if (defined(__CUDA) || defined(__ROCM))
+namespace
+{
+void check_gpu_fft_poolnproc(const int poolnproc, const std::string& caller)
+{
+    if (poolnproc > 1)
+    {
+        ModuleBase::WARNING_QUIT(caller,
+                                 "GPU FFT with poolnproc > 1 is not supported. "
+                                 "Use one MPI rank per pool for GPU PW runs.");
+    }
+}
+} // namespace
+
 template <typename FPTYPE>
 void PW_Basis::real2recip_gpu(const FPTYPE* in, std::complex<FPTYPE>* out, const bool add, const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "real_to_recip gpu");
-    assert(this->poolnproc == 1);
+    check_gpu_fft_poolnproc(this->poolnproc, "PW_Basis::real2recip_gpu");
     const size_t size = this->nrxx;
     base_device::memory::cast_memory_op<std::complex<FPTYPE>, FPTYPE,base_device::DEVICE_GPU, base_device::DEVICE_GPU>()(
         this->fft_bundle.get_auxr_3d_data<FPTYPE>(),
@@ -34,7 +50,7 @@ void PW_Basis::real2recip_gpu(const std::complex<FPTYPE>* in,
                               const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "real_to_recip gpu");
-    assert(this->poolnproc == 1);
+    check_gpu_fft_poolnproc(this->poolnproc, "PW_Basis::real2recip_gpu");
     base_device::memory::synchronize_memory_op<std::complex<FPTYPE>,
                                                base_device::DEVICE_GPU,
                                                base_device::DEVICE_GPU>()(this->fft_bundle.get_auxr_3d_data<FPTYPE>(),
@@ -57,7 +73,7 @@ template <typename FPTYPE>
 void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in, FPTYPE* out, const bool add, const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip_to_real gpu");
-    assert(this->poolnproc == 1);
+    check_gpu_fft_poolnproc(this->poolnproc, "PW_Basis::recip2real_gpu");
     // ModuleBase::GlobalFunc::ZEROS(fft_bundle.get_auxr_3d_data<FPTYPE>(), this->nxyz);
     base_device::memory::set_memory_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>()(
         this->fft_bundle.get_auxr_3d_data<FPTYPE>(),
@@ -65,6 +81,11 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in, FPTYPE* out, const
         this->nxyz);
     if (this->gamma_only)
     {
+#if defined(__ROCM)
+        ModuleBase::WARNING_QUIT("PW_Basis::recip2real_gpu",
+                                 "ROCm gamma-only GPU recip_to_real is not supported. "
+                                 "Run this case with device=cpu or use a non-gamma-only GPU path.");
+#else
         set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
                                                                    this->nx,
                                                                    this->ny,
@@ -73,6 +94,7 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in, FPTYPE* out, const
                                                                    this->ig2ixyz_gpu,
                                                                    in,
                                                                    this->fft_bundle.get_auxr_3d_data<FPTYPE>());
+#endif
     }
     else
     {
@@ -99,7 +121,7 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in,
                               const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip_to_real gpu");
-    assert(this->poolnproc == 1);
+    check_gpu_fft_poolnproc(this->poolnproc, "PW_Basis::recip2real_gpu");
     // ModuleBase::GlobalFunc::ZEROS(fft_bundle.get_auxr_3d_data<double>(), this->nxyz);
     base_device::memory::set_memory_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>()(
         this->fft_bundle.get_auxr_3d_data<FPTYPE>(),
@@ -108,6 +130,11 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in,
 
     if (this->gamma_only)
     {
+#if defined(__ROCM)
+        ModuleBase::WARNING_QUIT("PW_Basis::recip2real_gpu",
+                                 "ROCm gamma-only GPU recip_to_real is not supported. "
+                                 "Run this case with device=cpu or use a non-gamma-only GPU path.");
+#else
         set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
                                                                    this->nx,
                                                                    this->ny,
@@ -116,6 +143,7 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in,
                                                                    this->ig2ixyz_gpu,
                                                                    in,
                                                                    this->fft_bundle.get_auxr_3d_data<FPTYPE>());
+#endif
     }
     else
     {

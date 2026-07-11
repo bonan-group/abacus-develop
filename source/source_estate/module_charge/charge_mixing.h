@@ -144,7 +144,8 @@ class Charge_Mixing
     std::string get_device() const { return device_; }
     
   private:
-  
+    static void validate_gpu_fft_poolnproc(const ModulePW::PW_Basis* rhopw, const std::string& caller);
+
     // mixing_data
     Base_Mixing::Mixing* mixing = nullptr; ///< Mixing object to mix charge density, kinetic energy density and compensation density
     Base_Mixing::Mixing_Data rho_mdata;    ///< Mixing data for charge density
