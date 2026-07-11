@@ -1,6 +1,7 @@
 #include "charge_mixing.h"
 
 #include "source_io/module_parameter/parameter.h"
+#include "source_base/global_variable.h"
 #include "source_base/timer.h"
 #include "source_base/module_device/types.h"
 #include "source_base/module_device/memory_op.h"
@@ -75,6 +76,21 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
             ModuleBase::timer::end("Charge_Mixing", "Kerker_screen_recip");
             return;
         }
+    }
+#elif defined(__ROCM)
+    if (device_ == "gpu" && GlobalV::ofs_running)
+    {
+        GlobalV::ofs_running << " INFO: GPU-optimized Kerker reciprocal preconditioner is unavailable on ROCm. "
+                             << "Using the existing CPU Kerker implementation." << std::endl;
+    }
+#endif
+
+#if __CUDA
+    if (device_ == "gpu" && GlobalV::ofs_running)
+    {
+        GlobalV::ofs_running << " INFO: GPU-optimized Kerker reciprocal preconditioner is unavailable for this spin "
+                             << "or mixing-parameter configuration. Using the existing CPU Kerker implementation."
+                             << std::endl;
     }
 #endif
 

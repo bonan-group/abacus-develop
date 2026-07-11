@@ -8,6 +8,7 @@
 #include "source_base/tool_title.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_hamilt/module_xc/xc_functional.h"
+#include "source_hamilt/module_xc/xc_gpu_policy.h"
 #include "source_io/module_parameter/parameter.h"
 #include "pot_ml_exx.h"
 
@@ -176,9 +177,16 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
         this->v_eff_host_stale_ = false;
     }
 
-    if (this->update_from_charge_resident_gpu(chg, ucell))
+    const bool used_resident_gpu_update = this->update_from_charge_resident_gpu(chg, ucell);
+    if (used_resident_gpu_update)
     {
         return;
+    }
+    if (this->use_gpu_ && !XC_Functional_GPU::xc_gpu_disabled_by_env() && GlobalV::ofs_running)
+    {
+        GlobalV::ofs_running << " INFO: GPU-resident potential update is unavailable for this configuration. "
+                             << "Using the existing CPU potential update and synchronizing the result to GPU."
+                             << std::endl;
     }
 
     this->cal_v_eff(chg, ucell, this->v_eff);

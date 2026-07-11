@@ -1,5 +1,6 @@
 #include "charge_mixing.h"
 #include "source_io/module_parameter/parameter.h"
+#include "source_base/global_variable.h"
 #include "source_base/timer.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/tool_quit.h"
@@ -57,6 +58,14 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
         else
 #endif
         {
+#if __CUDA || __ROCM
+            if (device_ == "gpu" && GlobalV::ofs_running)
+            {
+                GlobalV::ofs_running << " INFO: GPU charge-residual FFT path is unavailable because the charge "
+                                     << "density is not resident on GPU. Using the existing CPU FFT path."
+                                     << std::endl;
+            }
+#endif
             // CPU path
             for (int is = 0; is < nspin; ++is)
             {

@@ -38,13 +38,12 @@ bool XC_Functional::gradcorr_stress_gpu(const Charge* const chr,
                                         const std::string& device)
 {
 #if __CUDA || __UT_USE_CUDA
-    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
-    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
     const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
     const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
     const std::string xc_name = is_pbesol ? "PBEsol" : "PBE";
     const int nspin = PARAM.inp.nspin;
-    if (!XC_Functional_GPU::xc_gpu_stress_policy(device == "gpu", !xc_gpu_enabled, nspin, xc_name)
+    if (!XC_Functional_GPU::xc_gpu_stress_policy(device == "gpu", xc_gpu_disabled, nspin, xc_name)
         || use_libxc || func_type != 2 || !(is_pbe || is_pbesol)
         || chr == nullptr || rhopw == nullptr || ucell == nullptr || chr->get_device() != "gpu"
         || rhopw->get_device() != "gpu" || rhopw->poolnproc != 1 || !(nspin == 1 || nspin == 2)
@@ -473,12 +472,11 @@ void XC_Functional::gradcorr(
     ModuleBase::timer::start("XC_Functional", "gradcorr_eval_grid");
     bool gpu_gradcorr_grid_done = false;
 #if __CUDA || __UT_USE_CUDA
-    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
-    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
     const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
     const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
     const bool use_gpu_gradcorr_grid = XC_Functional_GPU::xc_gpu_policy(device == "gpu",
-                                                                         !xc_gpu_enabled,
+                                                                         xc_gpu_disabled,
                                                                          PARAM.inp.nspin,
                                                                          is_pbesol ? "PBEsol" : "PBE")
                                         && !use_libxc && !is_stress && nspin0 == 1 && (is_pbe || is_pbesol);

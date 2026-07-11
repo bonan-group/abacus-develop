@@ -82,9 +82,10 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in, FPTYPE* out, const
     if (this->gamma_only)
     {
 #if defined(__ROCM)
-        ModuleBase::WARNING_QUIT("PW_Basis::recip2real_gpu",
-                                 "ROCm gamma-only GPU recip_to_real is not supported. "
-                                 "Run this case with device=cpu or use a non-gamma-only GPU path.");
+        set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
+                                                             this->ig2ixyz_gpu,
+                                                             in,
+                                                             this->fft_bundle.get_auxr_3d_data<FPTYPE>());
 #else
         set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
                                                                    this->nx,
@@ -131,9 +132,10 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in,
     if (this->gamma_only)
     {
 #if defined(__ROCM)
-        ModuleBase::WARNING_QUIT("PW_Basis::recip2real_gpu",
-                                 "ROCm gamma-only GPU recip_to_real is not supported. "
-                                 "Run this case with device=cpu or use a non-gamma-only GPU path.");
+        set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
+                                                             this->ig2ixyz_gpu,
+                                                             in,
+                                                             this->fft_bundle.get_auxr_3d_data<FPTYPE>());
 #else
         set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
                                                                    this->nx,

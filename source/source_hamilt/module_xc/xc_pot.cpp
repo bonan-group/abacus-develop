@@ -6,8 +6,10 @@
 
 #include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
+#include "source_base/global_variable.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_hamilt/module_xc/kernels/xc_gradcorr_op.h"
+#include "source_hamilt/module_xc/xc_gpu_policy.h"
 #include "source_io/module_parameter/parameter.h"
 #include "xc_functional.h"
 
@@ -23,6 +25,20 @@
 namespace
 {
 
+void log_xc_cpu_fallback(const std::string& reason)
+{
+    if (GlobalV::ofs_running)
+    {
+        GlobalV::ofs_running << " INFO: GPU-optimized XC path is unavailable: " << reason
+                             << ". Using the CPU XC path." << std::endl;
+    }
+}
+
+bool should_log_xc_cpu_fallback(const std::string& device)
+{
+    return device == "gpu" && !XC_Functional_GPU::xc_gpu_disabled_by_env();
+}
+
 #if __CUDA || __UT_USE_CUDA
 bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
                                     const Charge* const chr,
@@ -34,12 +50,11 @@ bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
                                     double& vtxc,
                                     double* d_v_eff)
 {
-    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
-    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
     const bool is_pz = func_id.size() == 2 && func_id[0] == XC_LDA_X && func_id[1] == XC_LDA_C_PZ;
     const bool is_pw = func_id.size() == 2 && func_id[0] == XC_LDA_X && func_id[1] == XC_LDA_C_PW;
     ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (!xc_gpu_enabled || device != "gpu" || PARAM.inp.nspin != 2 || !(is_pz || is_pw) || chr == nullptr
+    if (xc_gpu_disabled || device != "gpu" || PARAM.inp.nspin != 2 || !(is_pz || is_pw) || chr == nullptr
         || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
         || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr || chr->get_rho_d(1) == nullptr)
     {
@@ -121,12 +136,11 @@ bool try_v_xc_pbe_resident_gpu(const int nrxx,
                                double& vtxc,
                                double* d_v_eff)
 {
-    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
-    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
     const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
     const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
     ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (!xc_gpu_enabled || device != "gpu" || PARAM.inp.nspin != 1 || !(is_pbe || is_pbesol) || chr == nullptr
+    if (xc_gpu_disabled || device != "gpu" || PARAM.inp.nspin != 1 || !(is_pbe || is_pbesol) || chr == nullptr
         || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
         || rhopw->poolnproc != 1 || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr)
     {
@@ -302,12 +316,11 @@ bool try_v_xc_pbe_spin_resident_gpu(const int nrxx,
                                     double& vtxc,
                                     double* d_v_eff)
 {
-    const char* xc_gpu_env = std::getenv("ABACUS_XC_GPU");
-    const bool xc_gpu_enabled = xc_gpu_env != nullptr && std::string(xc_gpu_env) == "1";
+    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
     const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
     const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
     ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (!xc_gpu_enabled || device != "gpu" || PARAM.inp.nspin != 2 || !(is_pbe || is_pbesol) || chr == nullptr
+    if (xc_gpu_disabled || device != "gpu" || PARAM.inp.nspin != 2 || !(is_pbe || is_pbesol) || chr == nullptr
         || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
         || rhopw->poolnproc != 1 || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr
         || chr->get_rho_d(1) == nullptr)
@@ -550,6 +563,10 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 
     if (use_libxc)
     {
+        if (should_log_xc_cpu_fallback(device))
+        {
+            log_xc_cpu_fallback("LibXC functionals are supported through the existing CPU LibXC implementation");
+        }
 #ifdef USE_LIBXC
         return XC_Functional_Libxc::v_xc_libxc(XC_Functional::get_func_id(),
                                                nrxx,
@@ -617,6 +634,11 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
         return std::make_tuple(etxc, vtxc, std::move(v));
     }
 #endif
+
+    if (should_log_xc_cpu_fallback(device))
+    {
+        log_xc_cpu_fallback("no resident GPU implementation matches this functional, spin, density residency, or PW layout");
+    }
 
     ModuleBase::timer::start("XC_Functional", "xc_builtin_eval");
     if (nspin == 1 || ( nspin ==4 && !domag && !domag_z))

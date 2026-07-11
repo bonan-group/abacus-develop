@@ -129,6 +129,39 @@ TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
     EXPECT_FALSE(xc_gpu_stress_policy(true, false, 1, "SCAN"));
 }
 
+TEST(XCFunctionGpuPolicyTest, EnvDisablesGpuOnlyWhenExplicitlyOff)
+{
+    using XC_Functional_GPU::xc_gpu_disabled_by_env;
+
+    const char* old_env_value = std::getenv("ABACUS_XC_GPU");
+    const bool had_xc_gpu_env = old_env_value != nullptr;
+    const std::string old_xc_gpu_env = had_xc_gpu_env ? std::string(old_env_value) : std::string();
+
+    unsetenv("ABACUS_XC_GPU");
+    EXPECT_FALSE(xc_gpu_disabled_by_env());
+
+    setenv("ABACUS_XC_GPU", "0", 1);
+    EXPECT_TRUE(xc_gpu_disabled_by_env());
+
+    setenv("ABACUS_XC_GPU", "off", 1);
+    EXPECT_TRUE(xc_gpu_disabled_by_env());
+
+    setenv("ABACUS_XC_GPU", "FALSE", 1);
+    EXPECT_TRUE(xc_gpu_disabled_by_env());
+
+    setenv("ABACUS_XC_GPU", "1", 1);
+    EXPECT_FALSE(xc_gpu_disabled_by_env());
+
+    if (had_xc_gpu_env)
+    {
+        setenv("ABACUS_XC_GPU", old_xc_gpu_env.c_str(), 1);
+    }
+    else
+    {
+        unsetenv("ABACUS_XC_GPU");
+    }
+}
+
 TEST(XCGradcorrOpTest, PbeGridCpuMatchesBuiltinReferenceValues)
 {
     const int nrxx = 5;
