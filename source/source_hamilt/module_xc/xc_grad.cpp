@@ -208,9 +208,12 @@ void XC_Functional::gradcorr(
     ModulePW::PW_Basis* rhopw,
     const UnitCell *ucell,
     std::vector<double> &stress_gga,
-    const bool is_stress)
+    const bool is_stress,
+    const int nspin,
+    const bool domag,
+    const bool domag_z)
 {
-    XC_Functional::gradcorr(etxc, vtxc, v, chr, rhopw, ucell, stress_gga, is_stress, "cpu");
+    XC_Functional::gradcorr(etxc, vtxc, v, chr, rhopw, ucell, stress_gga, is_stress, nspin, domag, domag_z, "cpu");
 }
 
 void XC_Functional::gradcorr(
@@ -224,7 +227,40 @@ void XC_Functional::gradcorr(
     const bool is_stress,
     const std::string& device)
 {
+    XC_Functional::gradcorr(etxc,
+                            vtxc,
+                            v,
+                            chr,
+                            rhopw,
+                            ucell,
+                            stress_gga,
+                            is_stress,
+                            PARAM.inp.nspin,
+                            PARAM.globalv.domag,
+                            PARAM.globalv.domag_z,
+                            device);
+}
+
+void XC_Functional::gradcorr(
+    double &etxc,
+    double &vtxc,
+    ModuleBase::matrix &v,
+    const Charge* const chr,
+    ModulePW::PW_Basis* rhopw,
+    const UnitCell *ucell,
+    std::vector<double> &stress_gga,
+    const bool is_stress,
+    const int nspin,
+    const bool domag,
+    const bool domag_z,
+    const std::string& device)
+{
     ModuleBase::TITLE("XC_Functional","gradcorr");
+
+    if((func_type == 3 || func_type == 5) && nspin==4)
+    {
+        ModuleBase::WARNING_QUIT("gradcorr","meta-GGA has not been implemented for nspin = 4 yet");
+    }
 
     if(func_type == 0 || func_type == 1)
     {
@@ -237,12 +273,12 @@ void XC_Functional::gradcorr(
         igcc_is_lyp = true;
     }
 
-    int nspin0 = PARAM.inp.nspin;
-    if(PARAM.inp.nspin==4)
+    int nspin0 = nspin;
+    if(nspin==4)
     {
         nspin0 =1;
     }
-    if(PARAM.inp.nspin==4&&(PARAM.globalv.domag||PARAM.globalv.domag_z))
+    if(nspin==4&&(domag||domag_z))
     {
         nspin0 = 2;
     }
@@ -262,7 +298,7 @@ void XC_Functional::gradcorr(
     // doing FFT to get rho in G space: rhog1
     ModuleBase::timer::start("XC_Functional", "gradcorr_rho_fft");
     rhopw->real2recip(chr->rho[0], chr->rhog[0]);
-    if(PARAM.inp.nspin==2)
+    if(nspin==2)
     {
         rhopw->real2recip(chr->rho[1], chr->rhog[1]);
     }
@@ -316,7 +352,7 @@ void XC_Functional::gradcorr(
 
     // for spin polarized case;
     // calculate the gradient of (rho_core+rho) in reciprocal space.
-    if(PARAM.inp.nspin==2)
+    if(nspin==2)
     {
         rhotmp2 = new double[rhopw->nrxx];
         rhogsum2 = new std::complex<double>[rhopw->npw];
@@ -348,7 +384,7 @@ void XC_Functional::gradcorr(
         ModuleBase::timer::end("XC_Functional", "gradcorr_grad_rho");
     }
 
-    if(PARAM.inp.nspin == 4&&(PARAM.globalv.domag||PARAM.globalv.domag_z))
+    if(nspin == 4&&(domag||domag_z))
     {
         rhotmp2 = new double[rhopw->nrxx];
         rhogsum2 = new std::complex<double>[rhopw->npw];
@@ -374,15 +410,15 @@ void XC_Functional::gradcorr(
         }
         if(!is_stress)
         {
-            vsave = new double* [PARAM.inp.nspin];
-            for(int is = 0;is<PARAM.inp.nspin;is++)
+            vsave = new double* [nspin];
+            for(int is = 0;is<nspin;is++)
             {
                 vsave[is]= new double [rhopw->nrxx];
             }
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static, 1024)
 #endif
-            for(int is = 0;is<PARAM.inp.nspin;is++)
+            for(int is = 0;is<nspin;is++)
             {
                 for(int ir =0;ir<rhopw->nrxx;ir++)
                 {
@@ -733,7 +769,7 @@ void XC_Functional::gradcorr(
                         else
                         {
                             double zeta = ( rhotmp1[ir] - rhotmp2[ir] ) / rh;
-                            if(PARAM.inp.nspin==4&&(PARAM.globalv.domag||PARAM.globalv.domag_z))
+                            if(nspin==4&&(domag||domag_z))
                             {
                                 zeta = fabs(zeta) * neg[ir];
                             }
@@ -906,12 +942,12 @@ void XC_Functional::gradcorr(
         vtxc += vtxcgc;
         etxc += etxcgc;
 
-        if(PARAM.inp.nspin == 4 && (PARAM.globalv.domag||PARAM.globalv.domag_z))
+        if(nspin == 4 && (domag||domag_z))
         {
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static, 1024)
 #endif
-            for(int is=0;is<PARAM.inp.nspin;is++)
+            for(int is=0;is<nspin;is++)
             {
                 for(int ir=0;ir<rhopw->nrxx;ir++)
                 {
@@ -948,7 +984,7 @@ void XC_Functional::gradcorr(
         delete[] h1;
     }
 
-    if(PARAM.inp.nspin==2)
+    if(nspin==2)
     {
         delete[] rhotmp2;
         delete[] rhogsum2;
@@ -958,7 +994,7 @@ void XC_Functional::gradcorr(
             delete[] h2;
         }
     }
-    if(PARAM.inp.nspin == 4 && (PARAM.globalv.domag||PARAM.globalv.domag_z))
+    if(nspin == 4 && (domag||domag_z))
     {
         delete[] neg;
         if(!is_stress)
@@ -968,7 +1004,7 @@ void XC_Functional::gradcorr(
                 delete[] vgg[i];
             }
             delete[] vgg;
-            for(int i=0; i<PARAM.inp.nspin; i++)
+            for(int i=0; i<nspin; i++)
             {
                 delete[] vsave[i];
             }

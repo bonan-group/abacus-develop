@@ -234,6 +234,7 @@ OBJS_ELECSTAT=elecstate.o\
     elecstate_pw.o\
     elecstate_pw_sdft.o\
     elecstate_pw_cal_tau.o\
+    makov_payne.o\
     elecstate_op.o\
     efield.o\
     gatefield.o\
@@ -414,6 +415,9 @@ OBJS_NEIGHBOR=sltk_atom.o\
 
 OBJS_NEIGHBOR_SEARCH=neighbor_search.o\
     bin_manager.o\
+    domain_decomposition.o\
+    page_allocator.o\
+    unitcell_lite.o\
 
 
 OBJS_ORBITAL=ORB_atomic.o\
@@ -460,10 +464,13 @@ OBJS_PW=fft_bundle.o\
     pw_transform.o\
     pw_transform_k.o\
 
-OBJS_RELAXATION=bfgs_basic.o\
+OBJS_RELAXATION=relax_data.o\
+    cg_base.o\
+    bfgs_basic.o\
     relax_driver.o\
     ions_move_basic.o\
     ions_move_bfgs.o\
+    ions_move_bfgs2.o\
     ions_move_cg.o\
     ions_move_methods.o\
     ions_move_sd.o\
@@ -472,8 +479,7 @@ OBJS_RELAXATION=bfgs_basic.o\
     lattice_change_methods.o\
     relax_nsync.o\
     relax_sync.o\
-    bfgs.o\
-    lbfgs.o\
+    ions_move_lbfgs.o\
     matrix_methods.o\
     line_search.o\
 
@@ -630,6 +636,7 @@ OBJS_LCAO=evolve_elec.o\
       td_folding.o\
       td_info.o\
       velocity_op.o\
+      snap_projector_half_tddft.o\
       snap_psibeta_half_tddft.o\
       solve_propagation.o\
       boundary_fix.o\
@@ -677,7 +684,6 @@ OBJS_MODULE_RI=conv_coulomb_pot_k.o\
       Matrix_Orbs22.o\
       RI_2D_Comm.o\
       Mix_DMk_2D.o\
-      Mix_Matrix.o\
       symmetry_rotation.o\
       symmetry_rotation_output.o\
       symmetry_irreducible_sector.o\

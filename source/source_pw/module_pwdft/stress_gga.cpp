@@ -2,6 +2,7 @@
 #include "source_base/parallel_reduce.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_base/timer.h"
+#include "source_io/module_parameter/parameter.h"
 
 #include <type_traits>
 
@@ -27,13 +28,17 @@ void Stress_Func<FPTYPE, Device>::stress_gga(const UnitCell& ucell,
 	FPTYPE dum1=0.0;
     FPTYPE dum2=0.0;
 	ModuleBase::matrix dum3;
+	const bool is_stress = true;
 	// call gradcorr to evaluate gradient correction to stress
 	// the first three terms are etxc, vtxc and v, which
 	// is not used here, so dummy variables are used.
     const std::string device = std::is_same<Device, base_device::DEVICE_GPU>::value ? "gpu" : "cpu";
     if (!XC_Functional::gradcorr_stress_gpu(chr, rho_basis, &ucell, stress_gga, device))
     {
-        XC_Functional::gradcorr(dum1, dum2, dum3, chr, rho_basis, &ucell, stress_gga, 1);
+        XC_Functional::gradcorr(
+            dum1, dum2, dum3, chr, rho_basis, &ucell,
+            stress_gga, is_stress,
+            PARAM.inp.nspin, PARAM.globalv.domag, PARAM.globalv.domag_z);
     }
 
     for(int l = 0;l< 3;l++)

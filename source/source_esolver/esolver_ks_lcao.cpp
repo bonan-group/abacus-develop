@@ -9,6 +9,7 @@
 #include "source_estate/module_charge/symmetry_rho.h"
 #include "source_lcao/LCAO_domain.h" // need DeePKS_init
 #include "source_lcao/FORCE_STRESS.h"
+#include "source_lcao/module_gint/gint.h"
 #include "source_estate/elecstate_lcao.h"
 #include "source_lcao/hamilt_lcao.h"
 #include "source_hsolver/hsolver_lcao.h"
@@ -179,7 +180,7 @@ void ESolver_KS_LCAO<TK, TR>::before_scf(UnitCell& ucell, const int istep)
     if(istep == 0)//if the first scf step, readin DMR from file,
     {
         //calculate or readin the density matrix DMR
-        if(PARAM.inp.init_chg == "dm")
+        if(PARAM.inp.init_chg == "dm" || PARAM.inp.init_chg == "dm_no_renormalize")
         {
             //! 13.1.1) init charge density from density matrix file
             LCAO_domain::init_chg_dm<TK>(PARAM.globalv.global_readin_dir, PARAM.inp.nspin,
@@ -245,7 +246,8 @@ void ESolver_KS_LCAO<TK, TR>::cal_force(UnitCell& ucell, ModuleBase::matrix& for
                        two_center_bundle_, orb_, force, this->scs,
                        this->locpp, this->sf, this->kv,
                        this->pw_rho, this->solvent, this->dftu, this->deepks,
-                       this->exx_nao, &ucell.symm);
+                       this->exx_nao, &ucell.symm, PARAM.inp.td_stype,
+                       static_cast<hamilt::Hamilt<TK>*>(this->p_hamilt));
 
     // delete RA after cal_force
     this->RA.delete_grid();
@@ -544,6 +546,7 @@ void ESolver_KS_LCAO<TK, TR>::after_scf(UnitCell& ucell, const int istep, const 
             PARAM.inp, this->kv, this->pelec, this->dmat.dm, this->pv,
             this->gd, this->psi, hamilt_lcao, this->dftu, this->two_center_bundle_,
             this->orb_, this->pw_wfc, this->pw_rho, this->pw_big, this->sf,
+            this->pw_rhod, this->locpp.vloc, this->solvent,
             this->rdmft_solver, this->deepks, this->exx_nao,
             this->conv_esolver, this->scf_nmax_flag, istep);
 

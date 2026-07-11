@@ -515,7 +515,36 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const int& nrxx,
     const Charge* const chr,
     const UnitCell* ucell,
+    const int nspin,
+    const bool domag,
+    const bool domag_z)
+{
+    return XC_Functional::v_xc(nrxx, chr, ucell, "cpu", nspin, domag, domag_z);
+}
+
+std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
+    const int& nrxx,
+    const Charge* const chr,
+    const UnitCell* ucell,
     const std::string& device)
+{
+    return XC_Functional::v_xc(nrxx,
+                               chr,
+                               ucell,
+                               device,
+                               PARAM.inp.nspin,
+                               PARAM.globalv.domag,
+                               PARAM.globalv.domag_z);
+}
+
+std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
+    const int& nrxx,
+    const Charge* const chr,
+    const UnitCell* ucell,
+    const std::string& device,
+    const int nspin,
+    const bool domag,
+    const bool domag_z)
 {
     ModuleBase::TITLE("XC_Functional", "v_xc");
 
@@ -527,6 +556,9 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
                                                ucell->omega,
                                                ucell->tpiba,
                                                chr,
+                                               nspin,
+                                               domag,
+                                               domag_z,
                                                &(scaling_factor_xc));
 #else
         ModuleBase::WARNING_QUIT("v_xc", "compile with LIBXC");
@@ -538,7 +570,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     //Exchange-Correlation potential Vxc(r) from n(r)
     double etxc = 0.0;
     double vtxc = 0.0;
-    ModuleBase::matrix v(PARAM.inp.nspin, nrxx);
+    ModuleBase::matrix v(nspin, nrxx);
 
     // the square of the e charge
     // in Rydeberg unit, so * 2.0.
@@ -587,7 +619,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 #endif
 
     ModuleBase::timer::start("XC_Functional", "xc_builtin_eval");
-    if (PARAM.inp.nspin == 1 || ( PARAM.inp.nspin ==4 && !PARAM.globalv.domag && !PARAM.globalv.domag_z))
+    if (nspin == 1 || ( nspin ==4 && !domag && !domag_z))
     {
         // spin-unpolarized case
 #ifdef _OPENMP
@@ -611,7 +643,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
             } // endif
         } //enddo
     }
-    else if(PARAM.inp.nspin ==2)
+    else if(nspin ==2)
     {
         // spin-polarized case
 #ifdef _OPENMP
@@ -637,7 +669,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
                 double vxc[2];
                 XC_Functional::xc_spin(arhox, zeta, exc, vxc[0], vxc[1]);
 
-                for (int is = 0;is < PARAM.inp.nspin;is++)
+                for (int is = 0;is < nspin;is++)
                 {
                     v(is, ir) = e2 * vxc[is];
                 }
@@ -647,7 +679,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
             }
         }
     }
-    else if(PARAM.inp.nspin == 4)
+    else if(nspin == 4)
     {
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+:etxc) reduction(+:vtxc)
@@ -713,7 +745,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     // which is not used here
     std::vector<double> dum;
     ModuleBase::timer::start("XC_Functional", "gradcorr");
-    gradcorr(etxc, vtxc, v, chr, chr->rhopw, ucell, dum, false, device);
+    gradcorr(etxc, vtxc, v, chr, chr->rhopw, ucell, dum, false, nspin, domag, domag_z, device);
     ModuleBase::timer::end("XC_Functional", "gradcorr");
 
     // parallel code : collect vtxc,etxc
