@@ -39,6 +39,20 @@ bool should_log_xc_cpu_fallback(const std::string& device)
     return device == "gpu" && !XC_Functional_GPU::xc_gpu_disabled_by_env();
 }
 
+void log_explicit_xc_gpu_env_if_needed(const std::string& device)
+{
+    static bool logged = false;
+    if (logged || device != "gpu" || !XC_Functional_GPU::xc_gpu_explicitly_enabled_by_env()
+        || !GlobalV::ofs_running)
+    {
+        return;
+    }
+
+    GlobalV::ofs_running << " INFO: ABACUS_XC_GPU is set. GPU-optimized XC paths are enabled when supported; "
+                         << "set ABACUS_XC_GPU=0 to force the CPU XC path." << std::endl;
+    logged = true;
+}
+
 #if __CUDA || __UT_USE_CUDA
 bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
                                     const Charge* const chr,
@@ -560,6 +574,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const bool domag_z)
 {
     ModuleBase::TITLE("XC_Functional", "v_xc");
+    log_explicit_xc_gpu_env_if_needed(device);
 
     if (use_libxc)
     {
@@ -793,6 +808,7 @@ bool XC_Functional::add_v_xc_to_device(const int& nrxx,
 {
     etxc = 0.0;
     vtxc = 0.0;
+    log_explicit_xc_gpu_env_if_needed(device);
     if (d_v_eff == nullptr || use_libxc || XC_Functional::get_ked_flag())
     {
         return false;

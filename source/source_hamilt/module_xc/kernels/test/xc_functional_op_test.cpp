@@ -132,6 +132,7 @@ TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
 TEST(XCFunctionGpuPolicyTest, EnvDisablesGpuOnlyWhenExplicitlyOff)
 {
     using XC_Functional_GPU::xc_gpu_disabled_by_env;
+    using XC_Functional_GPU::xc_gpu_explicitly_enabled_by_env;
 
     const char* old_env_value = std::getenv("ABACUS_XC_GPU");
     const bool had_xc_gpu_env = old_env_value != nullptr;
@@ -139,18 +140,23 @@ TEST(XCFunctionGpuPolicyTest, EnvDisablesGpuOnlyWhenExplicitlyOff)
 
     unsetenv("ABACUS_XC_GPU");
     EXPECT_FALSE(xc_gpu_disabled_by_env());
+    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
 
     setenv("ABACUS_XC_GPU", "0", 1);
     EXPECT_TRUE(xc_gpu_disabled_by_env());
+    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
 
     setenv("ABACUS_XC_GPU", "off", 1);
     EXPECT_TRUE(xc_gpu_disabled_by_env());
+    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
 
     setenv("ABACUS_XC_GPU", "FALSE", 1);
     EXPECT_TRUE(xc_gpu_disabled_by_env());
+    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
 
     setenv("ABACUS_XC_GPU", "1", 1);
     EXPECT_FALSE(xc_gpu_disabled_by_env());
+    EXPECT_TRUE(xc_gpu_explicitly_enabled_by_env());
 
     if (had_xc_gpu_env)
     {

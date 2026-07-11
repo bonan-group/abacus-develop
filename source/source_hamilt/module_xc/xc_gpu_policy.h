@@ -25,6 +25,11 @@ inline bool xc_gpu_disabled_by_env()
     return value == "0" || value == "OFF" || value == "FALSE" || value == "NO";
 }
 
+inline bool xc_gpu_explicitly_enabled_by_env()
+{
+    return std::getenv("ABACUS_XC_GPU") != nullptr && !xc_gpu_disabled_by_env();
+}
+
 inline bool xc_gpu_policy(const bool is_gpu,
                           const bool cpu_debug,
                           const int nspin,
