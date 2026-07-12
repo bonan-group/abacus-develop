@@ -5,7 +5,7 @@
 #include "../broyden_mixing.h"
 #include "../plain_mixing.h"
 #include "../pulay_mixing.h"
-#if __UT_USE_CUDA || __UT_USE_ROCM
+#if __UT_USE_CUDA
 #include "../broyden_mixing_gpu.h"
 #include "../mixing_data_gpu.h"
 #include "../pulay_mixing_gpu.h"
@@ -315,7 +315,7 @@ TEST_F(Mixing_Test, OtherCover)
     clear();
 }
 
-#if __UT_USE_CUDA || __UT_USE_ROCM
+#if __UT_USE_CUDA
 namespace
 {
 template <typename FPTYPE>
@@ -459,7 +459,7 @@ TEST(MixingGpuTest, PulayMatchesCpuAcrossHistoryWrap)
 {
     if (!base_device::information::probe_gpu_availability())
     {
-        GTEST_SKIP() << "No GPU device is available for CUDA/ROCm mixing parity tests.";
+        GTEST_SKIP() << "No GPU device is available for CUDA mixing parity tests.";
     }
     compare_cpu_gpu_mixing_history<Base_Mixing::Pulay_Mixing,
                                    Base_Mixing::Pulay_Mixing_GPU<double>,
@@ -473,7 +473,7 @@ TEST(MixingGpuTest, BroydenMatchesCpuAcrossHistoryWrap)
 {
     if (!base_device::information::probe_gpu_availability())
     {
-        GTEST_SKIP() << "No GPU device is available for CUDA/ROCm mixing parity tests.";
+        GTEST_SKIP() << "No GPU device is available for CUDA mixing parity tests.";
     }
     compare_cpu_gpu_mixing_history<Base_Mixing::Broyden_Mixing,
                                    Base_Mixing::Broyden_Mixing_GPU<double>,
@@ -482,4 +482,4 @@ TEST(MixingGpuTest, BroydenMatchesCpuAcrossHistoryWrap)
                                    Base_Mixing::Broyden_Mixing_GPU<std::complex<double>>,
                                    std::complex<double>>();
 }
-#endif // __UT_USE_CUDA || __UT_USE_ROCM
+#endif // __UT_USE_CUDA

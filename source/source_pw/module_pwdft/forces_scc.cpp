@@ -90,7 +90,11 @@ void Forces<FPTYPE, Device>::cal_force_scc(ModuleBase::matrix& forcescc,
     std::complex<double>* psic_d = nullptr;
     std::vector<double> gcar_h;
     std::vector<double> tau_h;
+#if defined(__CUDA) && __CUDA
     const bool use_gpu_scc_accumulation = this->device == base_device::GpuDevice && ucell_in.ntype == 1;
+#else
+    const bool use_gpu_scc_accumulation = false;
+#endif
     if (use_gpu_scc_accumulation)
     {
         gcar_h.resize(rho_basis->npw * 3);

@@ -40,9 +40,7 @@ inline bool xc_gpu_policy(const bool is_gpu,
         return static_cast<char>(std::toupper(c));
     });
 
-    return is_gpu && !cpu_debug && nspin == 1
-           && (xc_func_upper == "PBE" || xc_func_upper == "PBESOL" || xc_func_upper == "LDA"
-               || xc_func_upper == "PZ");
+    return is_gpu && !cpu_debug && nspin == 1 && (xc_func_upper == "PBE" || xc_func_upper == "PBESOL");
 }
 
 inline bool xc_gpu_stress_policy(const bool is_gpu,

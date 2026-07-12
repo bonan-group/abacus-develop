@@ -5,6 +5,7 @@
 #include "source_base/module_mixing/mixing.h"
 #include "source_base/module_mixing/plain_mixing.h"
 #include "source_base/module_device/types.h"
+#include <iosfwd>
 #include <string>
 
 #if __CUDA
@@ -44,6 +45,20 @@ class Charge_Mixing
      * @param omega_in omega for non-linear core correction
      * @param tpiba_in 2*pi/beta for non-linear core correction
      */
+    void set_mixing(const std::string& mixing_mode_in,
+                    const double& mixing_beta_in,
+                    const int& mixing_ndim_in,
+                    const double& mixing_gg0_in,
+                    const bool& mixing_tau_in,
+                    const double& mixing_beta_mag_in,
+                    const double& mixing_gg0_mag_in,
+                    const double& mixing_gg0_min_in,
+                    const double& mixing_angle_in,
+                    const bool& mixing_dmr_in,
+                    double& omega_in,
+                    double& tpiba_in,
+                    const bool mixing_gpu_in);
+
     void set_mixing(const std::string& mixing_mode_in,
                     const double& mixing_beta_in,
                     const int& mixing_ndim_in,
@@ -145,6 +160,7 @@ class Charge_Mixing
     
   private:
     static void validate_gpu_fft_poolnproc(const ModulePW::PW_Basis* rhopw, const std::string& caller);
+    void log_gpu_charge_mixing_fallback(const std::string& reason);
 
     // mixing_data
     Base_Mixing::Mixing* mixing = nullptr; ///< Mixing object to mix charge density, kinetic energy density and compensation density
@@ -168,6 +184,7 @@ class Charge_Mixing
     double mixing_gg0_min = 0.1;         ///< minimum kerker coefficient
     double mixing_angle = 0.0;           ///< mixing angle for nspin=4
     bool mixing_dmr = false;             ///< whether to mixing real space density matrix
+    bool mixing_gpu_enabled = true;       ///< whether to use GPU-resident charge mixing when available
     double* omega = nullptr;                  ///< omega for non-linear core correction
     double* tpiba = nullptr;                  ///< 2*pi/beta for non-linear core correction
     double* tpiba2 = nullptr;                 ///< 2*pi/beta^2 for non-linear core correction
@@ -180,6 +197,8 @@ class Charge_Mixing
 
     /// Runtime device selection: "cpu" or "gpu"
     std::string device_ = "cpu";
+    std::ostream* running_log_ = nullptr;
+    bool gpu_charge_mixing_fallback_logged_ = false;
 
 #if __CUDA
     //==========================================================

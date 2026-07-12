@@ -11,14 +11,15 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 
     const int nspin = PARAM.inp.nspin;
     assert(nspin==1 || nspin==2 || nspin==4);
+    const bool double_grid = PARAM.globalv.double_grid;
 
 // Full GPU-resident mixing path
 // Re-enabled after fixing the complex vector_axpy_op aliasing bug
 #if __CUDA
     // Full GPU-resident mixing path for nspin=1 with Broyden or Pulay mixing
     // This path keeps all mixing history and operations on GPU
-    if (device_ == "gpu" && chr->get_device() == "gpu" &&
-        nspin == 1 && (mixing_mode == "broyden" || mixing_mode == "pulay") && !PARAM.globalv.double_grid)
+    if (this->mixing_gpu_enabled && device_ == "gpu" && chr->get_device() == "gpu" &&
+        nspin == 1 && (mixing_mode == "broyden" || mixing_mode == "pulay") && !double_grid)
     {
         validate_gpu_fft_poolnproc(chr->rhopw, "Charge_Mixing::mix_rho_recip");
 
@@ -27,6 +28,34 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 
         mix_rho_recip_gpu(chr);
         return;
+    }
+    if (device_ == "gpu")
+    {
+        if (!this->mixing_gpu_enabled)
+        {
+            this->log_gpu_charge_mixing_fallback("mixing_gpu is false");
+        }
+        else if (chr->get_device() != "gpu")
+        {
+            this->log_gpu_charge_mixing_fallback("charge density is not resident on GPU");
+        }
+        else if (nspin != 1)
+        {
+            this->log_gpu_charge_mixing_fallback("only nspin=1 is supported");
+        }
+        else if (mixing_mode != "broyden" && mixing_mode != "pulay")
+        {
+            this->log_gpu_charge_mixing_fallback("only Broyden and Pulay mixing are supported");
+        }
+        else if (double_grid)
+        {
+            this->log_gpu_charge_mixing_fallback("double_grid is enabled");
+        }
+    }
+#elif defined(__ROCM)
+    if (device_ == "gpu")
+    {
+        this->log_gpu_charge_mixing_fallback("the optimized path is not implemented for ROCm");
     }
 #endif
 

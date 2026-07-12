@@ -74,15 +74,17 @@ class Memory
      * @param n The number of the quantity
      * @param accumulate Useless, always set false
      */
+    static void record_gpu(const std::string &name_in, const size_t &n_in);
     static void record_gpu(
       const std::string &name_in,
       const size_t &n_in,
-      const bool accumulate = false
+      const bool accumulate
     );
 
     static void record_gpu_alloc(const std::string& name_in, const size_t n_in);
     static void record_gpu_free(const size_t n_in);
-    static void set_stream_enabled(const bool enabled, const std::string& path = "");
+    static void set_stream_enabled(const bool enabled);
+    static void set_stream_enabled(const bool enabled, const std::string& path);
     static bool stream_enabled();
     static double get_gpu_peak_mb();
 

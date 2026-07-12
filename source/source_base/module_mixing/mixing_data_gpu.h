@@ -134,7 +134,12 @@ class Mixing_Data_GPU
      * @param out_h CPU destination buffer
      * @param index Index in history (0 = most recent)
      */
-    void copy_to_host(FPTYPE* out_h, int index = 0) const
+    void copy_to_host(FPTYPE* out_h) const
+    {
+        copy_to_host(out_h, 0);
+    }
+
+    void copy_to_host(FPTYPE* out_h, int index) const
     {
         const FPTYPE* src_d = get_data_d(index);
         base_device::memory::synchronize_memory_op<FPTYPE,

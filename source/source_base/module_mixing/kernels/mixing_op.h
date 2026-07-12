@@ -180,7 +180,7 @@ struct gemv_op<FPTYPE, base_device::DEVICE_CPU> {
 // GPU Specializations
 //==========================================================
 
-#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+#if __CUDA || __UT_USE_CUDA
 
 template <typename FPTYPE>
 struct vector_subtract_op<FPTYPE, base_device::DEVICE_GPU> {
@@ -257,7 +257,7 @@ struct gemv_op<FPTYPE, base_device::DEVICE_GPU> {
         const int incy);
 };
 
-#endif // __CUDA || __ROCM
+#endif // __CUDA || __UT_USE_CUDA
 
 } // namespace mixing
 

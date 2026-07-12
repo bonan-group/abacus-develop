@@ -39,7 +39,12 @@ class Broyden_Mixing_GPU
      * @param mixing_ndim Number of iterations to keep in history
      * @param mixing_beta Mixing parameter beta
      */
-    Broyden_Mixing_GPU(const int& mixing_ndim, const FPTYPE& mixing_beta = 0.7)
+    Broyden_Mixing_GPU(const int& mixing_ndim)
+        : Broyden_Mixing_GPU(mixing_ndim, static_cast<FPTYPE>(0.7))
+    {
+    }
+
+    Broyden_Mixing_GPU(const int& mixing_ndim, const FPTYPE& mixing_beta)
         : mixing_ndim(mixing_ndim),
           data_ndim(mixing_ndim + 1),
           mixing_beta(mixing_beta)

@@ -316,6 +316,11 @@ double Memory::record_gpu
 	return consume_gpu[find];
 }
 
+void Memory::record_gpu(const std::string &name_in, const size_t &n_in)
+{
+    record_gpu(name_in, n_in, false);
+}
+
 void Memory::record_gpu
 (
 	const std::string &name_in,
@@ -371,6 +376,11 @@ void Memory::record_gpu
 		}
 	}
 	return;
+}
+
+void Memory::set_stream_enabled(const bool enabled)
+{
+    set_stream_enabled(enabled, "");
 }
 
 void Memory::set_stream_enabled(const bool enabled, const std::string& path)

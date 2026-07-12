@@ -73,8 +73,6 @@ struct Input_para
     std::string precision = "double";
     std::string gint_precision = "double";
     bool timer_enable_nvtx = false;
-    bool mem_stream = false;
-    bool psi_init_cpu_debug = false;
 
     // ==============   #Parameters (2.Electronic structure) ===========================
     std::string ks_solver = "default"; ///< xiaohui add 2013-09-01
@@ -116,6 +114,7 @@ struct Input_para
     bool mixing_tau = false;  ///< whether to mix tau in mgga
     bool mixing_dftu = false; ///< whether to mix locale in DFT+U
     bool mixing_dmr = false;  ///< whether to mix real space density matrix
+    bool mixing_gpu = true;   ///< whether to use GPU-resident charge mixing when available
 
     bool gamma_only = false;   ///< for plane wave.
     int scf_nmax = 100;        ///< number of max elec iter

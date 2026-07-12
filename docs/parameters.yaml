@@ -707,6 +707,17 @@ parameters:
     default_value: broyden
     unit: ""
     availability: ""
+  - name: mixing_gpu
+    category: Electronic structure
+    type: Boolean
+    description: |
+      Controls whether supported GPU plane-wave calculations use the GPU-resident charge mixing path.
+
+      * True: use GPU-resident charge mixing when the current build and input are supported.
+      * False: use the existing CPU charge mixing path.
+    default_value: "True"
+    unit: ""
+    availability: Only effective for CUDA plane-wave charge mixing with nspin=1, Broyden or Pulay mixing, GPU-resident charge density, and no double grid.
   - name: mixing_beta
     category: Electronic structure
     type: Real

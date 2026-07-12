@@ -10,6 +10,7 @@
 #include <vector>
 #include <cassert>
 #include <cctype>
+#include <cstdlib>
 #include <limits>
 #include "source_base/formatter.h"
 #include "source_base/global_file.h"
@@ -59,6 +60,12 @@ bool assume_as_boolean(const std::string& val)
         warnmsg.append(", please check the input parameters in file INPUT");
         ModuleBase::WARNING_QUIT("Input", warnmsg);
     }
+}
+
+bool env_flag_enabled(const char* name)
+{
+    const char* value = std::getenv(name);
+    return value != nullptr && assume_as_boolean(value);
 }
 
 std::string to_dir(const std::string& str)
@@ -284,7 +291,8 @@ void ReadInput::create_directory(const Parameter& param)
                                           param.input.deepks_out_freq_elec > 0); // xiaohui add 2013-09-01
 #if defined(__CUDA) || defined(__ROCM)
     std::string mem_stream_path;
-    if (param.inp.mem_stream)
+    const bool mem_stream_enabled = env_flag_enabled("ABACUS_MEM_STREAM");
+    if (mem_stream_enabled)
     {
         mem_stream_path = param.sys.global_out_dir + "memory_stream";
 #ifdef __MPI
@@ -292,7 +300,7 @@ void ReadInput::create_directory(const Parameter& param)
 #endif
         mem_stream_path += ".jsonl";
     }
-    ModuleBase::Memory::set_stream_enabled(param.inp.mem_stream, mem_stream_path);
+    ModuleBase::Memory::set_stream_enabled(mem_stream_enabled, mem_stream_path);
 #endif
     //const std::string ss = "test -d " + PARAM.inp.read_file_dir;
     struct stat st;

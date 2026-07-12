@@ -122,6 +122,7 @@ TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_op_gpu)
     delete_memory_complex_gpu_op()(d_in_1);
 }
 
+#if __UT_USE_CUDA
 TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_gamma_op_gpu_fills_conjugate_partners)
 {
     const int nx = 4;
@@ -258,6 +259,7 @@ TEST_F(TestModulePWPWMultiDevice, set_3d_fft_box_gamma_op_gpu_avoids_boundary_pa
     delete_memory_complex_gpu_op()(d_res);
     delete_memory_complex_gpu_op()(d_in);
 }
+#endif // __UT_USE_CUDA
 
 TEST_F(TestModulePWPWMultiDevice, set_recip_to_real_output_op_gpu)
 {

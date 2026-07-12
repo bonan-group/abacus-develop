@@ -60,7 +60,7 @@ void ESolver_KS::before_all_runners(UnitCell& ucell, const Input_para& inp)
     p_chgmix->set_rhopw(this->pw_rho, this->pw_rhod);
     p_chgmix->set_mixing(inp.mixing_mode, inp.mixing_beta, inp.mixing_ndim,
       inp.mixing_gg0, inp.mixing_tau, inp.mixing_beta_mag, inp.mixing_gg0_mag,
-      inp.mixing_gg0_min, inp.mixing_angle, inp.mixing_dmr, ucell.omega, ucell.tpiba);
+      inp.mixing_gg0_min, inp.mixing_angle, inp.mixing_dmr, ucell.omega, ucell.tpiba, inp.mixing_gpu);
     p_chgmix->init_mixing();
 
     // Enable GPU charge mixing when device="gpu"

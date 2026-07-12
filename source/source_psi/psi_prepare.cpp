@@ -17,11 +17,25 @@
 #include "source_psi/psi_init_nao_random.h"
 #include "source_psi/psi_init_random.h"
 
+#include <cstdlib>
+
 namespace psi
 {
 
 namespace
 {
+
+bool psi_init_cpu_debug_enabled()
+{
+    const char* value = std::getenv("ABACUS_PSI_INIT_CPU_DEBUG");
+    if (value == nullptr)
+    {
+        return false;
+    }
+    const std::string flag(value);
+    return !(flag.empty() || flag == "0" || flag == "false" || flag == "False" || flag == "FALSE"
+             || flag == "off" || flag == "Off" || flag == "OFF");
+}
 
 template <typename T, typename Device>
 struct GpuRandomInit
@@ -39,7 +53,7 @@ struct GpuRandomInit<T, base_device::DEVICE_GPU>
     static bool enabled(const psi_initializer<T>* psi_initer, const std::string& ks_solver)
     {
         return gpu_random_init_policy(PARAM.inp.device == "gpu",
-                                      PARAM.inp.psi_init_cpu_debug,
+                                      psi_init_cpu_debug_enabled(),
                                       ks_solver,
                                       psi_initer != nullptr,
                                       psi_initer == nullptr ? "" : psi_initer->method());

@@ -262,15 +262,8 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
 
     const int nspin = PARAM.inp.nspin;
 
-    // Currently only support nspin=1 for full GPU path
-    // Fall back to CPU path for nspin=2,4 or unsupported mixing modes
-    if (nspin != 1 || (mixing_mode != "broyden" && mixing_mode != "pulay"))
-    {
-        // Fall back to CPU mixing
-        ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip_gpu");
-        mix_rho_recip(chr);
-        return;
-    }
+    assert(nspin == 1);
+    assert(mixing_mode == "broyden" || mixing_mode == "pulay");
 
     // Initialize GPU mixing resources
     init_mixing_gpu();

@@ -332,13 +332,6 @@ TEST_F(InputTest, Item_test)
         it->second.reset_value(it->second, param);
         EXPECT_EQ(param.input.init_wfc, "nao");
     }
-    { // psi_init_cpu_debug
-        auto it = find_label("psi_init_cpu_debug", readinput.input_lists);
-        ASSERT_NE(it, readinput.input_lists.end());
-        it->second.str_values = {"1"};
-        it->second.read_value(it->second, param);
-        EXPECT_TRUE(param.input.psi_init_cpu_debug);
-    }
     { // init_chg
         auto it = find_label("init_chg", readinput.input_lists);
         param.input.init_chg = "get_pchg";
@@ -1112,6 +1105,13 @@ TEST_F(InputTest, Item_test2)
         EXPECT_EQ(param.input.mixing_beta, 0.4);
         EXPECT_EQ(param.input.mixing_beta_mag, 1.6);
         EXPECT_EQ(param.input.mixing_gg0_mag, 0.0);
+    }
+    { // mixing_gpu
+        auto it = find_label("mixing_gpu", readinput.input_lists);
+        ASSERT_NE(it, readinput.input_lists.end());
+        it->second.str_values = {"0"};
+        it->second.read_value(it->second, param);
+        EXPECT_FALSE(param.input.mixing_gpu);
     }
     { // mixing_beta_mag
         auto it = find_label("mixing_beta_mag", readinput.input_lists);

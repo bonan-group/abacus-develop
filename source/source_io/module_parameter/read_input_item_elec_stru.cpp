@@ -568,6 +568,21 @@ In general, the convergence of the Broyden method is slightly faster than that o
         this->add_item(item);
     }
     {
+        Input_Item item("mixing_gpu");
+        item.annotation = "enable GPU-resident charge mixing when available";
+        item.category = "Electronic structure";
+        item.type = "Boolean";
+        item.description = R"(Controls whether supported GPU plane-wave calculations use the GPU-resident charge mixing path.
+
+* True: use GPU-resident charge mixing when the current build and input are supported.
+* False: use the existing CPU charge mixing path.)";
+        item.default_value = "True";
+        item.unit = "";
+        item.availability = "Only effective for supported GPU plane-wave charge mixing configurations.";
+        read_sync_bool(input.mixing_gpu);
+        this->add_item(item);
+    }
+    {
         Input_Item item("mixing_beta");
         item.annotation = "mixing parameter: 0 means no new charge";
         item.category = "Electronic structure";

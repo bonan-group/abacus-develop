@@ -47,7 +47,12 @@ class Pulay_Mixing_GPU
      * @param mixing_ndim Number of iterations to keep in history
      * @param mixing_beta Mixing parameter beta
      */
-    Pulay_Mixing_GPU(const int& mixing_ndim, const FPTYPE& mixing_beta = 0.7)
+    Pulay_Mixing_GPU(const int& mixing_ndim)
+        : Pulay_Mixing_GPU(mixing_ndim, static_cast<FPTYPE>(0.7))
+    {
+    }
+
+    Pulay_Mixing_GPU(const int& mixing_ndim, const FPTYPE& mixing_beta)
         : mixing_ndim(mixing_ndim),
           data_ndim(mixing_ndim),  // Note: NOT mixing_ndim+1 like Broyden
           mixing_beta(mixing_beta)

@@ -112,12 +112,12 @@ TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
     using XC_Functional_GPU::xc_gpu_stress_policy;
 
     EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PBE"));
-    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PZ"));
     EXPECT_TRUE(xc_gpu_policy(true, false, 1, "pbesol"));
-    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "LDA"));
     EXPECT_FALSE(xc_gpu_policy(false, false, 1, "PBE"));
     EXPECT_FALSE(xc_gpu_policy(true, true, 1, "PBE"));
     EXPECT_FALSE(xc_gpu_policy(true, false, 2, "PBE"));
+    EXPECT_FALSE(xc_gpu_policy(true, false, 1, "PZ"));
+    EXPECT_FALSE(xc_gpu_policy(true, false, 1, "LDA"));
     EXPECT_FALSE(xc_gpu_policy(true, false, 1, "SCAN"));
 
     EXPECT_TRUE(xc_gpu_stress_policy(true, false, 1, "PBE"));

@@ -7,6 +7,8 @@
 #include "source_base/timer.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 
+#include <ostream>
+
 Charge_Mixing::Charge_Mixing()
 {
     this->mixing = nullptr;
@@ -43,7 +45,8 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
                                const double& mixing_angle_in,
                                const bool& mixing_dmr_in,
                                double& omega_in,
-                               double& tpiba_in)
+                               double& tpiba_in,
+                               const bool mixing_gpu_in)
 {
     // get private mixing parameters
     this->mixing_mode = mixing_mode_in;
@@ -56,6 +59,7 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
     this->mixing_gg0_min = mixing_gg0_min_in;
     this->mixing_angle = mixing_angle_in;
     this->mixing_dmr = mixing_dmr_in;
+    this->mixing_gpu_enabled = mixing_gpu_in;
     this->omega = &omega_in;
     this->tpiba = &tpiba_in;
     // check the paramters
@@ -75,7 +79,9 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
 
     // print into running.log
     //GlobalV::ofs_running << "\n\n";
-    GlobalV::ofs_running << "\n";
+    std::ostream& running_log = GlobalV::ofs_running;
+    this->running_log_ = &running_log;
+    running_log << "\n";
     GlobalV::ofs_running << " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
            ">>>>" << std::endl;
     GlobalV::ofs_running << " |                                                                 "
@@ -107,6 +113,45 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
     ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_ndim", this->mixing_ndim);
 
     return;
+}
+
+void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
+                               const double& mixing_beta_in,
+                               const int& mixing_ndim_in,
+                               const double& mixing_gg0_in,
+                               const bool& mixing_tau_in,
+                               const double& mixing_beta_mag_in,
+                               const double& mixing_gg0_mag_in,
+                               const double& mixing_gg0_min_in,
+                               const double& mixing_angle_in,
+                               const bool& mixing_dmr_in,
+                               double& omega_in,
+                               double& tpiba_in)
+{
+    this->set_mixing(mixing_mode_in,
+                     mixing_beta_in,
+                     mixing_ndim_in,
+                     mixing_gg0_in,
+                     mixing_tau_in,
+                     mixing_beta_mag_in,
+                     mixing_gg0_mag_in,
+                     mixing_gg0_min_in,
+                     mixing_angle_in,
+                     mixing_dmr_in,
+                     omega_in,
+                     tpiba_in,
+                     true);
+}
+
+void Charge_Mixing::log_gpu_charge_mixing_fallback(const std::string& reason)
+{
+    if (this->gpu_charge_mixing_fallback_logged_ || this->running_log_ == nullptr || !(*this->running_log_))
+    {
+        return;
+    }
+    *this->running_log_ << " INFO: GPU-resident charge mixing is unavailable: " << reason
+                        << ". Using the existing CPU charge mixing path." << std::endl;
+    this->gpu_charge_mixing_fallback_logged_ = true;
 }
 
 void Charge_Mixing::init_mixing()

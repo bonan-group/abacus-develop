@@ -97,6 +97,7 @@
     - [smearing\_sigma](#smearing_sigma)
     - [smearing\_sigma\_temp](#smearing_sigma_temp)
     - [mixing\_type](#mixing_type)
+    - [mixing\_gpu](#mixing_gpu)
     - [mixing\_beta](#mixing_beta)
     - [mixing\_beta\_mag](#mixing_beta_mag)
     - [mixing\_ndim](#mixing_ndim)
@@ -1304,6 +1305,16 @@
 
   In general, the convergence of the Broyden method is slightly faster than that of the Pulay method.
 - **Default**: broyden
+
+### mixing_gpu
+
+- **Type**: Boolean
+- **Availability**: *Only effective for CUDA plane-wave charge mixing with nspin=1, Broyden or Pulay mixing, GPU-resident charge density, and no double grid.*
+- **Description**: Controls whether supported GPU plane-wave calculations use the GPU-resident charge mixing path.
+
+  - True: use GPU-resident charge mixing when the current build and input are supported.
+  - False: use the existing CPU charge mixing path.
+- **Default**: True
 
 ### mixing_beta
 
