@@ -411,11 +411,13 @@ void K_Vectors::normalize_exx_full_q_map_weights()
 
         std::vector<double> raw_rep_weight(this->nkstot, 0.0);
         std::vector<double> normalized_rep_weight(this->nkstot, 0.0);
+        std::vector<int> active_rep_count(this->nkstot, 0);
         for (const auto& point: points)
         {
-            if (point.rep_local_index >= 0 && point.rep_local_index < this->nkstot)
+            if (point.active && point.rep_local_index >= 0 && point.rep_local_index < this->nkstot)
             {
                 raw_rep_weight[point.rep_local_index] += point.weight;
+                ++active_rep_count[point.rep_local_index];
             }
         }
 
@@ -427,6 +429,11 @@ void K_Vectors::normalize_exx_full_q_map_weights()
 
         for (auto& point: points)
         {
+            if (!point.active)
+            {
+                point.weight = 0.0;
+                continue;
+            }
             if (point.rep_local_index < 0 || point.rep_local_index >= this->nkstot)
             {
                 continue;
@@ -435,6 +442,11 @@ void K_Vectors::normalize_exx_full_q_map_weights()
             if (raw_sum > 1.0e-14)
             {
                 point.weight *= normalized_rep_weight[point.rep_local_index] / raw_sum;
+            }
+            else if (active_rep_count[point.rep_local_index] > 0)
+            {
+                point.weight = normalized_rep_weight[point.rep_local_index]
+                               / static_cast<double>(active_rep_count[point.rep_local_index]);
             }
         }
     };

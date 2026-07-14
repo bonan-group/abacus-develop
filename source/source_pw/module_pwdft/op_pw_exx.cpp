@@ -33,25 +33,6 @@
 namespace hamilt
 {
 
-namespace
-{
-bool consecutive_integers(const int* arr, std::size_t size)
-{
-    if (size == 0)
-    {
-        return false;
-    }
-    for (std::size_t i = 1; i < size; ++i)
-    {
-        if (arr[i] != arr[i - 1] + 1)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-}
-
 template <typename T, typename Device>
 std::vector<typename GetTypeReal<T>::type> OperatorEXXPW<T, Device>::fock_div = {};
 
@@ -67,7 +48,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                                         const ExxOperatorOptions& options_in)
     : isk(isk_in), wfcpw(wfcpw_in), rhopw(rhopw_in), kv(kv_in), options(options_in), ucell(ucell)
 {
-    if (GlobalV::KPAR != 1 && !(options.exxace && options.separate_loop))
+    if (kv->para_k.kpar != 1 && !(options.exxace && options.separate_loop))
     {
         // GlobalV::ofs_running << "EXX Calculation does not support k-point parallelism" << std::endl;
         ModuleBase::WARNING_QUIT("OperatorEXXPW",
@@ -168,7 +149,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                              << ", batch FFT size = " << options.batch_fft_size
                              << ", band tile size = " << options.band_tile_size
                              << ", q tile size = " << options.q_tile_size
-                             << ", q ownership = " << (GlobalV::KPAR > 1 ? "owner-local" : "local")
+                             << ", q ownership = " << (kv->para_k.kpar > 1 ? "owner-local" : "local")
                              << ", reduced k = " << wfcpw->nks / nk_fac
                              << ", full q = " << active_full_q_count << std::endl;
     }
@@ -192,12 +173,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     }
     if (batch_fft_size > 0)
     {
-        resmem_complex_op()(psi_mq_batch_real, batch_fft_size * wfcpw_exx->nrxx);
-        resmem_complex_op()(psi_mq_batch_recip, batch_fft_size * wfcpw_exx->npwk_max);
-        resmem_complex_op()(density_real_batch, batch_fft_size * rhopw_dev->nrxx);
-        resmem_complex_op()(density_recip_batch, batch_fft_size * rhopw_dev->npw);
-        resmem_real_op()(density_norm_batch, batch_fft_size * rhopw_dev->npw);
-        resmem_real_op()(energy_batch, batch_fft_size);
+        allocate_batch_workspace(batch_fft_size);
     }
 
     fock_div.clear();
@@ -366,7 +342,7 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
 {
     if (std::is_same<Device, base_device::DEVICE_CPU>::value)
     {
-        if (GlobalV::KPAR > 1)
+        if (kv->para_k.kpar > 1)
         {
             ModuleBase::WARNING_QUIT("OperatorEXXPW::act_op_qtile_cpu",
                                      "direct noACE KPAR q-tile PW EXX is not synchronization-safe; "
@@ -376,7 +352,7 @@ void OperatorEXXPW<T, Device>::act_op(const int nbands,
         return;
     }
 
-    if (GlobalV::KPAR > 1)
+    if (kv->para_k.kpar > 1)
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::act_op_qtile_gpu",
                                  "direct noACE GPU q-tile PW EXX supports KPAR=1 only");
@@ -398,7 +374,7 @@ int OperatorEXXPW<T, Device>::resolve_qtile_chunk_size() const
 template <typename T, typename Device>
 void OperatorEXXPW<T, Device>::ensure_qtile_workspace(std::size_t target_size,
                                                       std::size_t q_size,
-                                                      int batch_limit) const
+                                                      std::size_t batch_limit) const
 {
     if (std::is_same<Device, base_device::DEVICE_CPU>::value)
     {
@@ -425,13 +401,49 @@ void OperatorEXXPW<T, Device>::ensure_qtile_workspace(std::size_t target_size,
         resmem_complex_op()(qtile_q_real, q_size);
         qtile_q_real_size = q_size;
     }
-    if (batch_limit > 0 && weight_real_capacity < static_cast<std::size_t>(batch_limit))
+    if (batch_limit > 0 && weight_real_capacity < batch_limit)
     {
         delmem_real_op()(weight_real_device);
         weight_real_device = nullptr;
         resmem_real_op()(weight_real_device, batch_limit);
         weight_real_capacity = batch_limit;
     }
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::allocate_batch_workspace(int batch_fft_size)
+{
+    if (batch_fft_size <= 0)
+    {
+        return;
+    }
+
+    const std::size_t batch_count = static_cast<std::size_t>(batch_fft_size);
+    std::size_t psi_real_size = 0;
+    std::size_t psi_recip_size = 0;
+    std::size_t density_real_size = 0;
+    std::size_t density_recip_size = 0;
+    if (!checked_exx_size_product(batch_count, static_cast<std::size_t>(wfcpw_exx->nrxx), psi_real_size)
+        || !checked_exx_size_product(batch_count,
+                                     static_cast<std::size_t>(wfcpw_exx->npwk_max),
+                                     psi_recip_size)
+        || !checked_exx_size_product(batch_count,
+                                     static_cast<std::size_t>(rhopw_dev->nrxx),
+                                     density_real_size)
+        || !checked_exx_size_product(batch_count,
+                                     static_cast<std::size_t>(rhopw_dev->npw),
+                                     density_recip_size))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::allocate_batch_workspace",
+                                 "PW EXX batch workspace size overflows size_t");
+    }
+
+    resmem_complex_op()(psi_mq_batch_real, psi_real_size);
+    resmem_complex_op()(psi_mq_batch_recip, psi_recip_size);
+    resmem_complex_op()(density_real_batch, density_real_size);
+    resmem_complex_op()(density_recip_batch, density_recip_size);
+    resmem_real_op()(density_norm_batch, density_recip_size);
+    resmem_real_op()(energy_batch, batch_count);
 }
 
 template <typename T, typename Device>
@@ -446,7 +458,8 @@ void OperatorEXXPW<T, Device>::fill_target_tile(const T* tmpsi_in,
     {
         const int n_iband = n_start + n_local;
         const T* psi_nk = tmpsi_in + static_cast<std::size_t>(n_iband) * nbasis;
-        wave_recip_to_exx_real(psi_nk, target_real + static_cast<std::size_t>(n_local) * real_size, this->ik);
+        T* target_ptr = target_real + static_cast<std::size_t>(n_local) * real_size;
+        wave_recip_to_exx_real(psi_nk, target_ptr, this->ik);
     }
 }
 
@@ -474,7 +487,7 @@ OperatorEXXPW<T, Device>::fill_q_tile_states(const std::vector<const K_Vectors::
         ensure_full_point_supported(*qpoint);
         const int iq_rep_spin = rep_spin_index(*qpoint, ispin);
         const int iq_pool = qpoint->rep_pool;
-        const bool own_qpoint = iq_pool == GlobalV::MY_POOL;
+        const bool own_qpoint = iq_pool == kv->para_k.my_pool;
 
         for (int m_local = 0; m_local < m_count; ++m_local)
         {
@@ -487,7 +500,7 @@ OperatorEXXPW<T, Device>::fill_q_tile_states(const std::vector<const K_Vectors::
                 wk_iq_real = kv->wk[iq_rep_spin];
             }
 #ifdef __MPI
-            if (GlobalV::KPAR > 1)
+            if (kv->para_k.kpar > 1)
             {
             MPI_Bcast(&wg_mqb_real, 1, MPI_DOUBLE, kv->para_k.get_startpro_pool(iq_pool), MPI_COMM_WORLD);
             MPI_Bcast(&wk_iq_real, 1, MPI_DOUBLE, kv->para_k.get_startpro_pool(iq_pool), MPI_COMM_WORLD);
@@ -495,11 +508,12 @@ OperatorEXXPW<T, Device>::fill_q_tile_states(const std::vector<const K_Vectors::
 #endif
             const std::size_t tile_state = static_cast<std::size_t>(q_local) * source_tile_size + m_local;
             q_weights[tile_state] = 0;
-            if (wg_mqb_real < 1e-12)
+            q_weights[tile_state] = static_cast<Real>(
+                exx_energy_k_policy::scaled_full_point_occupation(wg_mqb_real, wk_iq_real, qpoint->weight));
+            if (std::abs(q_weights[tile_state]) < std::numeric_limits<Real>::epsilon())
             {
                 continue;
             }
-            q_weights[tile_state] = static_cast<Real>(wg_mqb_real / wk_iq_real * qpoint->weight);
             weight_sum += std::abs(q_weights[tile_state]);
 
             if (!load_wavefunctions)
@@ -512,7 +526,7 @@ OperatorEXXPW<T, Device>::fill_q_tile_states(const std::vector<const K_Vectors::
             // but the assembled q tile can be consumed by batched GPU apply.
             const bool use_gpu_batch_load = source_op_for_target == nullptr
                                             && !std::is_same<Device, base_device::DEVICE_CPU>::value
-                                            && GlobalV::KPAR == 1 && chunk_size > 1;
+                                            && kv->para_k.kpar == 1 && chunk_size > 1;
             if (own_qpoint && !use_gpu_batch_load)
             {
                 if (source_op_for_target != nullptr)
@@ -525,7 +539,7 @@ OperatorEXXPW<T, Device>::fill_q_tile_states(const std::vector<const K_Vectors::
                 }
             }
 #ifdef __MPI
-            if (GlobalV::KPAR > 1)
+            if (kv->para_k.kpar > 1)
             {
                 if (std::is_same<Device, base_device::DEVICE_CPU>::value)
                 {
@@ -541,7 +555,7 @@ OperatorEXXPW<T, Device>::fill_q_tile_states(const std::vector<const K_Vectors::
 
         if (!load_wavefunctions || source_op_for_target != nullptr || !own_qpoint
             || std::is_same<Device, base_device::DEVICE_CPU>::value
-            || GlobalV::KPAR > 1 || chunk_size <= 1)
+            || kv->para_k.kpar > 1 || chunk_size <= 1)
         {
             continue;
         }
@@ -874,7 +888,7 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
 
     const bool is_cpu = std::is_same<Device, base_device::DEVICE_CPU>::value;
     const bool synchronized_ace_call = ispin_override >= 0;
-    if (!is_cpu && GlobalV::KPAR > 1 && !synchronized_ace_call)
+    if (!is_cpu && kv->para_k.kpar > 1 && !synchronized_ace_call)
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::act_op_qtile",
                                  "direct noACE GPU q-tile PW EXX supports KPAR=1 only; "
@@ -888,6 +902,7 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
     {
         local_kpoint = target_kpoint_override != nullptr ? target_kpoint_override
                                                          : &local_representative_kpoint(this->ik, ispin);
+        reset_exx_potential_cache_for_scope(local_kpoint->full_index);
     }
     const int target_ik = target_ik_override >= 0 ? target_ik_override : this->ik;
     // Mixed band target mode uses the target outer k point, but its exchange
@@ -897,7 +912,7 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
 
     const int nbands_psi = psi.get_nbands();
     const int requested_target_tile_size = std::max(1, std::min(options.band_tile_size, nbands));
-    const int target_tile_size = (!is_cpu && GlobalV::KPAR > 1 && synchronized_ace_call) ? 1
+    const int target_tile_size = (!is_cpu && kv->para_k.kpar > 1 && synchronized_ace_call) ? 1
                                                                                          : requested_target_tile_size;
     const int source_tile_size = is_cpu ? std::max(1, std::min(target_tile_size, nbands_psi))
                                         : std::max(1, std::min(options.band_tile_size, nbands_psi));
@@ -909,7 +924,9 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
                                * real_size;
     const std::size_t q_weight_count = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size);
 
-    ensure_qtile_workspace(target_size, q_size, std::max(chunk_size, static_cast<int>(q_weight_count)));
+    ensure_qtile_workspace(target_size,
+                           q_size,
+                           std::max(static_cast<std::size_t>(chunk_size), q_weight_count));
 
     std::vector<T> target_real_host;
     std::vector<T> h_real_host;
@@ -1025,10 +1042,8 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
                 const int n_iband = n_start + n_local;
                 T* h_psi_nk = tmhpsi + static_cast<std::size_t>(n_iband) * nbasis;
                 const Real hybrid_alpha = options.hybrid_alpha;
-                exx_real_to_wave_recip(h_real + static_cast<std::size_t>(n_local) * real_size,
-                                       h_psi_nk,
-                                       target_ik,
-                                       hybrid_alpha);
+                const T* h_real_n = h_real + static_cast<std::size_t>(n_local) * real_size;
+                exx_real_to_wave_recip(h_real_n, h_psi_nk, target_ik, hybrid_alpha);
             }
             ModuleBase::timer::end("OperatorEXXPW", "target_tile_out");
         }
@@ -1198,12 +1213,6 @@ typename OperatorEXXPW<T, Device>::Real*
 OperatorEXXPW<T, Device>::get_exx_potential_cached(const K_Vectors::ExxFullKPoint& kpoint,
                                                    const K_Vectors::ExxFullQPoint& qpoint) const
 {
-    if (cached_potential_ik != this->ik)
-    {
-        clear_exx_potential_cache();
-        cached_potential_ik = this->ik;
-    }
-
     const auto cache_key = std::make_pair(kpoint.full_index, qpoint.full_index);
     auto cache_it = pot_cache.find(cache_key);
     if (cache_it != pot_cache.end())
@@ -1237,6 +1246,18 @@ void OperatorEXXPW<T, Device>::clear_exx_potential_cache() const
         delmem_real_op()(entry.second);
     }
     pot_cache.clear();
+    cached_potential_scope = std::numeric_limits<int>::min();
+}
+
+template <typename T, typename Device>
+void OperatorEXXPW<T, Device>::reset_exx_potential_cache_for_scope(int cache_scope) const
+{
+    if (cached_potential_scope == cache_scope)
+    {
+        return;
+    }
+    clear_exx_potential_cache();
+    cached_potential_scope = cache_scope;
 }
 
 template <typename T, typename Device>
@@ -1372,7 +1393,7 @@ const K_Vectors::ExxFullKPoint& OperatorEXXPW<T, Device>::local_representative_k
 
     for (const auto& kpoint: kv->exx_full_k_map)
     {
-        if (!kpoint.active || kpoint.rep_pool != GlobalV::MY_POOL || kpoint.rep_local_index != ik_local_no_spin)
+        if (!kpoint.active || kpoint.rep_pool != kv->para_k.my_pool || kpoint.rep_local_index != ik_local_no_spin)
         {
             continue;
         }
@@ -1390,7 +1411,7 @@ const K_Vectors::ExxFullKPoint& OperatorEXXPW<T, Device>::local_representative_k
     point.full_index = ik_global_no_spin;
     point.rep_index = point.full_index;
     point.rep_local_index = ik_local_no_spin;
-    point.rep_pool = GlobalV::MY_POOL;
+    point.rep_pool = kv->para_k.my_pool;
     point.symop = 0;
     point.time_reversal = false;
     point.conjugate_only = false;
@@ -1546,37 +1567,13 @@ void OperatorEXXPW<T, Device>::load_full_point_real_uncached(const K_Vectors::Ex
     else
     {
         const T* psi_point_exx = wave_recip_to_exx_recip(psi_point, point_rep_spin, psi_mq_exx_recip);
-        if (std::is_same<Device, base_device::DEVICE_CPU>::value)
-        {
-            wfcpw_exx->recip_to_real(ctx, psi_point_exx, out, point_rep_spin, false, Real(1.0));
-            rotate_exx_realspace_symmetry_cpu(wfcpw_exx, point, point_rep_spin, out, out);
-        }
-        else
-        {
-            const auto& remap = point_spatial_remap(point, point_rep_spin);
-            if (point.time_reversal)
-            {
-                wfcpw_exx->recip2real_remapped_conjugate(psi_point_exx,
-                                                         out,
-                                                         static_cast<int>(remap.rep_igl.size()),
-                                                         remap.rep_igl.data(),
-                                                         remap.fft_isz.data(),
-                                                         remap.phase.data(),
-                                                         false,
-                                                         Real(1.0));
-            }
-            else
-            {
-                wfcpw_exx->recip2real_remapped(psi_point_exx,
-                                               out,
-                                               static_cast<int>(remap.rep_igl.size()),
-                                               remap.rep_igl.data(),
-                                               remap.fft_isz.data(),
-                                               remap.phase.data(),
-                                               false,
-                                               Real(1.0));
-            }
-        }
+        wfcpw_exx->recip_to_real(ctx, psi_point_exx, psi_mq_real, point_rep_spin, false, Real(1.0));
+        exx_rotate_realspace_op<T, Device>()(wfcpw_exx,
+                                             point,
+                                             point_rep_spin,
+                                             psi_mq_real,
+                                             out,
+                                             1);
     }
 }
 
@@ -1597,9 +1594,7 @@ void OperatorEXXPW<T, Device>::load_full_point_real_batch(const K_Vectors::ExxFu
     }
     ensure_full_point_supported(point);
     const int point_rep_spin = rep_spin_index(point, ispin);
-    const bool direct_source = consecutive_integers(band_indices, batch_count) && psi.get_k_first();
-    const T* in_batch = nullptr;
-    if (direct_source && (point.identity || point.conjugate_only))
+    if (point.identity || point.conjugate_only)
     {
         for (int ib = 0; ib < batch_count; ++ib)
         {
@@ -1621,48 +1616,26 @@ void OperatorEXXPW<T, Device>::load_full_point_real_batch(const K_Vectors::ExxFu
         return;
     }
 
-    const auto& remap = point_spatial_remap(point, point_rep_spin);
-
+    for (int ib = 0; ib < batch_count; ++ib)
     {
-        for (int ib = 0; ib < batch_count; ++ib)
-        {
-            const T* psi_point = get_pw(band_indices[ib], point_rep_spin);
-            wave_recip_to_exx_recip(psi_point,
-                                    point_rep_spin,
-                                    psi_mq_batch_recip + static_cast<std::size_t>(ib) * wfcpw_exx->npwk_max);
-        }
-        in_batch = psi_mq_batch_recip;
+        const T* psi_point = get_pw(band_indices[ib], point_rep_spin);
+        wave_recip_to_exx_recip(psi_point,
+                                point_rep_spin,
+                                psi_mq_batch_recip + static_cast<std::size_t>(ib) * wfcpw_exx->npwk_max);
     }
-
-    ensure_remap_device_cache(remap);
-    const T* phase_device = nullptr;
-#if defined(__CUDA)
-    if (!std::is_same<Device, base_device::DEVICE_CPU>::value)
-    {
-        if (std::is_same<Real, float>::value)
-        {
-            phase_device = reinterpret_cast<const T*>(remap.phase_float_device);
-        }
-        else
-        {
-            phase_device = reinterpret_cast<const T*>(remap.phase_double_device);
-        }
-    }
-#endif
-    wfcpw_exx->recip2real_remapped_batch<Real, Device>(ctx,
-                                                       in_batch,
-                                                       out,
-                                                       static_cast<int>(remap.rep_igl.size()),
-                                                       remap.rep_igl_device == nullptr ? remap.rep_igl.data()
-                                                                                       : remap.rep_igl_device,
-                                                       remap.fft_isz.data(),
-                                                       remap.fft_ixyz_device,
-                                                       remap.phase.data(),
-                                                       reinterpret_cast<const std::complex<Real>*>(phase_device),
-                                                       batch_count,
-                                                       point.time_reversal,
-                                                       false,
-                                                       Real(1.0));
+    wfcpw_exx->recip_to_real_batch<Real, Device>(ctx,
+                                                 psi_mq_batch_recip,
+                                                 psi_mq_batch_real,
+                                                 point_rep_spin,
+                                                 batch_count,
+                                                 false,
+                                                 Real(1.0));
+    exx_rotate_realspace_op<T, Device>()(wfcpw_exx,
+                                         point,
+                                         point_rep_spin,
+                                         psi_mq_batch_real,
+                                         out,
+                                         batch_count);
 }
 
 template <typename T, typename Device>
@@ -1881,12 +1854,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
     }
     if (batch_fft_size > 0)
     {
-        resmem_complex_op()(psi_mq_batch_real, batch_fft_size * wfcpw_exx->nrxx);
-        resmem_complex_op()(psi_mq_batch_recip, batch_fft_size * wfcpw_exx->npwk_max);
-        resmem_complex_op()(density_real_batch, batch_fft_size * rhopw_dev->nrxx);
-        resmem_complex_op()(density_recip_batch, batch_fft_size * rhopw_dev->npw);
-        resmem_real_op()(density_norm_batch, batch_fft_size * rhopw_dev->npw);
-        resmem_real_op()(energy_batch, batch_fft_size);
+        allocate_batch_workspace(batch_fft_size);
     }
 }
 
@@ -1901,12 +1869,18 @@ double OperatorEXXPW<T, Device>::cal_exx_energy(psi::Psi<T, Device> *psi_) const
 }
 
 template <typename T, typename Device>
+double OperatorEXXPW<T, Device>::cal_exx_energy_exact(psi::Psi<T, Device>* psi_) const
+{
+    return cal_exx_energy_op_qtile(psi_);
+}
+
+template <typename T, typename Device>
 double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *ppsi_) const
 {
     ModuleBase::timer::start("OperatorEXXPW", "cal_exx_energy_qtile");
 
     const bool is_cpu = std::is_same<Device, base_device::DEVICE_CPU>::value;
-    if (!is_cpu && GlobalV::KPAR > 1)
+    if (!is_cpu && kv->para_k.kpar > 1)
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
                                  "GPU q-tile PW EXX energy supports KPAR=1 only in this milestone");
@@ -1937,14 +1911,15 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     }
 
     double Eexx_ik_real = 0.0;
+    const Real k_spin_degeneracy = options.nspin == 1 ? Real(2.0) : Real(1.0);
     const auto k_points = exx_energy_k_policy::choose_local_representative_k_points(*kv,
                                                                                     wfcpw->nks,
                                                                                     options.nspin,
-                                                                                    GlobalV::MY_POOL);
+                                                                                    kv->para_k.my_pool);
     if (static_cast<int>(k_points.size()) != wfcpw->nks)
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
-                                 "incomplete local representative k-point map for PW EXX energy");
+                                 "incomplete local representative k-point map for pair-map PW EXX energy");
     }
     auto q_points = get_q_points(0);
     const int nbands_psi = psi.get_nbands();
@@ -1956,7 +1931,9 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
                                * real_size;
     const std::size_t q_weight_count = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size);
 
-    ensure_qtile_workspace(0, q_size, std::max(chunk_size, static_cast<int>(q_weight_count)));
+    ensure_qtile_workspace(0,
+                           q_size,
+                           std::max(static_cast<std::size_t>(chunk_size), q_weight_count));
 
     std::vector<T> q_real;
     if (is_cpu)
@@ -1964,22 +1941,37 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
         q_real.resize(q_size);
     }
     std::vector<Real> q_weights(q_weight_count, 0);
+    std::vector<Real> pair_q_weights(q_weight_count, 0);
+    std::vector<char> pair_q_active(static_cast<std::size_t>(q_tile_size), 0);
     std::vector<Real> q_weight_scaled_host;
     if (!is_cpu)
     {
         q_weight_scaled_host.resize(q_weight_count);
     }
     T* q_real_data = is_cpu ? q_real.data() : qtile_q_real;
+    clear_exx_potential_cache();
 
     for (const auto& energy_kpoint: k_points)
     {
-        const int ik_rep_spin = energy_kpoint.ik_rep_spin;
         const int ispin = energy_kpoint.ispin;
         const auto& kpoint = energy_kpoint.kpoint;
         ensure_full_point_supported(kpoint);
+        const auto star_k_points = exx_energy_k_policy::choose_star_member_k_points(*kv, energy_kpoint);
+        if (star_k_points.empty())
+        {
+            ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                     "empty pair-map star for PW EXX energy");
+        }
+        std::vector<std::vector<exx_energy_k_policy::ExxQkPair>> star_qk_maps;
+        star_qk_maps.reserve(star_k_points.size());
+        for (const auto& pair_energy_kpoint: star_k_points)
+        {
+            star_qk_maps.push_back(exx_energy_k_policy::build_qk_pair_map(pair_energy_kpoint.kpoint, q_points));
+        }
         for (int q_start = 0; q_start < static_cast<int>(q_points.size()); q_start += q_tile_size)
         {
             const int q_count = std::min(q_tile_size, static_cast<int>(q_points.size()) - q_start);
+            reset_exx_potential_cache_for_scope(exx_energy_k_policy::representative_cache_scope(energy_kpoint));
             for (int m_start = 0; m_start < nbands_psi; m_start += source_tile_size)
             {
                 const int m_count = std::min(source_tile_size, nbands_psi - m_start);
@@ -2007,46 +1999,102 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
                     continue;
                 }
 
-                for (int n_iband = 0; n_iband < psi.get_nbands(); n_iband++)
+                for (std::size_t pair_index = 0; pair_index < star_k_points.size(); ++pair_index)
                 {
-                    const double wg_ikb_real = (*wg)(ik_rep_spin, n_iband);
-                    const bool active_k = wg_ikb_real >= 1e-12;
-                    if (!active_k)
+                    const auto& pair_energy_kpoint = star_k_points[pair_index];
+                    const auto& pair_kpoint = pair_energy_kpoint.kpoint;
+                    const int pair_ik_rep_spin = pair_energy_kpoint.ik_rep_spin;
+                    if (pair_kpoint.rep_pool != kv->para_k.my_pool)
+                    {
+                        ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                                 "local EXX energy star contains a nonlocal representative");
+                    }
+                    const auto& qk_map = star_qk_maps[pair_index];
+                    std::fill(pair_q_weights.begin(), pair_q_weights.end(), Real(0));
+                    std::fill(pair_q_active.begin(), pair_q_active.end(), 0);
+                    Real pair_tile_weight_sum = 0;
+                    for (const auto& qk_pair: qk_map)
+                    {
+                        if (qk_pair.q_index < q_start || qk_pair.q_index >= q_start + q_count)
+                        {
+                            continue;
+                        }
+                        const int q_local = qk_pair.q_index - q_start;
+                        for (int m_local = 0; m_local < m_count; ++m_local)
+                        {
+                            const std::size_t weight_index = static_cast<std::size_t>(q_local) * source_tile_size
+                                                             + static_cast<std::size_t>(m_local);
+                            pair_q_weights[weight_index]
+                                = static_cast<Real>(qk_pair.multiplier) * q_weights[weight_index];
+                            pair_tile_weight_sum += std::abs(pair_q_weights[weight_index]);
+                            if (std::abs(pair_q_weights[weight_index]) >= std::numeric_limits<Real>::epsilon())
+                            {
+                                pair_q_active[q_local] = 1;
+                            }
+                        }
+                    }
+                    if (pair_tile_weight_sum < std::numeric_limits<Real>::epsilon())
                     {
                         continue;
                     }
-                    // The outer full-k star weights are folded into the reduced-k occupation.
-                    // Keep the q side explicit through exx_full_q_map.
-                    const Real k_weight = static_cast<Real>(wg_ikb_real);
-                    load_full_point_real(kpoint, ispin, n_iband, psi_nk_real);
-
-                    const Real* q_weights_device = nullptr;
-                    if (!is_cpu)
+                    for (int n_iband = 0; n_iband < psi.get_nbands(); n_iband++)
                     {
-                        for (std::size_t iw = 0; iw < q_weight_count; ++iw)
+                        double wg_ikb_real = 0.0;
+                        double wk_ik_real = 0.0;
+                        wg_ikb_real = (*wg)(pair_ik_rep_spin, n_iband);
+                        wk_ik_real = kv->wk[pair_ik_rep_spin];
+                        const Real k_weight = static_cast<Real>(
+                            exx_energy_k_policy::scaled_full_point_occupation(wg_ikb_real,
+                                                                              wk_ik_real,
+                                                                              pair_kpoint.weight)
+                            * k_spin_degeneracy);
+                        if (std::abs(k_weight) < std::numeric_limits<Real>::epsilon())
                         {
-                            q_weight_scaled_host[iw] = k_weight * q_weights[iw];
+                            continue;
                         }
-                        syncmem_real_c2d_op()(weight_real_device, q_weight_scaled_host.data(), q_weight_count);
-                        q_weights_device = weight_real_device;
-                    }
+                        load_full_point_real(pair_kpoint, ispin, n_iband, psi_nk_real);
 
-                    for (int q_local = 0; q_local < q_count; ++q_local)
-                    {
-                        Eexx_ik_real += process_qtile_energy_tile(kpoint,
-                                                                  *q_points[q_start + q_local],
-                                                                  psi_nk_real,
-                                                                  q_real_data,
-                                                                  q_weights.data(),
-                                                                  q_weights_device,
-                                                                  k_weight,
-                                                                  q_local,
-                                                                  m_count,
-                                                                  source_tile_size,
-                                                                  chunk_size);
+                        const Real* q_weights_device = nullptr;
+                        if (!is_cpu)
+                        {
+                            for (std::size_t iw = 0; iw < q_weight_count; ++iw)
+                            {
+                                q_weight_scaled_host[iw] = k_weight * pair_q_weights[iw];
+                            }
+                            syncmem_real_c2d_op()(weight_real_device, q_weight_scaled_host.data(), q_weight_count);
+                            q_weights_device = weight_real_device;
+                        }
+
+                        for (int q_local = 0; q_local < q_count; ++q_local)
+                        {
+                            if (!pair_q_active[q_local])
+                            {
+                                continue;
+                            }
+                            Eexx_ik_real += process_qtile_energy_tile(pair_kpoint,
+                                                                      *q_points[q_start + q_local],
+                                                                      psi_nk_real,
+                                                                      q_real_data,
+                                                                      pair_q_weights.data(),
+                                                                      q_weights_device,
+                                                                      k_weight,
+                                                                      q_local,
+                                                                      m_count,
+                                                                      source_tile_size,
+                                                                      chunk_size);
+                        }
                     }
                 }
             }
+            const std::size_t cache_limit = exx_energy_k_policy::direct_potential_cache_entry_limit(
+                star_k_points.size(),
+                static_cast<std::size_t>(q_count));
+            if (pot_cache.size() > cache_limit)
+            {
+                ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                         "PW EXX direct potential cache exceeded its q-tile bound");
+            }
+            clear_exx_potential_cache();
         }
     }
 

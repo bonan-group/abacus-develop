@@ -100,6 +100,135 @@ TEST(ExxEnergyKPolicyTest, SkipsNonlocalInactiveAndNonrepresentativeFullPoints)
     EXPECT_EQ(points[1].kpoint.rep_local_index, 1);
 }
 
+TEST(ExxEnergyKPolicyTest, ChoosesEveryActiveFullKPointForDefensiveEnergyLoop)
+{
+    K_Vectors kv;
+    kv.set_nks(4);
+    kv.para_k.nks_pool = {2};
+    kv.exx_full_k_map = {make_exx_kpoint(0, 0, 0, 0),
+                         make_exx_kpoint(1, 0, 0, 0),
+                         make_exx_kpoint(2, 2, 1, 0, false),
+                         make_exx_kpoint(3, 2, 1, 0)};
+
+    const std::vector<hamilt::ExxLocalEnergyKPoint> points
+        = hamilt::exx_energy_k_policy::choose_active_full_k_points(kv, 2);
+
+    ASSERT_EQ(points.size(), 6);
+    EXPECT_EQ(points[0].ik_rep_spin, 0);
+    EXPECT_EQ(points[0].ispin, 0);
+    EXPECT_EQ(points[0].kpoint.full_index, 0);
+    EXPECT_EQ(points[1].ik_rep_spin, 0);
+    EXPECT_EQ(points[1].ispin, 0);
+    EXPECT_EQ(points[1].kpoint.full_index, 1);
+    EXPECT_EQ(points[2].ik_rep_spin, 1);
+    EXPECT_EQ(points[2].ispin, 0);
+    EXPECT_EQ(points[2].kpoint.full_index, 3);
+    EXPECT_EQ(points[3].ik_rep_spin, 2);
+    EXPECT_EQ(points[3].ispin, 1);
+    EXPECT_EQ(points[3].kpoint.full_index, 0);
+    EXPECT_EQ(points[5].ik_rep_spin, 3);
+    EXPECT_EQ(points[5].ispin, 1);
+    EXPECT_EQ(points[5].kpoint.full_index, 3);
+}
+
+TEST(ExxEnergyKPolicyTest, ExpandsReducedRepresentativeToFullKStar)
+{
+    K_Vectors kv;
+    kv.exx_full_k_map = {make_exx_kpoint(0, 0, 0, 0),
+                         make_exx_kpoint(1, 0, 0, 0),
+                         make_exx_kpoint(2, 0, 0, 0, false),
+                         make_exx_kpoint(3, 3, 1, 0)};
+
+    const hamilt::ExxLocalEnergyKPoint representative{0, 0, kv.exx_full_k_map[0]};
+    const std::vector<hamilt::ExxLocalEnergyKPoint> star
+        = hamilt::exx_energy_k_policy::choose_star_member_k_points(kv, representative);
+
+    ASSERT_EQ(star.size(), 2);
+    EXPECT_EQ(star[0].ik_rep_spin, 0);
+    EXPECT_EQ(star[0].kpoint.full_index, 0);
+    EXPECT_EQ(star[1].ik_rep_spin, 0);
+    EXPECT_EQ(star[1].kpoint.full_index, 1);
+}
+
+TEST(ExxEnergyKPolicyTest, BuildsOrderedQkPairMapForReducedKEnergySum)
+{
+    K_Vectors::ExxFullQPoint q0 = make_exx_kpoint(0, 0, 0, 0);
+    K_Vectors::ExxFullQPoint q1 = make_exx_kpoint(1, 0, 0, 0);
+    K_Vectors::ExxFullQPoint q2 = make_exx_kpoint(2, 1, 1, 0);
+    K_Vectors::ExxFullQPoint q3 = make_exx_kpoint(3, 1, 1, 0);
+    q3.active = false;
+    const std::vector<const K_Vectors::ExxFullQPoint*> q_points = {&q0, &q1, &q2, &q3};
+
+    const K_Vectors::ExxFullKPoint kpoint = make_exx_kpoint(1, 0, 0, 0);
+    const std::vector<hamilt::exx_energy_k_policy::ExxQkPair> qk_map
+        = hamilt::exx_energy_k_policy::build_qk_pair_map(kpoint, q_points);
+
+    ASSERT_EQ(qk_map.size(), 3);
+    EXPECT_EQ(qk_map[0].qpoint->full_index, 0);
+    EXPECT_EQ(qk_map[0].multiplier, 1);
+    EXPECT_EQ(qk_map[1].qpoint->full_index, 1);
+    EXPECT_EQ(qk_map[1].multiplier, 1);
+    EXPECT_EQ(qk_map[2].qpoint->full_index, 2);
+    EXPECT_EQ(qk_map[2].multiplier, 1);
+}
+
+TEST(ExxEnergyKPolicyTest, UsesRepresentativeCacheScopeForFullKStar)
+{
+    K_Vectors kv;
+    kv.exx_full_k_map = {make_exx_kpoint(0, 0, 0, 0),
+                         make_exx_kpoint(1, 0, 0, 0),
+                         make_exx_kpoint(2, 0, 0, 0)};
+
+    const hamilt::ExxLocalEnergyKPoint representative{0, 0, kv.exx_full_k_map[0]};
+    const std::vector<hamilt::ExxLocalEnergyKPoint> star
+        = hamilt::exx_energy_k_policy::choose_star_member_k_points(kv, representative);
+
+    ASSERT_EQ(star.size(), 3);
+    const int cache_scope = hamilt::exx_energy_k_policy::representative_cache_scope(representative);
+    EXPECT_EQ(cache_scope, 0);
+    for (const auto& member: star)
+    {
+        EXPECT_EQ(hamilt::exx_energy_k_policy::representative_cache_scope(member), cache_scope);
+    }
+}
+
+TEST(ExxEnergyKPolicyTest, ZeroFullPointWeightSkipsOccupationScaling)
+{
+    EXPECT_DOUBLE_EQ(hamilt::exx_energy_k_policy::scaled_full_point_occupation(0.75, 0.0, 0.0), 0.0);
+    EXPECT_DOUBLE_EQ(hamilt::exx_energy_k_policy::scaled_full_point_occupation(0.0, 0.0, 0.25), 0.0);
+    EXPECT_NEAR(hamilt::exx_energy_k_policy::scaled_full_point_occupation(0.3, 0.6, 0.2), 0.1, 1e-15);
+}
+
+TEST(ExxEnergyKPolicyTest, DirectPotentialCacheBoundUsesOnlyCurrentQTile)
+{
+    EXPECT_EQ(hamilt::exx_energy_k_policy::direct_potential_cache_entry_limit(8, 4), 32);
+    EXPECT_EQ(hamilt::exx_energy_k_policy::direct_potential_cache_entry_limit(1, 7), 7);
+    EXPECT_EQ(hamilt::exx_energy_k_policy::direct_potential_cache_entry_limit(0, 7), 0);
+}
+
+TEST(ExxQStateSizeTest, CheckedProductRejectsSizeOverflow)
+{
+    std::size_t result = 0;
+    EXPECT_TRUE(hamilt::checked_exx_size_product(128, 1024, result));
+    EXPECT_EQ(result, 131072);
+    EXPECT_FALSE(hamilt::checked_exx_size_product(std::numeric_limits<std::size_t>::max(), 2, result));
+    EXPECT_TRUE(hamilt::checked_exx_size_product(0, std::numeric_limits<std::size_t>::max(), result));
+    EXPECT_EQ(result, 0);
+}
+
+TEST(ExxEnergyKPolicyTest, DetectsReducedFullKMesh)
+{
+    K_Vectors full_kv;
+    full_kv.set_nkstot(4);
+    full_kv.set_nkstot_full(4);
+    EXPECT_FALSE(hamilt::exx_energy_k_policy::uses_reduced_k_mesh(full_kv));
+
+    K_Vectors reduced_kv;
+    reduced_kv.set_nkstot(2);
+    reduced_kv.set_nkstot_full(4);
+    EXPECT_TRUE(hamilt::exx_energy_k_policy::uses_reduced_k_mesh(reduced_kv));
+}
+
 TEST(RadialProjectionTest, BuildBackwardMapTest)
 {
     const std::vector<std::vector<int>> it2iproj = {

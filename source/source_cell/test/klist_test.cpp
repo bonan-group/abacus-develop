@@ -688,6 +688,39 @@ TEST_F(KlistTest, FinalizeExxFullQMapNormalizesSpinPolarizedWeights)
     EXPECT_NEAR(kv->exx_full_k_map[2].weight, 0.8, 1e-12);
 }
 
+TEST_F(KlistTest, NormalizeExxFullMapDistributesFallbackWeightAcrossActiveStar)
+{
+    kv->nspin = 1;
+    kv->set_nkstot(1);
+    kv->set_nkstot_full(3);
+    kv->set_nks(1);
+    kv->wk = {2.0};
+
+    K_Vectors::ExxFullPoint point0;
+    point0.full_index = 0;
+    point0.rep_index = 0;
+    point0.rep_local_index = 0;
+    point0.weight = 0.0;
+
+    K_Vectors::ExxFullPoint point1 = point0;
+    point1.full_index = 1;
+
+    K_Vectors::ExxFullPoint inactive = point0;
+    inactive.full_index = 2;
+    inactive.active = false;
+
+    kv->exx_full_q_map = {point0, point1, inactive};
+    kv->exx_full_k_map = kv->exx_full_q_map;
+    kv->normalize_exx_full_q_map_weights();
+
+    EXPECT_NEAR(kv->exx_full_q_map[0].weight, 0.5, 1e-12);
+    EXPECT_NEAR(kv->exx_full_q_map[1].weight, 0.5, 1e-12);
+    EXPECT_DOUBLE_EQ(kv->exx_full_q_map[2].weight, 0.0);
+    EXPECT_NEAR(kv->exx_full_k_map[0].weight, 0.5, 1e-12);
+    EXPECT_NEAR(kv->exx_full_k_map[1].weight, 0.5, 1e-12);
+    EXPECT_DOUBLE_EQ(kv->exx_full_k_map[2].weight, 0.0);
+}
+
 TEST_F(KlistTest, ExxRepSpinIndexUsesPoolLocalSpinBlocks)
 {
     kv->nspin = 2;

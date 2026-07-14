@@ -893,7 +893,11 @@ void kvec_ibz_kpoint(K_Vectors& kv,
         point.rep_pool = 0;
         point.symop = isym;
         point.time_reversal = kgmatrix_time_reversal[isym];
-        point.conjugate_only = point.time_reversal && matrix_equal(kgmatrix[isym], inv);
+        const ModuleBase::Vector3<double> raw_rep_kvec_d = kv.kvec_d[i] * kgmatrix[isym];
+        const bool no_reciprocal_shift = symm.equal(raw_rep_kvec_d.x, kvec_d_ibz[ibz_index].x)
+                                         && symm.equal(raw_rep_kvec_d.y, kvec_d_ibz[ibz_index].y)
+                                         && symm.equal(raw_rep_kvec_d.z, kvec_d_ibz[ibz_index].z);
+        point.conjugate_only = point.time_reversal && matrix_equal(kgmatrix[isym], inv) && no_reciprocal_shift;
         point.identity = (i == rep_index && isym == 0 && !point.time_reversal);
         point.active = true;
         point.weight = full_k_weights[i];

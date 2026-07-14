@@ -14,6 +14,7 @@
 #include "source_base/module_container/ATen/kernels/lapack.h"
 
 #include <algorithm>
+#include <cmath>
 #include <complex>
 #include <limits>
 #include <map>
@@ -64,6 +65,72 @@ inline int spin_channel_count(int nspin)
     return nspin == 2 ? 2 : 1;
 }
 
+inline bool uses_reduced_k_mesh(const K_Vectors& kv)
+{
+    return kv.get_nkstot_full() > 0 && kv.get_nkstot() > 0 && kv.get_nkstot_full() > kv.get_nkstot();
+}
+
+struct ExxQkPair
+{
+    int q_index = -1;
+    const K_Vectors::ExxFullQPoint* qpoint = nullptr;
+    int multiplier = 0;
+};
+
+inline int representative_spin_index(const K_Vectors& kv, const K_Vectors::ExxFullKPoint& point, int ispin, int nspin)
+{
+    if (point.rep_pool < 0)
+    {
+        ModuleBase::WARNING_QUIT("exx_energy_k_policy::representative_spin_index",
+                                 "negative EXX representative pool");
+    }
+    if (point.rep_local_index < 0)
+    {
+        ModuleBase::WARNING_QUIT("exx_energy_k_policy::representative_spin_index",
+                                 "negative EXX representative local index");
+    }
+
+    int nk_local_no_spin = kv.get_nks();
+    if (nspin == 2)
+    {
+        if (point.rep_pool >= static_cast<int>(kv.para_k.nks_pool.size()))
+        {
+            ModuleBase::WARNING_QUIT("exx_energy_k_policy::representative_spin_index",
+                                     "EXX representative pool is out of range");
+        }
+        nk_local_no_spin = kv.para_k.nks_pool[point.rep_pool];
+    }
+    if (ispin < 0 || ispin >= spin_channel_count(nspin))
+    {
+        ModuleBase::WARNING_QUIT("exx_energy_k_policy::representative_spin_index", "invalid EXX spin index");
+    }
+    return point.rep_local_index + ispin * nk_local_no_spin;
+}
+
+inline std::vector<ExxLocalEnergyKPoint> choose_active_full_k_points(const K_Vectors& kv, int nspin)
+{
+    const int nspin_fac = spin_channel_count(nspin);
+    std::vector<ExxLocalEnergyKPoint> points;
+    points.reserve(static_cast<std::size_t>(nspin_fac) * kv.exx_full_k_map.size());
+
+    for (int ispin = 0; ispin < nspin_fac; ++ispin)
+    {
+        for (const auto& kpoint: kv.exx_full_k_map)
+        {
+            if (!kpoint.active)
+            {
+                continue;
+            }
+            ExxLocalEnergyKPoint point;
+            point.ik_rep_spin = representative_spin_index(kv, kpoint, ispin, nspin);
+            point.ispin = ispin;
+            point.kpoint = kpoint;
+            points.push_back(point);
+        }
+    }
+    return points;
+}
+
 inline std::vector<ExxLocalEnergyKPoint> choose_local_representative_k_points(const K_Vectors& kv,
                                                                               int local_nks,
                                                                               int nspin,
@@ -98,6 +165,80 @@ inline std::vector<ExxLocalEnergyKPoint> choose_local_representative_k_points(co
         }
     }
     return points;
+}
+
+inline std::vector<ExxLocalEnergyKPoint> choose_star_member_k_points(const K_Vectors& kv,
+                                                                     const ExxLocalEnergyKPoint& representative)
+{
+    std::vector<ExxLocalEnergyKPoint> points;
+    for (const auto& kpoint: kv.exx_full_k_map)
+    {
+        if (!kpoint.active || kpoint.rep_pool != representative.kpoint.rep_pool
+            || kpoint.rep_local_index != representative.kpoint.rep_local_index)
+        {
+            continue;
+        }
+        ExxLocalEnergyKPoint point;
+        point.ik_rep_spin = representative.ik_rep_spin;
+        point.ispin = representative.ispin;
+        point.kpoint = kpoint;
+        points.push_back(point);
+    }
+    return points;
+}
+
+inline int representative_cache_scope(const ExxLocalEnergyKPoint& point)
+{
+    return point.kpoint.rep_index;
+}
+
+inline double scaled_full_point_occupation(double occupied_weight,
+                                           double representative_weight,
+                                           double full_point_weight)
+{
+    if (occupied_weight < 1.0e-12 || std::abs(full_point_weight) < 1.0e-14)
+    {
+        return 0.0;
+    }
+    if (std::abs(representative_weight) < 1.0e-14)
+    {
+        ModuleBase::WARNING_QUIT("exx_energy_k_policy::scaled_full_point_occupation",
+                                 "nonzero EXX full-point occupation has zero representative weight");
+    }
+    return occupied_weight / representative_weight * full_point_weight;
+}
+
+inline std::size_t direct_potential_cache_entry_limit(std::size_t star_size, std::size_t q_tile_count)
+{
+    std::size_t result = 0;
+    if (!checked_exx_size_product(star_size, q_tile_count, result))
+    {
+        ModuleBase::WARNING_QUIT("exx_energy_k_policy::direct_potential_cache_entry_limit",
+                                 "PW EXX direct potential-cache size overflows size_t");
+    }
+    return result;
+}
+
+inline std::vector<ExxQkPair> build_qk_pair_map(const K_Vectors::ExxFullKPoint& kpoint,
+                                                const std::vector<const K_Vectors::ExxFullQPoint*>& q_points)
+{
+    (void)kpoint;
+    std::vector<ExxQkPair> qk_map;
+    qk_map.reserve(q_points.size());
+    for (int iq = 0; iq < static_cast<int>(q_points.size()); ++iq)
+    {
+        const K_Vectors::ExxFullQPoint* qpoint = q_points[iq];
+        if (qpoint == nullptr || !qpoint->active)
+        {
+            continue;
+        }
+        ExxQkPair pair;
+        pair.q_index = iq;
+        pair.qpoint = qpoint;
+        pair.multiplier = 1;
+        qk_map.push_back(pair);
+    }
+    return qk_map;
 }
 } // namespace exx_energy_k_policy
 
@@ -135,6 +276,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                      const bool is_first_node = false) const override;
 
     double cal_exx_energy(psi::Psi<T, Device> *psi_) const;
+
+    double cal_exx_energy_exact(psi::Psi<T, Device> *psi_) const;
 
     void set_psi(psi::Psi<T, Device> &psi_in) const;
 
@@ -187,8 +330,10 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     Real* get_exx_potential_cached(const K_Vectors::ExxFullKPoint& kpoint,
                                    const K_Vectors::ExxFullQPoint& qpoint) const;
     void clear_exx_potential_cache() const;
+    void reset_exx_potential_cache_for_scope(int cache_scope) const;
     int resolve_qtile_chunk_size() const;
-    void ensure_qtile_workspace(std::size_t target_size, std::size_t q_size, int batch_limit) const;
+    void ensure_qtile_workspace(std::size_t target_size, std::size_t q_size, std::size_t batch_limit) const;
+    void allocate_batch_workspace(int batch_fft_size);
     void fill_target_tile(const T* tmpsi_in,
                           int nbasis,
                           int n_start,
@@ -351,7 +496,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     mutable Real* weight_real_device = nullptr;
     mutable std::size_t weight_real_capacity = 0;
     mutable std::map<std::pair<int, int>, Real*> pot_cache;
-    mutable int cached_potential_ik = std::numeric_limits<int>::min();
+    mutable int cached_potential_scope = std::numeric_limits<int>::min();
 
     // Lin Lin's ACE memory, 10.1021/acs.jctc.6b00092
     mutable T* h_psi_ace = nullptr; // H \Psi, W in the paper

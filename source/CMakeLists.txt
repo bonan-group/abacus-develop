@@ -119,6 +119,7 @@ if(USE_ROCM)
     source_pw/module_pwdft/kernels/rocm/stress_op.hip.cu
     source_pw/module_pwdft/kernels/rocm/wf_op.hip.cu
     source_pw/module_pwdft/kernels/rocm/vnl_op.hip.cu
+    source_pw/module_pwdft/kernels/rocm/exx_q_state_op.hip.cu
     source_base/kernels/rocm/math_kernel_op.hip.cu
     source_base/kernels/rocm/math_kernel_op_vec.hip.cu
     source_base/kernels/rocm/math_ylm_op.hip.cu

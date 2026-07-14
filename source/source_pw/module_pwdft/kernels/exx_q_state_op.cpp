@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <complex>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <vector>
 #include <unordered_map>
@@ -136,8 +137,8 @@ int global_real_index_from_direct(const ModulePW::PW_Basis_K* wfcpw, const Modul
     return global_real_index_from_grid(wfcpw, ix, iy, iz);
 }
 
-void validate_exx_realspace_symmetry_grid(const ModulePW::PW_Basis_K* wfcpw,
-                                          const K_Vectors::ExxFullPoint& full_point)
+bool is_exx_realspace_symmetry_grid_compatible_impl(const ModulePW::PW_Basis_K* wfcpw,
+                                                    const K_Vectors::ExxFullPoint& full_point)
 {
     auto is_integral = [](double value) {
         return std::abs(value - std::round(value)) < 1.0e-8;
@@ -150,17 +151,16 @@ void validate_exx_realspace_symmetry_grid(const ModulePW::PW_Basis_K* wfcpw,
         || !is_integral(full_point.gmatrix.e13 * wfcpw->nz / wfcpw->nx)
         || !is_integral(full_point.gmatrix.e23 * wfcpw->nz / wfcpw->ny))
     {
-        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_cpu",
-                                 "PW EXX real-space symmetry rotation is incompatible with the FFT grid");
+        return false;
     }
 
     if (!is_integral(full_point.gtrans.x * wfcpw->nx)
         || !is_integral(full_point.gtrans.y * wfcpw->ny)
         || !is_integral(full_point.gtrans.z * wfcpw->nz))
     {
-        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_cpu",
-                                 "PW EXX fractional symmetry translation is incompatible with the FFT grid");
+        return false;
     }
+    return true;
 }
 
 std::complex<double> exx_realspace_bloch_phase(const K_Vectors::ExxFullPoint& full_point,
@@ -189,6 +189,33 @@ MPI_Datatype mpi_complex_type<std::complex<double>>()
 }
 #endif
 } // namespace
+
+bool checked_exx_size_product(std::size_t lhs, std::size_t rhs, std::size_t& result)
+{
+    if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs)
+    {
+        return false;
+    }
+    result = lhs * rhs;
+    return true;
+}
+
+bool is_exx_realspace_symmetry_grid_compatible(const ModulePW::PW_Basis_K* wfcpw,
+                                               const K_Vectors::ExxFullPoint& full_point)
+{
+    return wfcpw != nullptr && wfcpw->nx > 0 && wfcpw->ny > 0 && wfcpw->nz > 0
+           && is_exx_realspace_symmetry_grid_compatible_impl(wfcpw, full_point);
+}
+
+void validate_exx_realspace_symmetry_grid(const ModulePW::PW_Basis_K* wfcpw,
+                                          const K_Vectors::ExxFullPoint& full_point)
+{
+    if (!is_exx_realspace_symmetry_grid_compatible(wfcpw, full_point))
+    {
+        ModuleBase::WARNING_QUIT("validate_exx_realspace_symmetry_grid",
+                                 "PW EXX real-space symmetry operation is incompatible with the FFT grid");
+    }
+}
 
 ExxSymmetryRemap build_exx_symmetry_remap(const ModulePW::PW_Basis_K* wfcpw,
                                           const K_Vectors::ExxFullPoint& full_point,
@@ -329,11 +356,6 @@ void rotate_exx_realspace_symmetry_cpu(const ModulePW::PW_Basis_K* wfcpw,
                                        const T* representative_real,
                                        T* full_real)
 {
-    if (wfcpw->get_device() != "cpu")
-    {
-        ModuleBase::WARNING_QUIT("rotate_exx_realspace_symmetry_cpu",
-                                 "real-space EXX symmetry rotation is implemented only for CPU");
-    }
     validate_exx_realspace_symmetry_grid(wfcpw, full_point);
 
     const int local_size = wfcpw->nrxx;
@@ -395,6 +417,31 @@ template void rotate_exx_realspace_symmetry_cpu<std::complex<double>>(const Modu
                                                                       int rep_spin_index,
                                                                       const std::complex<double>* representative_real,
                                                                       std::complex<double>* full_real);
+
+template <typename FPTYPE>
+struct exx_rotate_realspace_op<std::complex<FPTYPE>, base_device::DEVICE_CPU>
+{
+    using T = std::complex<FPTYPE>;
+    void operator()(const ModulePW::PW_Basis_K* wfcpw,
+                    const K_Vectors::ExxFullPoint& full_point,
+                    int rep_spin_index,
+                    const T* representative_real,
+                    T* full_real,
+                    int batch_count)
+    {
+        for (int ib = 0; ib < batch_count; ++ib)
+        {
+            rotate_exx_realspace_symmetry_cpu(wfcpw,
+                                               full_point,
+                                               rep_spin_index,
+                                               representative_real + static_cast<std::size_t>(ib) * wfcpw->nrxx,
+                                               full_real + static_cast<std::size_t>(ib) * wfcpw->nrxx);
+        }
+    }
+};
+
+template struct exx_rotate_realspace_op<std::complex<float>, base_device::DEVICE_CPU>;
+template struct exx_rotate_realspace_op<std::complex<double>, base_device::DEVICE_CPU>;
 
 template <typename T>
 void rotate_exx_realspace_symmetry_adjoint_cpu(const ModulePW::PW_Basis_K* wfcpw,
@@ -485,12 +532,12 @@ template <typename FPTYPE>
 struct exx_conjugate_real_op<std::complex<FPTYPE>, base_device::DEVICE_CPU>
 {
     using T = std::complex<FPTYPE>;
-    void operator()(const T* in, T* out, int nrxx)
+    void operator()(const T* in, T* out, std::size_t nrxx)
     {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-        for (int ir = 0; ir < nrxx; ++ir)
+        for (std::size_t ir = 0; ir < nrxx; ++ir)
         {
             out[ir] = std::conj(in[ir]);
         }

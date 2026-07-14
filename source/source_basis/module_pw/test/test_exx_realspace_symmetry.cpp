@@ -128,6 +128,23 @@ void expect_complex_arrays_near(const std::vector<complexd>& got,
         EXPECT_NEAR(got[i].imag(), expected[i].imag(), tolerance) << "index " << i;
     }
 }
+
+ModuleBase::Vector3<double> wrap_direct(ModuleBase::Vector3<double> direct)
+{
+    direct.x -= std::floor(direct.x);
+    direct.y -= std::floor(direct.y);
+    direct.z -= std::floor(direct.z);
+    return direct;
+}
+
+complexd synthetic_realspace_value(const ModulePW::PW_Basis_K& wfcpw, const ModuleBase::Vector3<double>& direct)
+{
+    const int ix = static_cast<int>(std::lround(direct.x * wfcpw.nx)) % wfcpw.nx;
+    const int iy = static_cast<int>(std::lround(direct.y * wfcpw.ny)) % wfcpw.ny;
+    const int iz = static_cast<int>(std::lround(direct.z * wfcpw.nz)) % wfcpw.nz;
+    const int global_ir = iz + iy * wfcpw.nz + ix * wfcpw.ny * wfcpw.nz;
+    return complexd(0.011 * (global_ir + 1), -0.017 * ((global_ir + 3) % 13));
+}
 } // namespace
 
 TEST_F(PWTEST, exx_realspace_symmetry_rotation_matches_reciprocal_remap)
@@ -243,6 +260,82 @@ TEST_F(PWTEST, exx_symmetry_remap_uses_representative_basis_cutoff)
         const double gk2 = (test_generic_g_cartesian_from_ig(wfcpw, ig) + wfcpw.kvec_c[0]).norm2();
         EXPECT_LE(gk2, wfcpw.gk_ecut);
     }
+}
+
+TEST_F(PWTEST, exx_realspace_symmetry_uses_abacus_translation_convention)
+{
+    if (nproc_in_pool > 1)
+    {
+        GTEST_SKIP() << "translation convention check is single-rank only";
+    }
+
+    ModulePW::PW_Basis_K wfcpw(device_flag, precision_flag);
+#ifdef __MPI
+    wfcpw.initmpi(nproc_in_pool, rank_in_pool, POOL_WORLD);
+#endif
+
+    const ModuleBase::Vector3<double> kvec_d[1] = {ModuleBase::Vector3<double>(0.0, 0.0, 0.0)};
+    init_exx_pw(wfcpw, std::vector<ModuleBase::Vector3<double>>(kvec_d, kvec_d + 1));
+
+    K_Vectors::ExxFullPoint point;
+    point.identity = false;
+    point.conjugate_only = false;
+    point.time_reversal = false;
+    point.full_kvec_d = ModuleBase::Vector3<double>(0.0, 0.0, 0.0);
+    point.full_kvec_c = ModuleBase::Vector3<double>(0.0, 0.0, 0.0);
+    point.gmatrix = ModuleBase::Matrix3(0.0, -1.0, 0.0,
+                                        1.0, 0.0, 0.0,
+                                        0.0, 0.0, 1.0);
+    point.kgmatrix = point.gmatrix;
+    point.gtrans = ModuleBase::Vector3<double>(0.25, 0.0, 0.0);
+
+    std::vector<complexd> representative_real(wfcpw.nrxx);
+    for (int ir = 0; ir < wfcpw.nrxx; ++ir)
+    {
+        const int local_iz = ir % wfcpw.nplane;
+        const int ixy = ir / wfcpw.nplane;
+        const int global_iz = wfcpw.startz_current + local_iz;
+        const int global_ir = ixy * wfcpw.nz + global_iz;
+        const ModuleBase::Vector3<double> direct
+            = ModuleBase::Vector3<double>((global_ir / (wfcpw.ny * wfcpw.nz)) / static_cast<double>(wfcpw.nx),
+                                          ((global_ir / wfcpw.nz) % wfcpw.ny) / static_cast<double>(wfcpw.ny),
+                                          (global_ir % wfcpw.nz) / static_cast<double>(wfcpw.nz));
+        representative_real[ir] = synthetic_realspace_value(wfcpw, direct);
+    }
+
+    std::vector<complexd> rotated(wfcpw.nrxx);
+    hamilt::rotate_exx_realspace_symmetry_cpu(&wfcpw, point, 0, representative_real.data(), rotated.data());
+
+    std::vector<complexd> expected(wfcpw.nrxx);
+    for (int ir = 0; ir < wfcpw.nrxx; ++ir)
+    {
+        const int local_iz = ir % wfcpw.nplane;
+        const int ixy = ir / wfcpw.nplane;
+        const int global_iz = wfcpw.startz_current + local_iz;
+        const int global_ir = ixy * wfcpw.nz + global_iz;
+        const ModuleBase::Vector3<double> full_direct
+            = ModuleBase::Vector3<double>((global_ir / (wfcpw.ny * wfcpw.nz)) / static_cast<double>(wfcpw.nx),
+                                          ((global_ir / wfcpw.nz) % wfcpw.ny) / static_cast<double>(wfcpw.ny),
+                                          (global_ir % wfcpw.nz) / static_cast<double>(wfcpw.nz));
+        const ModuleBase::Vector3<double> rep_direct = wrap_direct(full_direct * point.gmatrix + point.gtrans);
+        expected[ir] = synthetic_realspace_value(wfcpw, rep_direct);
+    }
+
+    int mismatch_count = 0;
+    for (int ir = 0; ir < wfcpw.nrxx; ++ir)
+    {
+        if (std::abs(rotated[ir].real() - expected[ir].real()) > 1e-12
+            || std::abs(rotated[ir].imag() - expected[ir].imag()) > 1e-12)
+        {
+            if (mismatch_count < 8)
+            {
+                EXPECT_NEAR(rotated[ir].real(), expected[ir].real(), 1e-12) << "index " << ir;
+                EXPECT_NEAR(rotated[ir].imag(), expected[ir].imag(), 1e-12) << "index " << ir;
+            }
+            ++mismatch_count;
+        }
+    }
+    EXPECT_EQ(mismatch_count, 0);
 }
 
 TEST_F(PWTEST, exx_symmetry_remap_tolerates_missing_boundary_representative_g)
@@ -525,6 +618,68 @@ TEST_F(PWTEST, exx_realspace_symmetry_time_reversal_matches_reciprocal_remap_for
     expect_complex_arrays_near(rotated, expected, 1e-10);
 }
 
+TEST_F(PWTEST, exx_realspace_symmetry_time_reversal_with_reciprocal_shift_matches_reciprocal_remap)
+{
+    if (nproc_in_pool > 1)
+    {
+        GTEST_SKIP() << "reciprocal-remap reference is single-rank only";
+    }
+
+    ModulePW::PW_Basis_K wfcpw(device_flag, precision_flag);
+#ifdef __MPI
+    wfcpw.initmpi(nproc_in_pool, rank_in_pool, POOL_WORLD);
+#endif
+
+    init_exx_pw(wfcpw, unshifted_2x2x2_kmesh());
+    const int rep_spin_index = 1;
+
+    K_Vectors::ExxFullPoint point;
+    point.identity = false;
+    point.conjugate_only = false;
+    point.time_reversal = true;
+    point.full_kvec_d = ModuleBase::Vector3<double>(0.5, 0.0, 0.0);
+    point.full_kvec_c = point.full_kvec_d * wfcpw.G;
+    point.gmatrix = ModuleBase::Matrix3(-1.0, 0.0, 0.0,
+                                        0.0, -1.0, 0.0,
+                                        0.0, 0.0, -1.0);
+    point.kgmatrix = point.gmatrix;
+    point.gtrans = ModuleBase::Vector3<double>(0.0, 0.0, 0.0);
+
+    std::vector<complexd> recip(wfcpw.npwk[rep_spin_index]);
+    for (int ig = 0; ig < wfcpw.npwk[rep_spin_index]; ++ig)
+    {
+        recip[ig] = complexd(0.031 * (ig + 1), -0.047 * ((ig + 2) % 11));
+    }
+
+    const auto remap = hamilt::build_exx_symmetry_remap(&wfcpw, point, rep_spin_index, false);
+    std::vector<complexd> expected(wfcpw.nrxx);
+    wfcpw.recip2real_remapped_conjugate(recip.data(),
+                                        expected.data(),
+                                        static_cast<int>(remap.rep_igl.size()),
+                                        remap.rep_igl.data(),
+                                        remap.fft_isz.data(),
+                                        remap.phase.data(),
+                                        false,
+                                        1.0);
+
+    std::vector<complexd> representative_real(wfcpw.nrxx);
+    wfcpw.recip_to_real(static_cast<const base_device::DEVICE_CPU*>(nullptr),
+                        recip.data(),
+                        representative_real.data(),
+                        rep_spin_index,
+                        false,
+                        1.0);
+
+    std::vector<complexd> rotated(wfcpw.nrxx);
+    hamilt::rotate_exx_realspace_symmetry_cpu(&wfcpw,
+                                              point,
+                                              rep_spin_index,
+                                              representative_real.data(),
+                                              rotated.data());
+
+    expect_complex_arrays_near(rotated, expected, 1e-10);
+}
+
 TEST_F(PWTEST, exx_realspace_symmetry_adjoint_matches_reciprocal_remap_for_2x2x2_kmesh)
 {
     if (nproc_in_pool > 1)
@@ -712,4 +867,32 @@ TEST_F(PWTEST, exx_realspace_symmetry_adjoint_roundtrip_is_consistent_across_poo
     hamilt::rotate_exx_realspace_symmetry_adjoint_cpu(&wfcpw, point, 2, rotated.data(), recovered.data());
 
     expect_complex_arrays_near(recovered, representative_real, 1e-12);
+}
+
+TEST_F(PWTEST, exx_realspace_symmetry_rejects_incompatible_fractional_translation)
+{
+    ModulePW::PW_Basis_K wfcpw(device_flag, precision_flag);
+    wfcpw.nx = 5;
+    wfcpw.ny = 4;
+    wfcpw.nz = 4;
+
+    K_Vectors::ExxFullPoint point;
+    point.gmatrix = ModuleBase::Matrix3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+    point.gtrans = ModuleBase::Vector3<double>(0.5, 0.0, 0.0);
+
+    EXPECT_FALSE(hamilt::is_exx_realspace_symmetry_grid_compatible(&wfcpw, point));
+}
+
+TEST_F(PWTEST, exx_realspace_symmetry_rejects_incompatible_axis_exchange)
+{
+    ModulePW::PW_Basis_K wfcpw(device_flag, precision_flag);
+    wfcpw.nx = 4;
+    wfcpw.ny = 6;
+    wfcpw.nz = 4;
+
+    K_Vectors::ExxFullPoint point;
+    point.gmatrix = ModuleBase::Matrix3(0, -1, 0, 1, 0, 0, 0, 0, 1);
+    point.gtrans = ModuleBase::Vector3<double>(0.0, 0.0, 0.0);
+
+    EXPECT_FALSE(hamilt::is_exx_realspace_symmetry_grid_compatible(&wfcpw, point));
 }

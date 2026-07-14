@@ -6,6 +6,7 @@
 #include "source_base/module_device/types.h"
 #include "source_cell/klist.h"
 
+#include <cstddef>
 #include <complex>
 #include <vector>
 
@@ -16,6 +17,14 @@ class PW_Basis_K;
 
 namespace hamilt
 {
+bool checked_exx_size_product(std::size_t lhs, std::size_t rhs, std::size_t& result);
+
+bool is_exx_realspace_symmetry_grid_compatible(const ModulePW::PW_Basis_K* wfcpw,
+                                               const K_Vectors::ExxFullPoint& full_point);
+
+void validate_exx_realspace_symmetry_grid(const ModulePW::PW_Basis_K* wfcpw,
+                                          const K_Vectors::ExxFullPoint& full_point);
+
 struct ExxSymmetryRemap
 {
     std::vector<int> rep_igl;
@@ -50,7 +59,18 @@ void rotate_exx_realspace_symmetry_adjoint_cpu(const ModulePW::PW_Basis_K* wfcpw
 template <typename T, typename Device>
 struct exx_conjugate_real_op
 {
-    void operator()(const T* in, T* out, int nrxx);
+    void operator()(const T* in, T* out, std::size_t nrxx);
+};
+
+template <typename T, typename Device>
+struct exx_rotate_realspace_op
+{
+    void operator()(const ModulePW::PW_Basis_K* wfcpw,
+                    const K_Vectors::ExxFullPoint& full_point,
+                    int rep_spin_index,
+                    const T* representative_real,
+                    T* full_real,
+                    int batch_count);
 };
 
 template <typename T, typename Device>
