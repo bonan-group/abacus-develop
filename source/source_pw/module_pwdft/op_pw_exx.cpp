@@ -286,27 +286,35 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
 
     fock_div.clear();
     erfc_div.clear();
-    for (const auto& param: options.fock_params)
+    const auto fock_it = options.coulomb_param.find(Conv_Coulomb_Pot_K::Coulomb_Type::Fock);
+    if (fock_it != options.coulomb_param.end())
     {
-        fock_div.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Fock,
-                                          0.0,
-                                          kv,
-                                          wfcpw,
-                                          rhopw_dev,
-                                          tpiba,
-                                          singular_correction_mode,
-                                          ucell->omega));
+        for (const auto& param: fock_it->second)
+        {
+            fock_div.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Fock,
+                                              0.0,
+                                              kv,
+                                              wfcpw,
+                                              rhopw_dev,
+                                              tpiba,
+                                              singular_correction_mode,
+                                              ucell->omega));
+        }
     }
-    for (const auto& param: options.erfc_params)
+    const auto erfc_it = options.coulomb_param.find(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc);
+    if (erfc_it != options.coulomb_param.end())
     {
-        erfc_div.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
-                                          std::stod(param.at("omega")),
-                                          kv,
-                                          wfcpw,
-                                          rhopw_dev,
-                                          tpiba,
-                                          singular_correction_mode,
-                                          ucell->omega));
+        for (const auto& param: erfc_it->second)
+        {
+            erfc_div.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
+                                              std::stod(param.at("omega")),
+                                              kv,
+                                              wfcpw,
+                                              rhopw_dev,
+                                              tpiba,
+                                              singular_correction_mode,
+                                              ucell->omega));
+        }
     }
 
 }   // end of constructor
@@ -1406,7 +1414,8 @@ OperatorEXXPW<T, Device>::get_exx_potential_cached(const K_Vectors::ExxFullKPoin
                                         ucell->omega,
                                         kpoint,
                                         qpoint,
-                                        false);
+                                        false,
+                                        this->options.coulomb_param);
         const auto inserted = pot_cache.emplace(cache_key, pot_new);
         if (!inserted.second)
         {
@@ -2064,27 +2073,35 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
         exx_wave_redistributor->setup(target_wfcpw, wfcpw_exx);
     }
 
-    for (const auto& param: options.fock_params)
+    const auto fock_it = options.coulomb_param.find(Conv_Coulomb_Pot_K::Coulomb_Type::Fock);
+    if (fock_it != options.coulomb_param.end())
     {
-        fock_div_local.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Fock,
-                                                0.0,
-                                                this->kv,
-                                                this->wfcpw,
-                                                this->rhopw_dev,
-                                                this->tpiba,
-                                                this->singular_correction_mode,
-                                                this->ucell->omega));
+        for (const auto& param: fock_it->second)
+        {
+            fock_div_local.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Fock,
+                                                    0.0,
+                                                    this->kv,
+                                                    this->wfcpw,
+                                                    this->rhopw_dev,
+                                                    this->tpiba,
+                                                    this->singular_correction_mode,
+                                                    this->ucell->omega));
+        }
     }
-    for (const auto& param: options.erfc_params)
+    const auto erfc_it = options.coulomb_param.find(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc);
+    if (erfc_it != options.coulomb_param.end())
     {
-        erfc_div_local.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
-                                                std::stod(param.at("omega")),
-                                                this->kv,
-                                                this->wfcpw,
-                                                this->rhopw_dev,
-                                                this->tpiba,
-                                                this->singular_correction_mode,
-                                                this->ucell->omega));
+        for (const auto& param: erfc_it->second)
+        {
+            erfc_div_local.push_back(exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type::Erfc,
+                                                    std::stod(param.at("omega")),
+                                                    this->kv,
+                                                    this->wfcpw,
+                                                    this->rhopw_dev,
+                                                    this->tpiba,
+                                                    this->singular_correction_mode,
+                                                    this->ucell->omega));
+        }
     }
     if (GlobalV::MY_RANK == 0)
     {

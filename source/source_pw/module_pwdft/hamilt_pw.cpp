@@ -19,7 +19,9 @@ namespace hamilt
 
 namespace
 {
-ExxOperatorOptions make_exx_operator_options()
+ExxOperatorOptions make_exx_operator_options(bool separate_loop,
+                                             double hybrid_alpha,
+                                             const CoulombParam& coulomb_param)
 {
     ExxOperatorOptions options;
     options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
@@ -31,12 +33,11 @@ ExxOperatorOptions make_exx_operator_options()
     options.ecutrho = PARAM.inp.ecutrho;
     options.gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
     options.exxace = PARAM.inp.exxace;
-    options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
-    options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    options.separate_loop = separate_loop;
+    options.hybrid_alpha = hybrid_alpha;
     options.auto_tiling = PARAM.inp.exx_auto_tiling;
     options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
-    options.fock_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock];
-    options.erfc_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Erfc];
+    options.coulomb_param = coulomb_param;
     return options;
 }
 } // namespace
@@ -170,7 +171,11 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
     }
     if (GlobalC::exx_info.info_global.cal_exx)
     {
-        const ExxOperatorOptions exx_options = make_exx_operator_options();
+        const bool separate_loop = GlobalC::exx_info.info_global.separate_loop;
+        const double hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+        const CoulombParam coulomb_param = GlobalC::exx_info.info_global.coulomb_param;
+        const ExxOperatorOptions exx_options
+            = make_exx_operator_options(separate_loop, hybrid_alpha, coulomb_param);
         auto exx = source_exx == nullptr
                        ? new OperatorEXXPW<T, Device>(isk, wfc_basis, pot_in->get_rho_basis(), pkv, ucell, exx_options)
                        : new OperatorEXXPW<T, Device>(source_exx, isk, wfc_basis, pkv, exx_options);

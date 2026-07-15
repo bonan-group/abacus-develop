@@ -1,4 +1,3 @@
-#include "source_hamilt/module_xc/exx_info.h"
 #include "op_pw_exx.h"
 #include "source_pw/module_pwdft/kernels/cal_density_real_op.h"
 #include "source_pw/module_pwdft/kernels/exx_q_state_op.h"
@@ -23,7 +22,9 @@
 
 namespace
 {
-hamilt::ExxOperatorOptions make_stress_exx_options()
+hamilt::ExxOperatorOptions make_stress_exx_options(bool separate_loop,
+                                                   double hybrid_alpha,
+                                                   const CoulombParam& coulomb_param)
 {
     hamilt::ExxOperatorOptions options;
     options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
@@ -35,10 +36,11 @@ hamilt::ExxOperatorOptions make_stress_exx_options()
     options.ecutrho = PARAM.inp.ecutrho;
     options.gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
     options.exxace = PARAM.inp.exxace;
-    options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
-    options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    options.separate_loop = separate_loop;
+    options.hybrid_alpha = hybrid_alpha;
     options.auto_tiling = PARAM.inp.exx_auto_tiling;
     options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
+    options.coulomb_param = coulomb_param;
     return options;
 }
 
@@ -91,9 +93,14 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                            ModulePW::PW_Basis* rhopw,
                                            ModulePW::PW_Basis_K* wfcpw,
                                            const K_Vectors *p_kv,
-                                           const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in, const UnitCell& ucell)
+                                           const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in,
+                                           const UnitCell& ucell,
+                                           const bool separate_loop,
+                                           const double hybrid_alpha,
+                                           const CoulombParam& coulomb_param)
 {
-    hamilt::ExxOperatorOptions exx_options = make_stress_exx_options();
+    hamilt::ExxOperatorOptions exx_options
+        = make_stress_exx_options(separate_loop, hybrid_alpha, coulomb_param);
     bool gamma_extrapolation = exx_options.gamma_extrapolation;
     bool is_mp = p_kv->get_is_mp();
 #ifdef __MPI
@@ -581,7 +588,8 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                     omega,
                                     kpoint,
                                     *qpoint,
-                                    true);
+                                    true,
+                                    exx_options.coulomb_param);
                                 hamilt::get_exx_stress_potential<Real, Device>(
                                     p_kv,
                                     wfcpw,
@@ -592,7 +600,8 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                     gamma_extrapolation,
                                     omega,
                                     kpoint,
-                                    *qpoint);
+                                    *qpoint,
+                                    exx_options.coulomb_param);
                             }
                         }
 

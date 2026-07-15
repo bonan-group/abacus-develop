@@ -14,7 +14,7 @@ project(
   LANGUAGES CXX)
 
 option(ENABLE_MPI "Enable MPI" ON)
-option(USE_OPENMP "Enable OpenMP" ON)
+option(ENABLE_OPENMP "Enable OpenMP" ON)
 option(USE_CUDA "Enable CUDA" OFF)
 option(USE_CUDA_MPI "Enable CUDA-aware MPI" OFF)
 option(USE_CUDA_ON_DCU "Enable CUDA on DCU" OFF)
@@ -23,26 +23,23 @@ option(USE_DSP "Enable DSP" OFF)
 option(USE_KML "Enable Kunpeng Math Library" OFF)
 option(USE_SW "Enable SW Architecture" OFF)
 
-option(USE_ABACUS_LIBM "Build libmath from source to speed up" OFF)
+option(ENABLE_ABACUS_LIBM "Build libmath from source to speed up" OFF)
 option(ENABLE_LIBXC "Enable using the LibXC package" OFF)
 option(ENABLE_FLOAT_FFTW "Enable using single-precision FFTW library." OFF)
-
-# option(ENABLE_DEEPKS "Enable the DeePKS algorithm" OFF)
-# option(ENABLE_MLKEDF "Enable the Machine-Learning-based KEDF for OFDFT" OFF)
 
 option(ENABLE_MLALGO "Enable the machine learning algorithms" OFF)
 
 option(ENABLE_LCAO "Enable LCAO algorithm" ON)
-option(USE_ELPA "Enable ELPA for LCAO" ON)
+option(ENABLE_ELPA "Enable ELPA for LCAO" ON)
 option(ENABLE_LIBRI "Enable LibRI for hybrid functional" OFF)
-option(ENABLE_LIBCOMM "Enable LibComm" OFF)
+option(EXX_DEV "Enable LibRI developing features" OFF)
 option(ENABLE_PEXSI "Enable PEXSI for LCAO" OFF)
 option(ENABLE_DFTD4 "Enable DFT-D4 dispersion correction" OFF)
 
 option(BUILD_TESTING "Build unittests" OFF)
 option(DEBUG_INFO "Print message to debug" OFF)
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
-option(INFO "Enable gathering math library information" OFF)
+option(MATH_INFO "Enable gathering math library information" OFF)
 option(ENABLE_COVERAGE "Enable coverage build" OFF)
 option(GIT_SUBMODULE "Check submodules during build" ON)
 
@@ -59,17 +56,55 @@ option(ENABLE_CUSOLVERMP "Enable cusolvermp" OFF)
 option(ENABLE_NCCL_PARALLEL_DEVICE "Enable NCCL-backed collectives in parallel_device" OFF)
 option(ENABLE_EXPERIMENTAL_DFPT "Enable experimental PW DFPT implementation" OFF)
 
+# ==============================================================================
+# Deprecated options (TODO: Remove this section in the future release)
+# ==============================================================================
+function(abacus_rename_option old_name new_name)
+  get_property(_old_defined CACHE "${old_name}" PROPERTY TYPE SET)
+  if(NOT _old_defined)
+    return()
+  endif()
+  message(WARNING "${old_name} has been renamed to ${new_name}.")
+  get_property(_type CACHE "${new_name}" PROPERTY TYPE)
+  get_property(_help CACHE "${new_name}" PROPERTY HELPSTRING)
+  set("${new_name}" "${${old_name}}" CACHE "${_type}" "${_help}" FORCE)
+  unset("${old_name}" CACHE)
+endfunction()
+abacus_rename_option(USE_OPENMP ENABLE_OPENMP)
+abacus_rename_option(USE_ABACUS_LIBM ENABLE_ABACUS_LIBM)
+abacus_rename_option(USE_ELPA ENABLE_ELPA)
+abacus_rename_option(INFO MATH_INFO)
+
+if(DEFINED CACHE{ENABLE_LIBCOMM})
+  message(
+    WARNING
+      "Option ENABLE_LIBCOMM is deprecated and will be ignored in a future release. "
+      "LibComm is now treated as an implementation dependency of LibRI; "
+      "please use -DENABLE_LIBRI=ON instead."
+  )
+  if(ENABLE_LIBCOMM AND NOT ENABLE_LIBRI)
+    message(
+      FATAL_ERROR
+        "ENABLE_LIBCOMM was set, but LibComm is not a standalone ABACUS feature. "
+        "Please use -DENABLE_LIBRI=ON instead."
+    )
+  endif()
+  unset(ENABLE_LIBCOMM CACHE)
+endif()
+# ==============================================================================
+
+# CTest defines BUILD_TESTING when it is first included. Include it only after
+# ABACUS has declared its OFF-by-default option above.
+include(CTest)
+
 if(NOT DEFINED NVHPC_ROOT_DIR AND DEFINED ENV{NVHPC_ROOT})
   set(NVHPC_ROOT_DIR
       "$ENV{NVHPC_ROOT}"
       CACHE PATH "Path to NVIDIA HPC SDK root directory.")
 endif()
 
-# Collect external dependency usage requirements. Feature macros are applied
-# explicitly to targets below so tests can opt out through target-level settings.
-add_library(abacus_external_deps INTERFACE)
-add_library(abacus::external_deps ALIAS abacus_external_deps)
-
+# Feature definitions are collected while options and dependencies are resolved
+# below. They are applied to targets in source/CMakeLists.txt.
 set_property(GLOBAL PROPERTY ABACUS_FEATURE_DEFINITIONS "")
 
 function(abacus_normalize_definitions out_var)
@@ -89,81 +124,16 @@ function(abacus_add_feature_definitions)
   set_property(GLOBAL APPEND PROPERTY ABACUS_FEATURE_DEFINITIONS ${_defs})
 endfunction()
 
-define_property(
-  DIRECTORY
-  PROPERTY ABACUS_DISABLED_FEATURE_DEFINITIONS
-  INHERITED
-  BRIEF_DOCS "ABACUS feature definitions disabled for targets in this directory"
-  FULL_DOCS "Feature definitions disabled for targets created in this directory.")
-
-define_property(
-  DIRECTORY
-  PROPERTY ABACUS_LOCAL_FEATURE_DEFINITIONS
-  INHERITED
-  BRIEF_DOCS "Additional ABACUS feature definitions for targets in this directory"
-  FULL_DOCS "Additional feature definitions for targets created in this directory.")
-
-function(abacus_disable_feature_definitions)
-  abacus_normalize_definitions(_defs ${ARGN})
-  set_property(DIRECTORY APPEND PROPERTY ABACUS_DISABLED_FEATURE_DEFINITIONS ${_defs})
-endfunction()
-
-function(abacus_add_local_feature_definitions)
-  abacus_normalize_definitions(_defs ${ARGN})
-  set_property(DIRECTORY APPEND PROPERTY ABACUS_LOCAL_FEATURE_DEFINITIONS ${_defs})
-endfunction()
-
-function(abacus_apply_build_options target)
-  if(NOT TARGET "${target}")
-    return()
-  endif()
-
-  get_target_property(_type "${target}" TYPE)
-  if(_type STREQUAL "INTERFACE_LIBRARY" OR _type STREQUAL "UTILITY")
-    return()
-  endif()
-
-  get_target_property(_imported "${target}" IMPORTED)
-  if(_imported)
-    return()
-  endif()
-
-  get_target_property(_source_dir "${target}" SOURCE_DIR)
-  get_property(_defs GLOBAL PROPERTY ABACUS_FEATURE_DEFINITIONS)
-  get_property(_disabled DIRECTORY "${_source_dir}" PROPERTY ABACUS_DISABLED_FEATURE_DEFINITIONS)
-  get_property(_local DIRECTORY "${_source_dir}" PROPERTY ABACUS_LOCAL_FEATURE_DEFINITIONS)
-
-  if(_disabled)
-    list(REMOVE_ITEM _defs ${_disabled})
-  endif()
-  if(_local)
-    list(APPEND _defs ${_local})
-  endif()
-  if(_defs)
-    list(REMOVE_DUPLICATES _defs)
-    target_compile_definitions("${target}" PRIVATE ${_defs})
-  endif()
-
-  target_link_libraries("${target}" PRIVATE abacus::external_deps)
-endfunction()
-
-function(abacus_apply_build_options_to_dir dir)
-  get_property(_targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
-  foreach(_target IN LISTS _targets)
-    abacus_apply_build_options("${_target}")
-  endforeach()
-
-  get_property(_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
-  foreach(_subdir IN LISTS _subdirs)
-    abacus_apply_build_options_to_dir("${_subdir}")
-  endforeach()
-endfunction()
-
 # enable json support
 if(ENABLE_RAPIDJSON)
   find_package(RapidJSON CONFIG REQUIRED)
+  if(NOT TARGET RapidJSON)
+    message(
+      FATAL_ERROR
+      "RapidJSON was found, but target RapidJSON is missing. Check if your RapidJSON installation provides a complete exported CMake configuration."
+    )
+  endif()
   abacus_add_feature_definitions(__RAPIDJSON)
-  target_link_libraries(abacus_external_deps INTERFACE RapidJSON)
 endif()
 
 # get commit info
@@ -192,7 +162,7 @@ You can install Git first and reinstall abacus.")
       abacus_add_feature_definitions(COMMIT_INFO)
       file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/commit.h"
            "#define COMMIT \"${GIT_COMMIT_HASH} (${GIT_COMMIT_DATE})\"\n")
-      target_include_directories(abacus_external_deps INTERFACE ${CMAKE_CURRENT_BINARY_DIR})
+      set(ABACUS_COMMIT_INFO_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
       message(STATUS "Current commit hash: ${GIT_COMMIT_HASH}")
       message(STATUS "Last commit date: ${GIT_COMMIT_DATE}")
     else()
@@ -203,7 +173,7 @@ endif()
 
 # Serial version of ABACUS will not use ELPA
 if(NOT ENABLE_MPI)
-  set(USE_ELPA OFF)
+  set(ENABLE_ELPA OFF)
   set(ENABLE_MLALGO OFF)
 endif()
 
@@ -267,7 +237,7 @@ endif()
 
 # Use DSP hardware
 if (USE_DSP)
-  set(USE_ELPA OFF)
+  set(ENABLE_ELPA OFF)
   set(ABACUS_BIN_NAME abacus_dsp)
 endif()
 
@@ -279,7 +249,9 @@ if (USE_CUDA_MPI)
   abacus_add_feature_definitions(__CUDA_MPI)
 endif()
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+list(APPEND CMAKE_MODULE_PATH
+     "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
+     "${PROJECT_SOURCE_DIR}/cmake/modules")
 
 if(ENABLE_COVERAGE)
   find_package(codecov)
@@ -300,32 +272,16 @@ if(ENABLE_COVERAGE)
 endif()
 
 set(ABACUS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/source)
-set(ABACUS_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-set(ABACUS_BIN_PATH ${CMAKE_CURRENT_BINARY_DIR}/${ABACUS_BIN_NAME})
-target_include_directories(
-  abacus_external_deps
-  INTERFACE
-    ${ABACUS_SOURCE_DIR}
-    ${ABACUS_SOURCE_DIR}/source_base/module_container)
 
 if(NOT DEFINED CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 11)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(${ABACUS_BIN_NAME} source/source_main/main.cpp)
-if(ENABLE_COVERAGE)
-  add_coverage(${ABACUS_BIN_NAME})
-endif()
-
-if(ENABLE_DFTD4)
-  # DFTD4 requires enabling C and Fortran to work
+# Enable languages required by optional dependencies
+if(ENABLE_DFTD4 OR ENABLE_PEXSI)
   enable_language(C)
   enable_language(Fortran)
-  # Avoid custom-lapack fallback when resolving DFT-D4 dependencies
-  find_package(BLAS REQUIRED)
-  find_package(LAPACK REQUIRED)
-  find_package(dftd4 4.2.0 REQUIRED)
 endif()
 
 macro(set_if_higher VARIABLE VALUE)
@@ -366,14 +322,14 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES Intel)
   # stick to strict floating point model on Intel Compiler
   add_compile_options(-fp-model=strict)
-  set(USE_ABACUS_LIBM OFF) # Force turn off USE_ABACUS_LIBM on Intel Compiler
+  set(ENABLE_ABACUS_LIBM OFF) # Force turn off ENABLE_ABACUS_LIBM on Intel Compiler
   set(CMAKE_CXX_FLAGS
       "${CMAKE_CXX_FLAGS} -Wno-write-strings "
   )
 endif()
 
-if(USE_ABACUS_LIBM)
-  abacus_add_feature_definitions(USE_ABACUS_LIBM)
+if(ENABLE_ABACUS_LIBM)
+  abacus_add_feature_definitions(__ABACUS_LIBM)
 endif()
 
 if(ENABLE_NATIVE_OPTIMIZATION)
@@ -389,13 +345,9 @@ if(WIN32)
 endif()
 
 if(ENABLE_LCAO)
-  find_package(cereal CONFIG REQUIRED)
   abacus_add_feature_definitions(__LCAO)
-  target_link_libraries(abacus_external_deps INTERFACE cereal::cereal)
-  if(USE_ELPA)
+  if(ENABLE_ELPA)
     find_package(ELPA REQUIRED)
-    include_directories(${ELPA_INCLUDE_DIR})
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ELPA::ELPA)
     abacus_add_feature_definitions(__ELPA)
   endif()
 
@@ -404,9 +356,10 @@ if(ENABLE_LCAO)
   endif()
 
   if(ENABLE_PEXSI)
-    find_package(PEXSI REQUIRED)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${PEXSI_LIBRARY} ${SuperLU_DIST_LIBRARY} ${ParMETIS_LIBRARY} ${METIS_LIBRARY} pexsi)
-    target_include_directories(abacus_external_deps INTERFACE ${PEXSI_INCLUDE_DIR} ${ParMETIS_INCLUDE_DIR})
+    find_package(PEXSI REQUIRED CONFIG)
+    if(PEXSI_VERSION VERSION_LESS "2.0.0")
+      message(FATAL_ERROR "PEXSI >= 2.0.0 is required")
+    endif()
     abacus_add_feature_definitions(__PEXSI)
     set(CMAKE_CXX_STANDARD 14)
   endif()
@@ -420,20 +373,19 @@ if(DEBUG_INFO)
 endif()
 
 if(ENABLE_MPI)
+  if(NOT CMAKE_CROSSCOMPILING)
+    # FindMPI runs a probe executable to determine the MPI library version,
+    # which FindMKL.cmake uses to auto-detect the BLACS interface.
+    # When cross compiling, assume users know what they are doing.
+    set(MPI_DETERMINE_LIBRARY_VERSION TRUE)
+  endif()
   find_package(MPI COMPONENTS CXX REQUIRED)
-  target_link_libraries(abacus_external_deps INTERFACE MPI::MPI_CXX)
   abacus_add_feature_definitions(__MPI)
 endif()
 
 
 if (USE_DSP)
   abacus_add_feature_definitions(__DSP)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${OMPI_LIBRARY1})
-  target_include_directories(abacus_external_deps INTERFACE
-    ${MTBLAS_FFT_DIR}/libmtblas/include
-    ${MT_HOST_DIR}/include)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${MT_HOST_DIR}/hthreads/lib/libhthread_device.a)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${MT_HOST_DIR}/hthreads/lib/libhthread_host.a)
 endif()
 
 
@@ -441,21 +393,50 @@ endif()
 if (USE_SW)
   abacus_add_feature_definitions(__SW)
   set(SW ON)
-  target_include_directories(abacus_external_deps INTERFACE
-    ${SW_MATH}/include
-    ${SW_FFT}/include)
-
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${SW_FFT}/lib/libfftw3.a)
 endif()
 
 find_package(Threads REQUIRED)
-target_link_libraries(${ABACUS_BIN_NAME} PRIVATE Threads::Threads)
 
-if(USE_OPENMP)
+if(ENABLE_OPENMP)
   find_package(OpenMP REQUIRED)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE OpenMP::OpenMP_CXX)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-  add_link_options(${OpenMP_CXX_LIBRARIES})
+endif()
+
+if(DEFINED ENV{MKLROOT} AND NOT DEFINED MKLROOT)
+  set(MKLROOT "$ENV{MKLROOT}")
+endif()
+if(USE_KML)
+  set(_kml_components BLAS LAPACK FFTW3)
+  if(ENABLE_MPI)
+    list(APPEND _kml_components ScaLAPACK)
+  endif()
+  if(ENABLE_FLOAT_FFTW)
+    list(APPEND _kml_components FFTW3_FLOAT)
+  endif()
+
+  find_package(KML REQUIRED COMPONENTS ${_kml_components})
+  abacus_add_feature_definitions(__KML)
+elseif(MKLROOT OR MKL_ROOT)
+  find_package(MKL REQUIRED)
+  abacus_add_feature_definitions(__MKL)
+elseif(NOT USE_SW)
+  find_package(Lapack REQUIRED)
+  # ScaLAPACK is a distributed-memory library and is only needed for the
+  # MPI build. A serial build (e.g. the native Windows serial version)
+  # must not require it.
+  if(ENABLE_MPI)
+    find_package(ScaLAPACK REQUIRED)
+  endif()
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Intel|Clang")
+    message(WARNING "Cannot determine the required Fortran runtime.")
+  endif()
+endif()
+
+if(NOT USE_KML AND NOT MKL_FOUND AND NOT USE_SW)
+  find_package(FFTW3 REQUIRED)
+endif()
+
+if(ENABLE_DFTD4)
+  find_package(dftd4 4.2.0 REQUIRED)
 endif()
 
 include(CheckLanguage)
@@ -530,28 +511,13 @@ if(USE_CUDA)
     endif()
   endif()
   enable_language(CUDA)
-  # ${ABACUS_BIN_NAME} is added before CUDA is enabled
-  set_property(TARGET ${ABACUS_BIN_NAME}
-               PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
-  if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL 12.9)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE cudart)
-  else ()
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE cudart nvToolsExt)
-  endif ()
-  target_include_directories(abacus_external_deps INTERFACE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-  if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.0)
-    if(EXISTS "${CUDAToolkit_ROOT}/include/cccl")
-      target_include_directories(abacus_external_deps INTERFACE "${CUDAToolkit_ROOT}/include/cccl")
-    endif()
-  endif()
   if(USE_CUDA)
     abacus_add_feature_definitions(__CUDA)
     abacus_add_feature_definitions(__UT_USE_CUDA)
-    target_compile_definitions(${ABACUS_BIN_NAME} PRIVATE __USE_NVTX)
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
       set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G" CACHE STRING "CUDA flags for debug build" FORCE)
     endif()
-    if (USE_OPENMP AND OpenMP_CXX_FOUND)
+    if (ENABLE_OPENMP AND OpenMP_CXX_FOUND)
       set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=${OpenMP_CXX_FLAGS}" CACHE STRING "CUDA flags" FORCE)
     endif()
     if (ENABLE_NCCL_PARALLEL_DEVICE)
@@ -560,13 +526,13 @@ if(USE_CUDA)
           "ENABLE_NCCL_PARALLEL_DEVICE requires ENABLE_MPI=ON.")
       endif()
       abacus_add_feature_definitions(__NCCL_PARALLEL_DEVICE)
-      include(cmake/SetupNccl.cmake)
-      abacus_setup_nccl(${ABACUS_BIN_NAME})
+      include(cmake/modules/SetupNccl.cmake)
+      abacus_setup_nccl()
     endif()
     if (ENABLE_CUSOLVERMP)
       # Keep cuSOLVERMp discovery/linking logic in a dedicated module.
-      include(cmake/SetupCuSolverMp.cmake)
-      abacus_setup_cusolvermp(${ABACUS_BIN_NAME})
+      include(cmake/modules/SetupCuSolverMp.cmake)
+      abacus_setup_cusolvermp()
     endif()
     if (ENABLE_CUBLASMP)
       # Enforcement 1: cuBLASMp requires cuSOLVERMp to be enabled
@@ -583,8 +549,8 @@ if(USE_CUDA)
           "cuBLASMp 0.8.0+ requires NCCL Symmetric Memory, but cuSOLVERMp is using CAL backend."
           "Please upgrade cuSOLVERMp to >= 0.7.0 to use NCCL for both.")
       endif()
-      include(cmake/SetupCuBlasMp.cmake)
-      abacus_setup_cublasmp(${ABACUS_BIN_NAME})
+      include(cmake/modules/SetupCuBlasMp.cmake)
+      abacus_setup_cublasmp()
     endif()
   endif()
 endif()
@@ -628,9 +594,6 @@ if(USE_ROCM)
     )
   endif()
 
-  target_include_directories(abacus_external_deps INTERFACE ${ROCM_PATH}/include)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE hip::host hip::device hip::hipfft
-                        roc::hipblas roc::hipsolver)
   abacus_add_feature_definitions(__ROCM)
   abacus_add_feature_definitions(__UT_USE_ROCM)
   abacus_add_feature_definitions(__HIP_PLATFORM_HCC__)
@@ -645,73 +608,6 @@ if(ENABLE_ASAN)
   endif()
   add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
   add_link_options(-fsanitize=address)
-  # `add_link_options` only affects executables added after.
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE -fsanitize=address)
-endif()
-
-if(DEFINED ENV{MKLROOT} AND NOT DEFINED MKLROOT)
-  set(MKLROOT "$ENV{MKLROOT}")
-endif()
-if(USE_KML)
-  set(_kml_components BLAS LAPACK FFTW3)
-  if(ENABLE_MPI)
-    list(APPEND _kml_components ScaLAPACK)
-  endif()
-  if(ENABLE_FLOAT_FFTW)
-    list(APPEND _kml_components FFTW3_FLOAT)
-  endif()
-
-  find_package(KML REQUIRED COMPONENTS ${_kml_components})
-  if(ENABLE_MPI)
-    target_link_libraries(abacus_external_deps INTERFACE KML::ScaLAPACK)
-  else()
-    target_link_libraries(abacus_external_deps INTERFACE KML::LAPACK)
-  endif()
-  target_link_libraries(abacus_external_deps INTERFACE KML::FFTW3)
-  if(ENABLE_FLOAT_FFTW)
-    target_link_libraries(abacus_external_deps INTERFACE KML::FFTW3_FLOAT)
-  endif()
-  abacus_add_feature_definitions(__KML)
-elseif(MKLROOT)
-  set(MKL_INTERFACE lp64)
-  set(ENABLE_SCALAPACK ON)
-  find_package(MKL REQUIRED)
-  abacus_add_feature_definitions(__MKL)
-  target_include_directories(abacus_external_deps INTERFACE ${MKL_INCLUDE}/fftw)
-  target_link_libraries(abacus_external_deps INTERFACE MKL::MKL)
-  if(CMAKE_CXX_COMPILER_ID MATCHES Intel)
-    list(APPEND math_libs ifcore)
-  endif()
-elseif(NOT USE_SW)
-  find_package(Lapack REQUIRED)
-  target_link_libraries(abacus_external_deps INTERFACE LAPACK::LAPACK BLAS::BLAS)
-  # ScaLAPACK is a distributed-memory library and is only needed for the
-  # MPI build. A serial build (e.g. the native Windows serial version)
-  # must not require it.
-  if(ENABLE_MPI)
-    find_package(ScaLAPACK REQUIRED)
-    target_link_libraries(abacus_external_deps INTERFACE ScaLAPACK::ScaLAPACK)
-  endif()
-  if(CMAKE_CXX_COMPILER_ID MATCHES GNU)
-    list(APPEND math_libs gfortran)
-  elseif(CMAKE_CXX_COMPILER_ID MATCHES Intel)
-    list(APPEND math_libs ifcore)
-  elseif(CMAKE_CXX_COMPILER_ID MATCHES Clang)
-    list(APPEND math_libs gfortran)
-  else()
-    message(WARNING "Cannot find the correct library for Fortran.")
-  endif()
-endif()
-
-if(NOT USE_KML AND NOT MKLROOT AND NOT USE_SW)
-  find_package(FFTW3 REQUIRED)
-  target_link_libraries(abacus_external_deps INTERFACE FFTW3::FFTW3)
-  if(USE_OPENMP)
-    target_link_libraries(abacus_external_deps INTERFACE FFTW3::FFTW3_OMP)
-  endif()
-  if(ENABLE_FLOAT_FFTW)
-    target_link_libraries(abacus_external_deps INTERFACE FFTW3::FFTW3_FLOAT)
-  endif()
 endif()
 
 if(ENABLE_FLOAT_FFTW)
@@ -719,9 +615,6 @@ if(ENABLE_FLOAT_FFTW)
 endif()
 
 if(ENABLE_MLALGO)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE deepks) # deepks
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE hamilt_mlkedf) # mlkedf
-
   find_path(libnpy_SOURCE_DIR npy.hpp HINTS ${libnpy_INCLUDE_DIR})
   if(NOT libnpy_SOURCE_DIR)
     include(FetchContent)
@@ -732,9 +625,7 @@ if(ENABLE_MLALGO)
       GIT_PROGRESS TRUE)
     FetchContent_MakeAvailable(libnpy)
   else()
-    target_include_directories(abacus_external_deps INTERFACE ${libnpy_INCLUDE_DIR})
   endif()
-  target_include_directories(abacus_external_deps INTERFACE ${libnpy_SOURCE_DIR}/include)
 
   abacus_add_feature_definitions(__MLALGO)
 endif()
@@ -749,9 +640,7 @@ if(ENABLE_MLALGO OR DEFINED Torch_DIR)
   elseif(NOT Torch_VERSION VERSION_LESS "1.5.0")
     set_if_higher(CMAKE_CXX_STANDARD 14)
   endif()
-  target_include_directories(abacus_external_deps INTERFACE ${TORCH_INCLUDE_DIRS})
-  target_link_libraries(abacus_external_deps INTERFACE ${TORCH_LIBRARIES})
-  add_compile_options(${TORCH_CXX_FLAGS})
+  set(ABACUS_TORCH_CXX_FLAGS "${TORCH_CXX_FLAGS}")
 endif()
 
 if (ENABLE_CNPY)
@@ -768,13 +657,10 @@ if (ENABLE_CNPY)
     )
     FetchContent_MakeAvailable(cnpy)
   else()
-    target_include_directories(abacus_external_deps INTERFACE ${cnpy_INCLUDE_DIR})
   endif()
-  target_include_directories(abacus_external_deps INTERFACE ${cnpy_SOURCE_DIR})
 
   # find ZLIB and link
   find_package(ZLIB REQUIRED)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE cnpy ZLIB::ZLIB)
   abacus_add_feature_definitions(__USECNPY)
 endif()
 
@@ -801,39 +687,23 @@ function(git_submodule_update)
   endif()
 endfunction()
 
-if(DEFINED LIBRI_DIR)
-  set(ENABLE_LIBRI ON)
-endif()
 if(ENABLE_LIBRI)
   set_if_higher(CMAKE_CXX_STANDARD 14)
-  if(LIBRI_DIR)
-  else()
-    find_package(LibRI REQUIRED)
-  endif()
-  target_include_directories(abacus_external_deps INTERFACE ${LIBRI_DIR}/include)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ri module_exx_symmetry)
+  find_package(LibRI REQUIRED)
+  find_package(LibComm REQUIRED)
+  find_package(cereal REQUIRED CONFIG)
   abacus_add_feature_definitions(__EXX EXX_DM=3 EXX_H_COMM=2 TEST_EXX_LCAO=0
                                  TEST_EXX_RADIAL=1)
-endif()
-
-if(ENABLE_LIBRI OR DEFINED LIBCOMM_DIR)
-  set(ENABLE_LIBCOMM ON)
-endif()
-if(ENABLE_LIBCOMM)
-  if(LIBCOMM_DIR)
-  else()
-    find_package(LibComm REQUIRED)
+  if(EXX_DEV)
+    abacus_add_feature_definitions(__EXX_DEV)
   endif()
-  target_include_directories(abacus_external_deps INTERFACE ${LIBCOMM_DIR}/include)
 endif()
-
 
 if(ENABLE_LIBXC)
   find_package(Libxc CONFIG REQUIRED)
   if(Libxc_VERSION VERSION_LESS "5.1.7")
     message(FATAL_ERROR "Libxc >= 5.1.7 is required")
   endif()
-  target_link_libraries(abacus_external_deps INTERFACE Libxc::xc)
   abacus_add_feature_definitions(USE_LIBXC)
 endif()
 
@@ -841,12 +711,8 @@ if(DEFINED DeePMD_DIR)
   abacus_add_feature_definitions(__DPMD HIGH_PREC)
   add_compile_options(-Wl,--no-as-needed)
   find_package(DeePMD REQUIRED)
-  target_include_directories(abacus_external_deps INTERFACE ${DeePMD_DIR}/include)
   if(DeePMDC_FOUND)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE DeePMD::deepmd_c)
     abacus_add_feature_definitions(__DPMDC)
-  else()
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE DeePMD::deepmd_cc)
   endif()
 endif()
 
@@ -855,120 +721,21 @@ if(DEFINED NEP_DIR)
 
   if(NEP_FOUND)
     abacus_add_feature_definitions(__NEP)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE NEP::nep)
   endif()
 endif()
 
 if(DEFINED TensorFlow_DIR)
   find_package(TensorFlow REQUIRED)
-  target_include_directories(abacus_external_deps INTERFACE ${TensorFlow_DIR}/include)
-  if(TensorFlow_FOUND)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE TensorFlow::tensorflow_cc)
-  endif()
 endif()
 
 abacus_add_feature_definitions(__FFTW3 __SELINV METIS)
 
-if(INFO)
+if(MATH_INFO)
   message(STATUS "Will gather math lib info.")
   abacus_add_feature_definitions(GATHER_INFO)
   # modifications on blas_connector and lapack_connector
 endif()
 
-include(cmake/Testing.cmake)
-
+# Target construction, final link ordering, installation, and test targets are
+# intentionally centralized in source/CMakeLists.txt.
 add_subdirectory(source)
-abacus_apply_build_options_to_dir("${CMAKE_CURRENT_SOURCE_DIR}/source")
-abacus_apply_build_options(${ABACUS_BIN_NAME})
-
-include(cmake/BuildInfo.cmake)
-setup_build_info()
-
-target_link_libraries(
-  ${ABACUS_BIN_NAME}
-  PRIVATE
-  base
-  parameter
-  cell
-  symmetry
-  md
-  planewave
-  surchem
-  neighbor
-  neighbor_search
-  io_input
-  io_basic
-  io_advanced
-  relax
-  driver
-  xc_
-  hsolver
-  elecstate
-  hamilt_general
-  module_pwdft
-  module_ofdft
-  module_stodft
-  psi
-  psi_initializer
-  psi_overall_init
-  esolver
-  vdw
-  device
-  container
-  dftu
-  deltaspin)
-if(ENABLE_EXPERIMENTAL_DFPT)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE module_dfpt)
-endif()
-if(ENABLE_LCAO)
-  target_link_libraries(
-    ${ABACUS_BIN_NAME}
-    PRIVATE
-    hamilt_lcao
-    tddft
-    orb
-    gint
-    hcontainer
-    numerical_atomic_orbitals
-    lr
-    rdmft)
-  if(USE_ELPA)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE genelpa)
-  endif()
-  if(USE_CUDA)
-    target_link_libraries(${ABACUS_BIN_NAME} PRIVATE diag_cusolver)
-  endif()
-endif()
-if(ENABLE_RAPIDJSON)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE json_output)
-endif()
-
-if (USE_SW)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${SW_MATH}/libswfft.a)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${SW_MATH}/libswscalapack.a)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${SW_MATH}/libswlapack.a)
-  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${SW_MATH}/libswblas.a)
-  list(APPEND math_libs gfortran)
-endif()
-
-# libm exists on Linux and MinGW-w64 but not in the MSVC CRT.
-if(NOT MSVC)
-  list(APPEND math_libs m)
-endif()
-target_link_libraries(${ABACUS_BIN_NAME} PRIVATE ${math_libs})
-
-install(PROGRAMS ${ABACUS_BIN_PATH}
-        TYPE BIN
-        # DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-
-# Create a symbolic link 'abacus' pointing to the actual executable.
-# Skipped on Windows: symlink creation needs elevated/developer-mode
-# privileges there and the executable carries an .exe suffix anyway.
-if(NOT WIN32)
-  install(CODE "execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink ${ABACUS_BIN_NAME} ${CMAKE_INSTALL_PREFIX}/bin/abacus WORKING_DIRECTORY ${CMAKE_INSTALL_PREFIX}/bin)")
-endif()
-
-if(ENABLE_COVERAGE)
-  coverage_evaluate()
-endif()

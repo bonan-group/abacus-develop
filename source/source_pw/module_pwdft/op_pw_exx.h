@@ -54,8 +54,7 @@ struct ExxOperatorOptions
     ExxPotentialCacheMode potential_cache_mode = ExxPotentialCacheMode::q_tile;
     std::size_t tile_budget_bytes = 0;
     std::size_t tile_estimated_peak_bytes = 0;
-    std::vector<std::map<std::string, std::string>> fock_params;
-    std::vector<std::map<std::string, std::string>> erfc_params;
+    CoulombParam coulomb_param;
 };
 
 struct ExxLocalEnergyKPoint
@@ -291,6 +290,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     void set_wg(const ModuleBase::matrix *wg_in) { wg = wg_in; }
 
     int get_batch_fft_size() const;
+
+    bool uses_separate_loop() const { return this->options.separate_loop; }
 
     void construct_ace() const;
 
@@ -581,7 +582,8 @@ void get_exx_potential(const K_Vectors* kv,
                        double ucell_omega,
                        int ik,
                        int iq,
-                       bool is_stress);
+                       bool is_stress,
+                       const CoulombParam& coulomb_param);
 
 template <typename Real, typename Device>
 void get_exx_potential(const K_Vectors* kv,
@@ -595,7 +597,8 @@ void get_exx_potential(const K_Vectors* kv,
                        double ucell_omega,
                        const K_Vectors::ExxFullKPoint& kpoint,
                        const K_Vectors::ExxFullQPoint& qpoint,
-                       bool is_stress);
+                       bool is_stress,
+                       const CoulombParam& coulomb_param);
 
 template <typename Real, typename Device>
 void get_exx_stress_potential(const K_Vectors* kv,
@@ -606,7 +609,8 @@ void get_exx_stress_potential(const K_Vectors* kv,
                               bool gamma_extrapolation,
                               double ucell_omega,
                               int ik,
-                              int iq);
+                              int iq,
+                              const CoulombParam& coulomb_param);
 
 template <typename Real, typename Device>
 void get_exx_stress_potential(const K_Vectors* kv,
@@ -617,7 +621,8 @@ void get_exx_stress_potential(const K_Vectors* kv,
                               bool gamma_extrapolation,
                               double ucell_omega,
                               const K_Vectors::ExxFullKPoint& kpoint,
-                              const K_Vectors::ExxFullQPoint& qpoint);
+                              const K_Vectors::ExxFullQPoint& qpoint,
+                              const CoulombParam& coulomb_param);
 
 double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
                       double erfc_omega,

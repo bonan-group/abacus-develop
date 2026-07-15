@@ -3,7 +3,6 @@
 #include "source_base/parallel_device.h"
 #include "source_base/parallel_reduce.h"
 #include "source_io/module_parameter/parameter.h"
-#include "source_hamilt/module_xc/exx_info.h"
 
 namespace hamilt
 {
@@ -325,7 +324,7 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_ace(psi::Psi<T, Device>* ppsi_) 
     psi::Psi<T, Device> psi_ = *ppsi_;
     int* ik_ = const_cast<int*>(&this->ik);
     int ik_save = this->ik;
-    Real hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    const Real hybrid_alpha = static_cast<Real>(this->options.hybrid_alpha);
     std::size_t band_basis_count = 0;
     if (!checked_exx_size_product(static_cast<std::size_t>(psi_.get_nbands()),
                                   static_cast<std::size_t>(psi_.get_nbasis()),

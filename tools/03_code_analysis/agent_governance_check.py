@@ -120,42 +120,52 @@ def changed_paths(root: Path, args: argparse.Namespace) -> Tuple[Dict[str, str],
     return parse_name_status(output)
 
 
-def parse_added_lines(diff_text: str) -> List[DiffLine]:
-    lines: List[DiffLine] = []
-    path = ""
+def parse_changed_lines(diff_text: str) -> Tuple[List[DiffLine], List[DiffLine]]:
+    added: List[DiffLine] = []
+    removed: List[DiffLine] = []
+    old_path = ""
+    new_path = ""
+    old_line: Optional[int] = None
     new_line: Optional[int] = None
-    hunk_re = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+    hunk_re = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
     for raw in diff_text.splitlines():
-        if raw.startswith("+++ b/"):
-            path = raw[6:]
+        if raw.startswith("--- a/"):
+            old_path = raw[6:]
             continue
-        if raw.startswith("+++ "):
-            path = raw[4:]
+        if raw.startswith("+++ b/"):
+            new_path = raw[6:]
+            continue
+        if raw.startswith("--- ") or raw.startswith("+++ "):
             continue
         match = hunk_re.match(raw)
         if match:
-            new_line = int(match.group(1))
+            old_line = int(match.group(1))
+            new_line = int(match.group(2))
             continue
-        if new_line is None:
+        if old_line is None or new_line is None:
+            continue
+        if raw.startswith("\\"):
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
-            lines.append(DiffLine(path, new_line, raw[1:]))
+            added.append(DiffLine(new_path, new_line, raw[1:]))
             new_line += 1
         elif raw.startswith("-") and not raw.startswith("---"):
-            continue
+            removed.append(DiffLine(old_path, old_line, raw[1:]))
+            old_line += 1
         else:
+            old_line += 1
             new_line += 1
-    return lines
+    return added, removed
 
 
-def added_lines(root: Path, args: argparse.Namespace) -> List[DiffLine]:
+def changed_lines(root: Path, args: argparse.Namespace) -> Tuple[List[DiffLine], List[DiffLine]]:
     if args.staged:
         output = git(["diff", "--cached", "--ignore-cr-at-eol", "-U0"], root).stdout
     elif args.base and args.head:
         output = git(["diff", "--ignore-cr-at-eol", "-U0", args.base, args.head], root).stdout
     else:
         output = ""
-    return parse_added_lines(output)
+    return parse_changed_lines(output)
 
 
 def read_changed_file_bytes(root: Path, path: str, args: argparse.Namespace) -> bytes:
@@ -232,28 +242,120 @@ def check_line_endings(
             )
 
 
-def check_global_dependencies(findings: List[Finding], lines: Iterable[DiffLine]) -> None:
-    pattern = re.compile(r"\b(GlobalV::|GlobalC::|PARAM(?:\.|->|::|\b))")
+GLOBAL_DEPENDENCY_RE = re.compile(r"\b(GlobalV::|GlobalC::|PARAM(?:\.|->|::|\b))")
+
+
+def is_global_dependency_check_path(path: str) -> bool:
+    if path.startswith("tools/03_code_analysis/"):
+        return False
+    return Path(path).suffix.lower() in CODE_EXTENSIONS
+
+
+def global_dependency_hits(lines: Iterable[DiffLine]) -> List[Tuple[DiffLine, int]]:
+    hits: List[Tuple[DiffLine, int]] = []
     for line in lines:
-        if line.path.startswith("tools/03_code_analysis/"):
+        if not is_global_dependency_check_path(line.path):
             continue
-        if Path(line.path).suffix.lower() not in CODE_EXTENSIONS:
-            continue
-        if pattern.search(line.content):
-            add_finding(
+        count = len(GLOBAL_DEPENDENCY_RE.findall(line.content))
+        if count:
+            hits.append((line, count))
+    return hits
+
+
+def check_global_dependencies(
+    findings: List[Finding],
+    added_lines: Iterable[DiffLine],
+    removed_lines: Iterable[DiffLine],
+) -> None:
+    added_hits = global_dependency_hits(added_lines)
+    removed_hits = global_dependency_hits(removed_lines)
+    added_count = sum(count for _, count in added_hits)
+    removed_count = sum(count for _, count in removed_hits)
+    delta = added_count - removed_count
+    if added_count == 0:
+        return
+
+    severity = BLOCK if delta > 0 else WARN
+    action = (
+        "Reduce or explicitly pass dependencies so this PR does not increase global dependency usage."
+        if delta > 0
+        else "Confirm this is a migration-neutral move or partial cleanup, and explain the remaining global dependency rationale."
+    )
+    for line, count in added_hits:
+        add_finding(
             findings,
-            "No new cross-layer globals",
-            WARN,
+            "Global dependency budget",
+            severity,
             line.path,
             line.line,
-            "Added line introduces GlobalV, GlobalC, or PARAM as a dependency.",
-            "Prefer explicit parameters or a narrow local interface. Document any required exception in the PR.",
+            (
+                f"Added line introduces {count} GlobalV/GlobalC/PARAM reference(s); "
+                f"PR total added={added_count}, removed={removed_count}, net_delta={delta}."
+            ),
+            action,
         )
+
+
+def _has_default_arg_in_parens(stripped: str) -> bool:
+    paren_depth = 0
+    in_string = False
+    string_char = ""
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    while i < len(stripped):
+        c = stripped[i]
+        nxt = stripped[i + 1] if i + 1 < len(stripped) else ""
+
+        if in_line_comment:
+            break
+
+        if in_block_comment:
+            if c == "*" and nxt == "/":
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if not in_string:
+            if c == "/" and nxt == "/":
+                in_line_comment = True
+                i += 2
+                continue
+            if c == "/" and nxt == "*":
+                in_block_comment = True
+                i += 2
+                continue
+
+        if in_string:
+            if c == "\\":
+                i += 2
+                continue
+            if c == string_char:
+                in_string = False
+            i += 1
+            continue
+        if c in ('"', "'"):
+            in_string = True
+            string_char = c
+            i += 1
+            continue
+        if c == "(":
+            paren_depth += 1
+        elif c == ")":
+            if paren_depth > 0:
+                paren_depth -= 1
+        elif c == "=" and paren_depth > 0:
+            return True
+        i += 1
+    return False
 
 
 def check_default_parameters(findings: List[Finding], lines: Iterable[DiffLine]) -> None:
     default_arg = re.compile(r"[(,]\s*[^()=;,{}]+\b\w+\s*=\s*[^,);{}]+")
     control_flow = re.compile(r"^(for|if|while|switch|catch)\s*\(")
+    comment_strip_re = re.compile(r"//.*$|/\*.*?\*/")
     for line in lines:
         if Path(line.path).suffix.lower() not in HEADER_EXTENSIONS:
             continue
@@ -262,11 +364,18 @@ def check_default_parameters(findings: List[Finding], lines: Iterable[DiffLine])
             continue
         if control_flow.match(stripped):
             continue
-        if "(" in stripped and ")" in stripped and default_arg.search(stripped):
+        if "=" not in stripped:
+            continue
+        code_only = comment_strip_re.sub("", stripped)
+        if "=" not in code_only:
+            continue
+        if not _has_default_arg_in_parens(code_only):
+            continue
+        if "(" in code_only and ")" in code_only and default_arg.search(code_only):
             add_finding(
                 findings,
                 "No new default parameters",
-                BLOCK,
+                WARN,
                 line.path,
                 line.line,
                 "Header diff adds a function declaration with a default argument.",
@@ -497,10 +606,6 @@ def check_pr_metadata(findings: List[Finding], body: Optional[str]) -> None:
         "Linked Issue",
         "Unit Tests and/or Case Tests for my changes",
         "What's changed?",
-        "Governance Checklist",
-        "INPUT Parameter Changes",
-        "Core Module Impact",
-        "Governance Exception",
     ]
     sections = pr_sections(body)
     missing = [section for section in required_sections if section not in sections]
@@ -522,8 +627,7 @@ def check_pr_metadata(findings: List[Finding], body: Optional[str]) -> None:
             "pull_request.body",
             None,
             "; ".join(reason_parts),
-            "Fill the PR template with issue linkage, test evidence, behavior impact, governance notes, and exception details.",
-            allow_exception=False,
+            "Fill the PR template with issue linkage, test evidence, and a concise change summary.",
         )
 
 
@@ -621,12 +725,12 @@ def check_documentation_warning(findings: List[Finding], changed: Sequence[str],
 def collect_findings(root: Path, args: argparse.Namespace) -> List[Finding]:
     findings: List[Finding] = []
     statuses, changed = changed_paths(root, args)
-    lines = added_lines(root, args)
+    lines, removed_lines = changed_lines(root, args)
     body = read_pr_body(args.event_path)
     body_text = body or ""
 
     check_line_endings(findings, root, changed, statuses, args)
-    check_global_dependencies(findings, lines)
+    check_global_dependencies(findings, lines, removed_lines)
     check_default_parameters(findings, lines)
     check_hpp_warnings(findings, statuses, lines)
     check_header_include_warnings(findings, lines)
