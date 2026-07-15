@@ -54,10 +54,6 @@ Before this work, the GPU tau stage transformed all spin channels but treated th
 
   Require a non-increasing global dependency budget and record any migration-neutral warnings.
 
-## Execution Record
-
-All ten implementation tasks were completed on 2026-07-15. Exact build, test, runtime, memcheck, documentation, and governance evidence is recorded in `.planning/2026-07-13-mixing-support-matrix/progress.md`.
-
 ## Verification Criteria
 
 - The eligibility regression passes for all nine combinations of three supported mixing methods and three supported spin configurations with double grid and active tau mixing.

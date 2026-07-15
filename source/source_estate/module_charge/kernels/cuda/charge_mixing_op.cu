@@ -485,6 +485,7 @@ void kerker_screen_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
         reinterpret_cast<thrust::complex<FPTYPE>*>(drhog),
         gg, gg0, gg0_min, npw, nspin);
 
+    CHECK_LAST_CUDA_ERROR("kerker_screen_kernel launch");
     CHECK_CUDA_SYNC();
 }
 
@@ -512,6 +513,7 @@ FPTYPE inner_product_recip_hartree_op<FPTYPE, base_device::DEVICE_GPU>::operator
         reinterpret_cast<const thrust::complex<FPTYPE>*>(rhog2),
         gg, workspace, npw, ig_gge0, tpiba2);
 
+    CHECK_LAST_CUDA_ERROR("inner_product_hartree_kernel launch");
     CHECK_CUDA_SYNC();
 
     // Final reduction using thrust
@@ -533,6 +535,7 @@ void pack_spin_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
         reinterpret_cast<const thrust::complex<FPTYPE>*>(spin_data),
         npw,
         nspin);
+    CHECK_LAST_CUDA_ERROR("pack_spin_recip_kernel launch");
     CHECK_CUDA_SYNC();
 }
 
@@ -550,6 +553,7 @@ void unpack_spin_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
         reinterpret_cast<const thrust::complex<FPTYPE>*>(packed),
         npw,
         nspin);
+    CHECK_LAST_CUDA_ERROR("unpack_spin_recip_kernel launch");
     CHECK_CUDA_SYNC();
 }
 
@@ -576,6 +580,7 @@ void split_double_grid_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
         smooth_npw,
         dense_npw,
         nspin);
+    CHECK_LAST_CUDA_ERROR("split_double_grid_recip_kernel launch");
     CHECK_CUDA_SYNC();
 }
 
@@ -602,6 +607,7 @@ void combine_double_grid_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
         smooth_npw,
         dense_npw,
         nspin);
+    CHECK_LAST_CUDA_ERROR("combine_double_grid_recip_kernel launch");
     CHECK_CUDA_SYNC();
 }
 
@@ -651,6 +657,7 @@ void inner_product_recip_hartree_batch_op<FPTYPE, base_device::DEVICE_GPU>::oper
         num_blocks,
         ig_gge0,
         tpiba2);
+    CHECK_LAST_CUDA_ERROR("inner_product_hartree_batch_partial_kernel launch");
     CHECK_CUDA_SYNC();
 
     inner_product_hartree_batch_final_kernel<<<npairs, threads, shared_bytes>>>(
@@ -658,6 +665,7 @@ void inner_product_recip_hartree_batch_op<FPTYPE, base_device::DEVICE_GPU>::oper
         result,
         npairs,
         num_blocks);
+    CHECK_LAST_CUDA_ERROR("inner_product_hartree_batch_final_kernel launch");
     CHECK_CUDA_SYNC();
 }
 
@@ -717,6 +725,7 @@ void inner_product_recip_hartree_spin_batch_op<FPTYPE, base_device::DEVICE_GPU>:
         include_magnetism,
         charge_fac,
         mag_fac);
+    CHECK_LAST_CUDA_ERROR("inner_product_hartree_spin_batch_partial_kernel launch");
     CHECK_CUDA_SYNC();
 
     inner_product_hartree_batch_final_kernel<<<npairs, threads, shared_bytes>>>(
@@ -724,6 +733,7 @@ void inner_product_recip_hartree_spin_batch_op<FPTYPE, base_device::DEVICE_GPU>:
         result,
         npairs,
         num_blocks);
+    CHECK_LAST_CUDA_ERROR("inner_product_hartree_batch_final_kernel launch");
     CHECK_CUDA_SYNC();
 }
 

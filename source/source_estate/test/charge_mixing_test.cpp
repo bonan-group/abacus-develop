@@ -7,6 +7,8 @@
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_io/module_parameter/parameter.h"
 
+#include <sstream>
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -471,6 +473,18 @@ TEST_F(ChargeMixingTest, GpuResidentMixingRejectsUnsupportedConfigurations)
     XC_Functional::ked_flag = false;
 }
 
+TEST_F(ChargeMixingTest, GpuResidentMixingActiveMessageIsLoggedOnce)
+{
+    Charge_Mixing mixing;
+    std::ostringstream running_log;
+    mixing.running_log_ = &running_log;
+
+    mixing.log_gpu_charge_mixing_active();
+    mixing.log_gpu_charge_mixing_active();
+
+    EXPECT_EQ(running_log.str(), " INFO: Using GPU-resident reciprocal charge mixing.\n");
+}
+
 TEST_F(ChargeMixingTest, MixingAngleDoubleGridMatchesPlainMixReference)
 {
     const int nspin = 4;
@@ -583,6 +597,142 @@ TEST_F(ChargeMixingTest, MixingAngleDoubleGridMatchesPlainMixReference)
             EXPECT_NEAR(rho[is][ir] / mixed_mag,
                         rho_original[is * nrxx + ir] / original_mag,
                         1e-10);
+        }
+    }
+
+    set_angle_test_context(1, false, 1, -10.0);
+}
+
+TEST_F(ChargeMixingTest, MixingAngleDoubleGridHistoryHandlesSmallMagnetization)
+{
+    const int nspin = 4;
+    const int nrxx = pw_dbasis.nrxx;
+    const int npw = pw_dbasis.npw;
+    set_angle_test_context(nspin, true, 1, 1.0);
+    XC_Functional::ked_flag = false;
+
+    for (const std::string mode : {"broyden", "pulay"})
+    {
+        std::vector<double> rho_data(nspin * nrxx);
+        std::vector<double> rho_save_data(nspin * nrxx);
+        std::vector<std::complex<double>> rhog_data(nspin * npw);
+        std::vector<std::complex<double>> rhog_save_data(nspin * npw);
+        std::vector<double*> rho(nspin);
+        std::vector<double*> rho_save(nspin);
+        std::vector<std::complex<double>*> rhog(nspin);
+        std::vector<std::complex<double>*> rhog_save(nspin);
+        for (int is = 0; is < nspin; ++is)
+        {
+            rho[is] = rho_data.data() + is * nrxx;
+            rho_save[is] = rho_save_data.data() + is * nrxx;
+            rhog[is] = rhog_data.data() + is * npw;
+            rhog_save[is] = rhog_save_data.data() + is * npw;
+        }
+
+        Charge angle_charge;
+        angle_charge.set_rhopw(&pw_dbasis);
+        angle_charge.rho = rho.data();
+        angle_charge.rho_save = rho_save.data();
+        angle_charge.rhog = rhog.data();
+        angle_charge.rhog_save = rhog_save.data();
+        angle_charge.nspin = nspin;
+
+        Charge_Mixing mixing;
+        mixing.set_rhopw(&pw_basis, &pw_dbasis);
+        mixing.set_mixing(mode,
+                          0.6,
+                          2,
+                          0.0,
+                          false,
+                          0.4,
+                          0.0,
+                          0.1,
+                          1.0,
+                          false,
+                          ucell.omega,
+                          ucell.tpiba,
+                          true);
+        mixing.init_mixing();
+
+        const int history_steps = (mode == "pulay") ? 3 : 2;
+        for (int iter = 0; iter < history_steps; ++iter)
+        {
+            for (int ir = 0; ir < nrxx; ++ir)
+            {
+                const double history_shape = 0.00001 * iter * ir * ir;
+                rho[0][ir] = 0.4 + 0.02 * iter + 0.001 * ir + history_shape;
+                rho_save[0][ir] = 0.3 + 0.01 * iter + 0.0005 * ir - 0.5 * history_shape;
+                for (int is = 1; is < nspin; ++is)
+                {
+                    rho[is][ir] = 0.05 * (is + iter) + 0.002 * (is + 1) * ir
+                                  + is * history_shape;
+                    rho_save[is][ir] = 0.03 * (nspin - is + iter) + 0.001 * is * ir
+                                       - 0.25 * is * history_shape;
+                }
+            }
+            for (int is = 1; is < nspin; ++is)
+            {
+                rho[is][0] = 0.0;
+                rho[is][1] = 1.0e-14 * is;
+            }
+
+            const std::vector<double> original = rho_data;
+            for (int is = 0; is < nspin; ++is)
+            {
+                pw_dbasis.real2recip(rho[is], rhog[is]);
+                pw_dbasis.real2recip(rho_save[is], rhog_save[is]);
+            }
+
+            mixing.mix_rho(&angle_charge);
+
+            for (int ir = 0; ir < nrxx; ++ir)
+            {
+                for (int is = 0; is < nspin; ++is)
+                {
+                    EXPECT_TRUE(std::isfinite(rho[is][ir])) << "mode=" << mode << ", iter=" << iter;
+                }
+
+                double original_norm2 = 0.0;
+                double mixed_norm2 = 0.0;
+                for (int is = 1; is < nspin; ++is)
+                {
+                    const double value = original[is * nrxx + ir];
+                    original_norm2 += value * value;
+                    mixed_norm2 += rho[is][ir] * rho[is][ir];
+                }
+                if (std::sqrt(original_norm2) < 1.0e-10)
+                {
+                    for (int is = 1; is < nspin; ++is)
+                    {
+                        EXPECT_DOUBLE_EQ(rho[is][ir], original[is * nrxx + ir]);
+                    }
+                    continue;
+                }
+
+                const double direction_scale = std::sqrt(original_norm2 * mixed_norm2);
+                ASSERT_GT(direction_scale, 0.0);
+                double normalized_dot = 0.0;
+                for (int is = 1; is < nspin; ++is)
+                {
+                    normalized_dot += rho[is][ir] * original[is * nrxx + ir] / direction_scale;
+                }
+                EXPECT_GT(normalized_dot, 0.0);
+                EXPECT_NEAR((rho[1][ir] * original[2 * nrxx + ir]
+                                 - rho[2][ir] * original[nrxx + ir])
+                                / direction_scale,
+                            0.0,
+                            1.0e-10);
+                EXPECT_NEAR((rho[1][ir] * original[3 * nrxx + ir]
+                                 - rho[3][ir] * original[nrxx + ir])
+                                / direction_scale,
+                            0.0,
+                            1.0e-10);
+                EXPECT_NEAR((rho[2][ir] * original[3 * nrxx + ir]
+                                 - rho[3][ir] * original[2 * nrxx + ir])
+                                / direction_scale,
+                            0.0,
+                            1.0e-10);
+            }
         }
     }
 

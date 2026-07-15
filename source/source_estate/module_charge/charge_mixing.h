@@ -161,6 +161,7 @@ class Charge_Mixing
   private:
     static void validate_gpu_fft_poolnproc(const ModulePW::PW_Basis* rhopw, const std::string& caller);
     bool can_use_gpu_resident_mixing(const Charge* chr) const;
+    void log_gpu_charge_mixing_active();
     void log_gpu_charge_mixing_fallback(const std::string& reason);
 
     // mixing_data
@@ -199,6 +200,7 @@ class Charge_Mixing
     /// Runtime device selection: "cpu" or "gpu"
     std::string device_ = "cpu";
     std::ostream* running_log_ = nullptr;
+    bool gpu_charge_mixing_active_logged_ = false;
     bool gpu_charge_mixing_fallback_logged_ = false;
 
 #if __CUDA
@@ -243,7 +245,7 @@ class Charge_Mixing
     void free_mixing_gpu();
 
     /// Full GPU-resident charge mixing path
-    void mix_rho_recip_gpu(Charge* chr);
+    void mix_rho_recip_gpu(Charge* chr, bool include_magnetism);
 
     /// GPU inner product with Hartree-like weighting
     double inner_product_recip_hartree_gpu(const std::complex<double>* rhog1_d,

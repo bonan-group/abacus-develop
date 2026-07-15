@@ -2,7 +2,6 @@
 
 #if __CUDA
 
-#include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_base/module_mixing/kernels/mixing_op.h"
@@ -380,7 +379,7 @@ void Charge_Mixing::build_recip_hartree_gamma_gpu(
 #endif
 }
 
-void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
+void Charge_Mixing::mix_rho_recip_gpu(Charge* chr, const bool include_magnetism)
 {
     ModuleBase::TITLE("Charge_Mixing", "mix_rho_recip_gpu");
     ModuleBase::timer::start("Charge_Mixing", "mix_rho_recip_gpu");
@@ -397,19 +396,7 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
 
     const int npw = this->rhopw->npw;
 
-    // Step 1: Ensure rho is on GPU and perform FFT to get rhog
-    // (This should already be done in get_drho, but we ensure it here)
-    chr->sync_rho_to_device<base_device::DEVICE_GPU>();
-    chr->sync_rho_save_to_device<base_device::DEVICE_GPU>();
-
-    // FFT: rho_d -> rhog_d and rho_save_d -> rhog_save_d
-    for (int is = 0; is < nspin; ++is)
-    {
-        this->rhodpw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
-            chr->get_rho_d(is), chr->get_rhog_d(is));
-        this->rhodpw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
-            chr->get_rho_save_d(is), chr->get_rhog_save_d(is));
-    }
+    // get_drho() prepares the dense reciprocal rho and rho_save buffers immediately before reciprocal mixing.
 
     const bool spinful_mixing = (nspin > 1);
     const bool spinful_double_grid = (spinful_mixing && double_grid);
@@ -538,7 +525,6 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr)
 
     // Step 3: GPU batched inner product builders.
     const bool gamma_only = this->rhopw->gamma_only;
-    const bool include_magnetism = (nspin != 4 || PARAM.globalv.domag || PARAM.globalv.domag_z);
     auto build_beta_gpu = [this, nspin, gamma_only, include_magnetism](
                               const std::complex<double>* vectors_d,
                               int nvec,

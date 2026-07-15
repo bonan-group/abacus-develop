@@ -154,6 +154,16 @@ void Charge_Mixing::log_gpu_charge_mixing_fallback(const std::string& reason)
     this->gpu_charge_mixing_fallback_logged_ = true;
 }
 
+void Charge_Mixing::log_gpu_charge_mixing_active()
+{
+    if (this->gpu_charge_mixing_active_logged_ || this->running_log_ == nullptr || !(*this->running_log_))
+    {
+        return;
+    }
+    *this->running_log_ << " INFO: Using GPU-resident reciprocal charge mixing." << std::endl;
+    this->gpu_charge_mixing_active_logged_ = true;
+}
+
 bool Charge_Mixing::can_use_gpu_resident_mixing(const Charge* chr) const
 {
     if (!this->mixing_gpu_enabled || this->device_ != "gpu" || chr == nullptr || chr->get_device() != "gpu")

@@ -1,0 +1,3 @@
+mixing_plain_spin2_double_grid
+mixing_broyden_spin4_double_grid
+mixing_pulay_tau_spin2_double_grid

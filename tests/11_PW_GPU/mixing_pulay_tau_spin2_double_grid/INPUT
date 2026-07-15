@@ -1,0 +1,27 @@
+INPUT_PARAMETERS
+suffix             autotest
+calculation        scf
+basis_type         pw
+device             gpu
+precision          double
+pseudo_dir         ../../PP_ORB
+symmetry           0
+init_wfc           random
+pw_seed            1
+nspin              2
+dft_functional     scan
+ecutwfc            20
+ecutrho            100
+nbands             12
+scf_thr            1e-12
+scf_nmax           3
+smearing_method    gauss
+smearing_sigma     0.01
+mixing_type        pulay
+mixing_ndim        2
+mixing_beta        0.3
+mixing_beta_mag    0.8
+mixing_tau         true
+mixing_gpu         true
+cal_force          false
+cal_stress         false

@@ -21,11 +21,14 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
     if (this->can_use_gpu_resident_mixing(chr))
     {
         validate_gpu_fft_poolnproc(chr->rhopw, "Charge_Mixing::mix_rho_recip");
+        this->log_gpu_charge_mixing_active();
+        // Resolve the legacy SCF magnetic policy at this control boundary and pass it explicitly to GPU helpers.
+        const bool include_magnetism = (nspin != 4 || PARAM.globalv.domag || PARAM.globalv.domag_z);
 
         // Restore timer context for GPU path
         ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip");
 
-        mix_rho_recip_gpu(chr);
+        mix_rho_recip_gpu(chr, include_magnetism);
         return;
     }
     if (device_ == "gpu")
@@ -192,7 +195,6 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
     {
         // special broyden mixing for {rho, |m|} proposed by J. Phys. Soc. Jpn. 82 (2013) 114706
         // here only consider the case of mixing_angle = 1, which mean only change |m| and keep angle fixed
-        // old support see mix_rho_recip()
         const bool use_double_grid = double_grid;
         const int smooth_npw = this->rhopw->npw;
         const int dense_npw = use_double_grid ? this->rhodpw->npw : this->rhopw->npw;
@@ -315,7 +317,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
             {
                 continue;
             }
-            const double rescale_tmp = rho_magabs[ir] / norm;
+            const double rescale_tmp = std::abs(rho_magabs[ir]) / norm;
             chr->rho[1][ir] *= rescale_tmp;
             chr->rho[2][ir] *= rescale_tmp;
             chr->rho[3][ir] *= rescale_tmp;

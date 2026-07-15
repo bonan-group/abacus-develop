@@ -68,8 +68,7 @@ void ESolver_KS::before_all_runners(UnitCell& ucell, const Input_para& inp)
     // - GPU FFT for rho <-> rhog transforms (PW_Basis now uses device for FFT)
     // - GPU kernels for Kerker screening and inner products
     // - GPU memory for charge density arrays
-    // Note: The mixing history (Broyden/Pulay) still runs on CPU, but FFT and
-    // Kerker/inner_product operations use GPU when available.
+    // Supported reciprocal mixing histories and kernels remain resident on GPU.
     p_chgmix->set_device(inp.device);
 
     //! 4) setup plane wave for electronic wave functions
