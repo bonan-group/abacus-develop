@@ -1357,7 +1357,7 @@ void PW_Basis_K::recip_to_real_batch(const Device* ctx,
     base_device::memory::set_memory_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>()(
         batch_in,
         0,
-        batch_count * nxyz);
+        static_cast<std::size_t>(batch_count) * static_cast<std::size_t>(nxyz));
 
     // Populate FFT input for all batch elements (all share same ik)
     const int startig = ik * this->npwk_max;

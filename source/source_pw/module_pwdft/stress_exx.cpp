@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <iomanip>
 #include <map>
 #include <string>
 #include <type_traits>
@@ -25,9 +26,10 @@ namespace
 hamilt::ExxOperatorOptions make_stress_exx_options()
 {
     hamilt::ExxOperatorOptions options;
-    options.batch_fft_size = std::max(1, PARAM.inp.exx_batch_fft_size);
-    options.band_tile_size = std::max(1, PARAM.inp.exx_band_tile_size);
-    options.q_tile_size = std::max(1, PARAM.inp.exx_q_tile_size);
+    options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
+    options.band_tile_size = PARAM.inp.exx_band_tile_size;
+    options.q_tile_size = PARAM.inp.exx_q_tile_size;
+    options.configured_nbands = PARAM.inp.nbands;
     options.nspin = PARAM.inp.nspin;
     options.ecutexx = PARAM.inp.ecutexx;
     options.ecutrho = PARAM.inp.ecutrho;
@@ -35,7 +37,51 @@ hamilt::ExxOperatorOptions make_stress_exx_options()
     options.exxace = PARAM.inp.exxace;
     options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
     options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    options.auto_tiling = PARAM.inp.exx_auto_tiling;
+    options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
     return options;
+}
+
+std::size_t max_active_exx_star_size(const K_Vectors& kv)
+{
+    std::map<std::pair<int, int>, std::size_t> star_sizes;
+    std::size_t max_size = 1;
+    for (const auto& point: kv.exx_full_k_map)
+    {
+        if (point.active)
+        {
+            max_size = std::max(max_size, ++star_sizes[std::make_pair(point.rep_pool, point.rep_local_index)]);
+        }
+    }
+    return max_size;
+}
+
+bool estimate_stress_fixed_bytes(std::size_t nrxx,
+                                 std::size_t npw,
+                                 std::size_t npwk_max,
+                                 std::size_t nks,
+                                 std::size_t complex_bytes,
+                                 std::size_t real_bytes,
+                                 std::size_t& result)
+{
+    std::size_t complex_count = 0;
+    std::size_t real_count = 0;
+    std::size_t map_count = 0;
+    std::size_t offset_count = 0;
+    std::size_t complex_storage = 0;
+    std::size_t real_storage = 0;
+    std::size_t map_storage = 0;
+    std::size_t offset_storage = 0;
+    return hamilt::checked_exx_size_sum({npwk_max, nrxx, npw}, complex_count)
+           && hamilt::checked_exx_size_product(6, npw, real_count)
+           && hamilt::checked_exx_size_sum({real_count, 6}, real_count)
+           && hamilt::checked_exx_size_product({2, nks, npwk_max}, map_count)
+           && hamilt::checked_exx_size_sum({nks, 1}, offset_count)
+           && hamilt::checked_exx_size_product(complex_count, complex_bytes, complex_storage)
+           && hamilt::checked_exx_size_product(real_count, real_bytes, real_storage)
+           && hamilt::checked_exx_size_product(map_count, sizeof(int), map_storage)
+           && hamilt::checked_exx_size_product(offset_count, sizeof(int), offset_storage)
+           && hamilt::checked_exx_size_sum({complex_storage, real_storage, map_storage, offset_storage}, result);
 }
 } // namespace
 
@@ -47,7 +93,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                            const K_Vectors *p_kv,
                                            const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in, const UnitCell& ucell)
 {
-    const hamilt::ExxOperatorOptions exx_options = make_stress_exx_options();
+    hamilt::ExxOperatorOptions exx_options = make_stress_exx_options();
     bool gamma_extrapolation = exx_options.gamma_extrapolation;
     bool is_mp = p_kv->get_is_mp();
 #ifdef __MPI
@@ -122,9 +168,6 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
 #endif
         rhopw_exx_owned->initgrids(rhopw->lat0, rhopw->latvec, ecut_exx);
         rhopw_exx_owned->initparameters(rhopw->gamma_only, ecut_exx, rhopw->distribution_type, rhopw->xprime);
-        rhopw_exx_owned->setuptransform();
-        rhopw_exx_owned->collect_local_pw();
-        rhopw_exx = rhopw_exx_owned;
 
         wfcpw_exx = new ModulePW::PW_Basis_K(wfcpw->get_device(), exx_precision);
         wfcpw_exx->fft_bundle.setfft(wfcpw->get_device(), exx_precision);
@@ -138,8 +181,80 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                   wfcpw->kvec_d,
                                   wfcpw->distribution_type,
                                   wfcpw->xprime);
+        int active_q_count = 0;
+        for (const auto& point: p_kv->exx_full_q_map)
+        {
+            active_q_count += point.active ? 1 : 0;
+        }
+        hamilt::ExxTilePolicyInput tile_input;
+        tile_input.auto_tiling = exx_options.auto_tiling;
+        tile_input.workload = hamilt::ExxTileWorkload::stress;
+        tile_input.device = wfcpw->get_device();
+        tile_input.precision = exx_precision;
+        tile_input.memory_budget_mb = exx_options.tile_memory_budget_mb;
+        tile_input.nbands = std::max(1, exx_options.configured_nbands);
+        tile_input.active_q_count = std::max(1, active_q_count);
+        tile_input.max_star_size = max_active_exx_star_size(*p_kv);
+        tile_input.nrxx = static_cast<std::size_t>(rhopw_exx_owned->nrxx);
+        tile_input.npw = static_cast<std::size_t>(rhopw_exx_owned->npw);
+        tile_input.npwk_max = static_cast<std::size_t>(wfcpw_exx->npwk_max);
+        tile_input.target_npwk_max = static_cast<std::size_t>(wfcpw->npwk_max);
+        tile_input.fft_nx = rhopw_exx_owned->nx;
+        tile_input.fft_ny = rhopw_exx_owned->ny;
+        tile_input.fft_nz = rhopw_exx_owned->nz;
+        tile_input.requested_batch_fft_size = exx_options.batch_fft_size;
+        tile_input.requested_band_tile_size = exx_options.band_tile_size;
+        tile_input.requested_q_tile_size = exx_options.q_tile_size;
+        if (!estimate_stress_fixed_bytes(tile_input.nrxx,
+                                         tile_input.npw,
+                                         tile_input.npwk_max,
+                                         static_cast<std::size_t>(wfcpw_exx->nks),
+                                         sizeof(std::complex<FPTYPE>),
+                                         sizeof(FPTYPE),
+                                         tile_input.fixed_scratch_bytes))
+        {
+            ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                                     "PW EXX stress fixed memory estimate overflows size_t");
+        }
+        const hamilt::ExxTilePolicyResult tile_result = hamilt::choose_exx_tiles(tile_input);
+        if (!tile_result.fits)
+        {
+            const std::size_t required_bytes = tile_result.requested_bytes > 0
+                                                   ? tile_result.requested_bytes
+                                                   : tile_result.minimum_required_bytes;
+            ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                                     "PW EXX stress tile memory budget is too small: budget bytes = "
+                                         + std::to_string(tile_result.budget_bytes)
+                                         + ", required bytes = " + std::to_string(required_bytes));
+        }
+        exx_options.batch_fft_size = tile_result.batch_fft_size;
+        exx_options.band_tile_size = tile_result.band_tile_size;
+        exx_options.q_tile_size = tile_result.q_tile_size;
+        exx_options.potential_cache_mode = tile_result.cache_mode;
+        exx_options.tile_budget_bytes = tile_result.budget_bytes;
+        exx_options.tile_estimated_peak_bytes = tile_result.estimated_peak_bytes;
+
+        rhopw_exx_owned->setuptransform(exx_options.batch_fft_size);
+        rhopw_exx_owned->collect_local_pw();
+        rhopw_exx = rhopw_exx_owned;
         wfcpw_exx->setuptransform(exx_options.batch_fft_size);
         wfcpw_exx->collect_local_pw();
+        if (GlobalV::MY_RANK == 0)
+        {
+            const double bytes_per_mib = 1024.0 * 1024.0;
+            GlobalV::ofs_running << " PW EXX stress tiling: mode = "
+                                 << (exx_options.auto_tiling ? "automatic" : "manual")
+                                 << ", budget = " << std::fixed << std::setprecision(1)
+                                 << static_cast<double>(exx_options.tile_budget_bytes) / bytes_per_mib
+                                 << " MiB, batch = " << exx_options.batch_fft_size
+                                 << ", band = " << exx_options.band_tile_size
+                                 << ", q = " << exx_options.q_tile_size
+                                 << ", cache = "
+                                 << hamilt::exx_potential_cache_mode_name(exx_options.potential_cache_mode)
+                                 << ", estimated peak = "
+                                 << static_cast<double>(exx_options.tile_estimated_peak_bytes) / bytes_per_mib
+                                 << " MiB" << std::defaultfloat << std::endl;
+        }
         if (rhopw_exx->nrxx != wfcpw_exx->nrxx)
         {
             ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
@@ -154,9 +269,22 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
         }
 
         exx_to_wfc_offsets.assign(wfcpw_exx->nks + 1, 0);
+        std::size_t map_capacity = 0;
+        if (!hamilt::checked_exx_size_product(static_cast<std::size_t>(wfcpw_exx->npwk_max),
+                                              static_cast<std::size_t>(wfcpw_exx->nks),
+                                              map_capacity))
+        {
+            ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                                     "PW EXX stress wavefunction map capacity overflows size_t");
+        }
+        exx_to_wfc_map_host.reserve(map_capacity);
         for (int ik = 0; ik < wfcpw_exx->nks; ++ik)
         {
-            exx_to_wfc_offsets[ik] = static_cast<int>(exx_to_wfc_map_host.size());
+            if (!hamilt::checked_exx_size_to_int(exx_to_wfc_map_host.size(), exx_to_wfc_offsets[ik]))
+            {
+                ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                                         "PW EXX stress wavefunction map offset exceeds INT_MAX");
+            }
             std::map<std::tuple<int, int, int>, int> wfc_g_to_igl;
             for (int igl = 0; igl < wfcpw->npwk[ik]; ++igl)
             {
@@ -175,7 +303,11 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                 exx_to_wfc_map_host.push_back(it == wfc_g_to_igl.end() ? -1 : it->second);
             }
         }
-        exx_to_wfc_offsets[wfcpw_exx->nks] = static_cast<int>(exx_to_wfc_map_host.size());
+        if (!hamilt::checked_exx_size_to_int(exx_to_wfc_map_host.size(), exx_to_wfc_offsets[wfcpw_exx->nks]))
+        {
+            ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                                     "PW EXX stress wavefunction map size exceeds INT_MAX");
+        }
         if (!std::is_same<Device, base_device::DEVICE_CPU>::value)
         {
             base_device::memory::resize_memory_op<int, Device>()(exx_to_wfc_map_device, exx_to_wfc_map_host.size());
@@ -337,20 +469,41 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     const int q_tile_size = q_points.empty() ? 1
                                              : std::max(1, std::min(exx_options.q_tile_size,
                                                                     static_cast<int>(q_points.size())));
+    std::size_t target_count = 0;
+    std::size_t q_count = 0;
+    std::size_t weight_count = 0;
+    std::size_t potential_count = 0;
+    if (!hamilt::checked_exx_qtile_workspace_counts(static_cast<std::size_t>(target_tile_size),
+                                                    static_cast<std::size_t>(source_tile_size),
+                                                    static_cast<std::size_t>(q_tile_size),
+                                                    static_cast<std::size_t>(wfcpw_exx->nrxx),
+                                                    target_count,
+                                                    q_count,
+                                                    weight_count)
+        || !hamilt::checked_exx_size_product(static_cast<std::size_t>(q_tile_size),
+                                             static_cast<std::size_t>(rhopw_exx->npw),
+                                             potential_count))
+    {
+        ModuleBase::WARNING_QUIT("Stress_PW::stress_exx", "PW EXX stress q-tile allocation overflows size_t");
+    }
+    if (!hamilt::checked_exx_allocation_bytes(target_count, sizeof(T))
+        || !hamilt::checked_exx_allocation_bytes(q_count, sizeof(T))
+        || !hamilt::checked_exx_allocation_bytes(weight_count, sizeof(Real))
+        || !hamilt::checked_exx_allocation_bytes(potential_count, sizeof(Real)))
+    {
+        ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
+                                 "PW EXX stress q-tile allocation byte size overflows size_t");
+    }
     T* target_real_tile = nullptr;
     T* q_real_tile = nullptr;
     std::vector<Real> target_weights;
     std::vector<Real> q_weights;
-    resmem_complex_op()(target_real_tile,
-                        static_cast<std::size_t>(target_tile_size) * static_cast<std::size_t>(wfcpw_exx->nrxx));
-    resmem_complex_op()(q_real_tile,
-                        static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size)
-                            * static_cast<std::size_t>(wfcpw_exx->nrxx));
-    resmem_real_op()(pot_tile, static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(rhopw_exx->npw));
-    resmem_real_op()(pot_stress_tile,
-                     static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(rhopw_exx->npw));
+    resmem_complex_op()(target_real_tile, target_count);
+    resmem_complex_op()(q_real_tile, q_count);
+    resmem_real_op()(pot_tile, potential_count);
+    resmem_real_op()(pot_stress_tile, potential_count);
     target_weights.resize(static_cast<std::size_t>(target_tile_size), 0);
-    q_weights.resize(static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size), 0);
+    q_weights.resize(weight_count, 0);
 
     for (int ispin = 0; ispin < nspin_fac; ++ispin)
     {

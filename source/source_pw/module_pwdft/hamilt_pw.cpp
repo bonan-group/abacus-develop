@@ -22,9 +22,10 @@ namespace
 ExxOperatorOptions make_exx_operator_options()
 {
     ExxOperatorOptions options;
-    options.batch_fft_size = std::max(1, PARAM.inp.exx_batch_fft_size);
-    options.band_tile_size = std::max(1, PARAM.inp.exx_band_tile_size);
-    options.q_tile_size = std::max(1, PARAM.inp.exx_q_tile_size);
+    options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
+    options.band_tile_size = PARAM.inp.exx_band_tile_size;
+    options.q_tile_size = PARAM.inp.exx_q_tile_size;
+    options.configured_nbands = PARAM.inp.nbands;
     options.nspin = PARAM.inp.nspin;
     options.ecutexx = PARAM.inp.ecutexx;
     options.ecutrho = PARAM.inp.ecutrho;
@@ -32,6 +33,8 @@ ExxOperatorOptions make_exx_operator_options()
     options.exxace = PARAM.inp.exxace;
     options.separate_loop = GlobalC::exx_info.info_global.separate_loop;
     options.hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
+    options.auto_tiling = PARAM.inp.exx_auto_tiling;
+    options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
     options.fock_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Fock];
     options.erfc_params = GlobalC::exx_info.info_global.coulomb_param[Conv_Coulomb_Pot_K::Coulomb_Type::Erfc];
     return options;

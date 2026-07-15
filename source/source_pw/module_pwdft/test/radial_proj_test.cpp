@@ -1,4 +1,5 @@
 #include "source_pw/module_pwdft/op_pw_exx.h"
+#include "source_pw/module_pwdft/exx_tile_policy.h"
 #include "source_pw/module_pwdft/radial_proj.h"
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -26,7 +27,317 @@ K_Vectors::ExxFullKPoint make_exx_kpoint(int full_index,
     point.weight = 0.125 * (full_index + 1);
     return point;
 }
+
+hamilt::ExxTilePolicyInput make_exx_tile_input()
+{
+    hamilt::ExxTilePolicyInput input;
+    input.auto_tiling = true;
+    input.device = "gpu";
+    input.precision = "double";
+    input.memory_budget_mb = 1024.0;
+    input.nbands = 32;
+    input.active_q_count = 8;
+    input.max_star_size = 4;
+    input.nrxx = 4096;
+    input.npw = 2048;
+    input.npwk_max = 1024;
+    input.fft_nx = 16;
+    input.fft_ny = 16;
+    input.fft_nz = 16;
+    return input;
+}
 } // namespace
+
+TEST(ExxTilePolicyTest, CheckedArithmeticRejectsOverflow)
+{
+    std::size_t result = 0;
+    EXPECT_TRUE(hamilt::checked_exx_size_product({2, 3, 5, 7}, result));
+    EXPECT_EQ(result, 210u);
+    EXPECT_FALSE(hamilt::checked_exx_size_product({std::numeric_limits<std::size_t>::max(), 2}, result));
+    EXPECT_TRUE(hamilt::checked_exx_size_sum({2, 3, 5, 7}, result));
+    EXPECT_EQ(result, 17u);
+    EXPECT_FALSE(hamilt::checked_exx_size_sum({std::numeric_limits<std::size_t>::max(), 1}, result));
+}
+
+TEST(ExxTilePolicyTest, EstimatesPotentialCacheModes)
+{
+    const hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    hamilt::ExxTileMemoryEstimate full_estimate;
+    hamilt::ExxTileMemoryEstimate tiled_estimate;
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   8,
+                                                   8,
+                                                   2,
+                                                   hamilt::ExxPotentialCacheMode::full_target_k,
+                                                   full_estimate));
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   8,
+                                                   8,
+                                                   2,
+                                                   hamilt::ExxPotentialCacheMode::q_tile,
+                                                   tiled_estimate));
+    EXPECT_EQ(full_estimate.potential_cache_entries, 8u);
+    EXPECT_EQ(tiled_estimate.potential_cache_entries, 8u);
+    EXPECT_GT(full_estimate.total_bytes, 0u);
+    EXPECT_GT(full_estimate.cufft_workspace_bytes, 0u);
+}
+
+TEST(ExxTilePolicyTest, CountsBothResidentGpuFftBundles)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.fixed_scratch_bytes = 0;
+    hamilt::ExxTileMemoryEstimate estimate;
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   8,
+                                                   8,
+                                                   2,
+                                                   hamilt::ExxPotentialCacheMode::full_target_k,
+                                                   estimate));
+    const std::size_t fft_grid = 16u * 16u * 16u;
+    const std::size_t one_batch_buffer = 8u * fft_grid * sizeof(std::complex<double>);
+    const std::size_t one_base_buffer = fft_grid * sizeof(std::complex<double>);
+    EXPECT_EQ(estimate.fft_buffer_bytes, 4u * one_batch_buffer + 2u * one_base_buffer);
+    EXPECT_EQ(estimate.cufft_workspace_bytes, 2u * one_batch_buffer);
+}
+
+TEST(ExxTilePolicyTest, CountsOneIncrementalMixedTargetFftBundle)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.fft_bundle_count = 1;
+    hamilt::ExxTileMemoryEstimate estimate;
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   8,
+                                                   8,
+                                                   2,
+                                                   hamilt::ExxPotentialCacheMode::full_target_k,
+                                                   estimate));
+    const std::size_t fft_grid = 16u * 16u * 16u;
+    const std::size_t one_base_buffer = fft_grid * sizeof(std::complex<double>);
+    const std::size_t one_batch_buffer = 8u * one_base_buffer;
+    EXPECT_EQ(estimate.fft_buffer_bytes, 2u * one_batch_buffer + one_base_buffer);
+    EXPECT_EQ(estimate.cufft_workspace_bytes, one_batch_buffer);
+}
+
+TEST(ExxTilePolicyTest, StressWorkloadCountsBothPotentialTiles)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.workload = hamilt::ExxTileWorkload::stress;
+    hamilt::ExxTileMemoryEstimate estimate;
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   8,
+                                                   8,
+                                                   2,
+                                                   hamilt::ExxPotentialCacheMode::q_tile,
+                                                   estimate));
+    EXPECT_EQ(estimate.potential_cache_entries, 4u);
+    EXPECT_EQ(estimate.potential_bytes, 2u * 2u * input.npw * sizeof(double));
+}
+
+TEST(ExxTilePolicyTest, ZeroBudgetUsesOneGiBAndGpuBatchIsBounded)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.memory_budget_mb = 0.0;
+    input.nbands = 256;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.budget_bytes, static_cast<std::size_t>(1024) * 1024 * 1024);
+    EXPECT_LE(result.batch_fft_size, 128);
+    EXPECT_EQ(result.batch_fft_size & (result.batch_fft_size - 1), 0);
+}
+
+TEST(ExxTilePolicyTest, CpuAutomaticModeUsesScalarFftBatch)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.device = "cpu";
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.batch_fft_size, 1);
+}
+
+TEST(ExxTilePolicyTest, PositiveTileValuesAreExactOverrides)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.requested_batch_fft_size = 7;
+    input.requested_band_tile_size = 5;
+    input.requested_q_tile_size = 3;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.batch_fft_size, 7);
+    EXPECT_EQ(result.band_tile_size, 5);
+    EXPECT_EQ(result.q_tile_size, 3);
+}
+
+TEST(ExxTilePolicyTest, BandAndQOverridesAreClippedToAvailableWork)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.nbands = 5;
+    input.active_q_count = 3;
+    input.requested_batch_fft_size = 4;
+    input.requested_band_tile_size = 64;
+    input.requested_q_tile_size = 64;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.batch_fft_size, 4);
+    EXPECT_EQ(result.band_tile_size, 5);
+    EXPECT_EQ(result.q_tile_size, 3);
+}
+
+TEST(ExxTilePolicyTest, ManualModeRequiresAllTileOverrides)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.auto_tiling = false;
+    input.requested_batch_fft_size = 8;
+    input.requested_band_tile_size = 8;
+    input.requested_q_tile_size = 0;
+
+    EXPECT_FALSE(hamilt::choose_exx_tiles(input).fits);
+
+    input.requested_q_tile_size = 4;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.batch_fft_size, 8);
+    EXPECT_EQ(result.band_tile_size, 8);
+    EXPECT_EQ(result.q_tile_size, 4);
+}
+
+TEST(ExxTilePolicyTest, PrioritySelectsLargestBatchThenBandThenQ)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.nbands = 32;
+    input.active_q_count = 7;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.batch_fft_size, 32);
+    EXPECT_EQ(result.band_tile_size, 32);
+    EXPECT_EQ(result.q_tile_size, 7);
+}
+
+TEST(ExxTilePolicyTest, FallsBackToQTilePotentialCache)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.active_q_count = 64;
+    input.max_star_size = 1;
+    input.npw = 100000;
+    input.requested_batch_fft_size = 1;
+    input.requested_band_tile_size = 1;
+    input.requested_q_tile_size = 1;
+
+    hamilt::ExxTileMemoryEstimate full_estimate;
+    hamilt::ExxTileMemoryEstimate tiled_estimate;
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   1,
+                                                   1,
+                                                   1,
+                                                   hamilt::ExxPotentialCacheMode::full_target_k,
+                                                   full_estimate));
+    ASSERT_TRUE(hamilt::estimate_exx_managed_bytes(input,
+                                                   1,
+                                                   1,
+                                                   1,
+                                                   hamilt::ExxPotentialCacheMode::q_tile,
+                                                   tiled_estimate));
+    ASSERT_LT(tiled_estimate.total_bytes, full_estimate.total_bytes);
+    input.memory_budget_mb = static_cast<double>(tiled_estimate.total_bytes + full_estimate.total_bytes)
+                             / (2.0 * 1024.0 * 1024.0);
+
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+    ASSERT_TRUE(result.fits);
+    EXPECT_EQ(result.cache_mode, hamilt::ExxPotentialCacheMode::q_tile);
+}
+
+TEST(ExxTilePolicyTest, ReportsImpossibleMinimumConfiguration)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.memory_budget_mb = 0.001;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    EXPECT_FALSE(result.fits);
+    EXPECT_GT(result.minimum_required_bytes, result.budget_bytes);
+}
+
+TEST(ExxTilePolicyTest, ReportsExplicitTupleRequirement)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.memory_budget_mb = 1.0;
+    input.requested_batch_fft_size = 32;
+    input.requested_band_tile_size = 32;
+    input.requested_q_tile_size = 8;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    EXPECT_FALSE(result.fits);
+    EXPECT_GT(result.requested_bytes, result.budget_bytes);
+}
+
+TEST(ExxTilePolicyTest, ReportsPartiallyExplicitConstraintRequirement)
+{
+    hamilt::ExxTilePolicyInput input = make_exx_tile_input();
+    input.memory_budget_mb = 1.0;
+    input.requested_batch_fft_size = 32;
+    const hamilt::ExxTilePolicyResult result = hamilt::choose_exx_tiles(input);
+
+    EXPECT_FALSE(result.fits);
+    EXPECT_GT(result.requested_bytes, result.budget_bytes);
+}
+
+TEST(ExxTilePolicyTest, CacheEntryLimitsFollowSelectedLifetime)
+{
+    std::size_t limit = 0;
+    EXPECT_TRUE(hamilt::operator_exx_potential_cache_entry_limit(
+        hamilt::ExxPotentialCacheMode::full_target_k, 8, 2, limit));
+    EXPECT_EQ(limit, 8u);
+    EXPECT_TRUE(hamilt::operator_exx_potential_cache_entry_limit(
+        hamilt::ExxPotentialCacheMode::q_tile, 8, 2, limit));
+    EXPECT_EQ(limit, 2u);
+    EXPECT_TRUE(hamilt::direct_exx_potential_cache_entry_limit(4, 2, limit));
+    EXPECT_EQ(limit, 8u);
+    EXPECT_FALSE(hamilt::direct_exx_potential_cache_entry_limit(std::numeric_limits<std::size_t>::max(),
+                                                                2,
+                                                                limit));
+}
+
+TEST(ExxTilePolicyTest, QTileWorkspaceCountsAreChecked)
+{
+    std::size_t target_count = 0;
+    std::size_t q_count = 0;
+    std::size_t weight_count = 0;
+    EXPECT_TRUE(hamilt::checked_exx_qtile_workspace_counts(8,
+                                                          16,
+                                                          4,
+                                                          1024,
+                                                          target_count,
+                                                          q_count,
+                                                          weight_count));
+    EXPECT_EQ(target_count, 8192u);
+    EXPECT_EQ(q_count, 65536u);
+    EXPECT_EQ(weight_count, 64u);
+    EXPECT_FALSE(hamilt::checked_exx_qtile_workspace_counts(1,
+                                                           std::numeric_limits<std::size_t>::max(),
+                                                           2,
+                                                           2,
+                                                           target_count,
+                                                           q_count,
+                                                           weight_count));
+}
+
+TEST(ExxTilePolicyTest, AllocationElementAndByteCountsAreChecked)
+{
+    std::size_t element_count = 0;
+    EXPECT_TRUE(hamilt::checked_exx_size_product(16, 1000, element_count));
+    EXPECT_EQ(element_count, 16000u);
+    EXPECT_TRUE(hamilt::checked_exx_allocation_bytes(element_count, sizeof(std::complex<double>)));
+    EXPECT_FALSE(hamilt::checked_exx_allocation_bytes(std::numeric_limits<std::size_t>::max(),
+                                                      sizeof(std::complex<double>)));
+    int narrowed = 0;
+    EXPECT_TRUE(hamilt::checked_exx_size_to_int(256, narrowed));
+    EXPECT_EQ(narrowed, 256);
+    EXPECT_FALSE(hamilt::checked_exx_size_to_int(static_cast<std::size_t>(std::numeric_limits<int>::max()) + 1,
+                                                 narrowed));
+}
 
 TEST(ExxEnergyKPolicyTest, ChoosesLocalReducedKPointsForUnpolarizedEnergyLoop)
 {

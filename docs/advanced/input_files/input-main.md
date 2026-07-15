@@ -326,6 +326,8 @@
   - [Exact Exchange (PW)](#exact-exchange-pw)
     - [exxace](#exxace)
     - [exx\_gamma\_extrapolation](#exx_gamma_extrapolation)
+    - [exx\_auto\_tiling](#exx_auto_tiling)
+    - [exx\_tile\_memory\_budget\_mb](#exx_tile_memory_budget_mb)
     - [exx\_batch\_fft\_size](#exx_batch_fft_size)
     - [exx\_band\_tile\_size](#exx_band_tile_size)
     - [exx\_q\_tile\_size](#exx_q_tile_size)
@@ -3170,23 +3172,36 @@
 - **Description**: Whether to use the gamma point extrapolation method to calculate the Fock exchange operator. See https://doi.org/10.1103/PhysRevB.79.205114 for details. Should be set to true most of the time.
 - **Default**: True
 
+### exx_auto_tiling
+
+- **Type**: Boolean
+- **Description**: Choose PW EXX FFT, band, and q tile sizes from a per-rank managed-memory budget. Positive tile values remain user overrides; band and q values are clipped only to available work.
+- **Default**: True
+
+### exx_tile_memory_budget_mb
+
+- **Type**: Real
+- **Description**: Managed-memory budget in MiB enforced for automatic and explicit PW EXX tiles. A value of 0 uses the internal 1024 MiB default. The estimate is per MPI rank, assumes one rank per GPU, uses a conservative cuFFT workspace estimate, and excludes ACE projector memory.
+- **Default**: 0
+- **Unit**: MiB
+
 ### exx_batch_fft_size
 
 - **Type**: Integer
-- **Description**: Batch size used by PW EXX batched FFTs. The default is 8. CPU paths use scalar FFT chunks; GPU KPAR paths still assemble q states one at a time but batch the subsequent EXX density FFT/application step.
-- **Default**: 8
+- **Description**: Batch size used by PW EXX batched FFTs. Zero selects automatically when exx_auto_tiling is true; a positive value is an exact override. Automatic CPU mode selects one. Automatic GPU mode selects a power of two no larger than 128.
+- **Default**: 0
 
 ### exx_band_tile_size
 
 - **Type**: Integer
-- **Description**: Target/source band tile size used by the PW EXX q-tile path to cache real-space wavefunctions and feed batched FFTs.
-- **Default**: 8
+- **Description**: Target/source band tile size used by the PW EXX q-tile path. Zero selects automatically when exx_auto_tiling is true; a positive value is clipped only to the available bands. Automatic selection prioritizes FFT batch, then band tile, then q tile.
+- **Default**: 0
 
 ### exx_q_tile_size
 
 - **Type**: Integer
-- **Description**: Q-point tile size used by the PW EXX q-tile path to fetch and reuse source q-state wavefunctions.
-- **Default**: 4
+- **Description**: Q-point tile size used by the PW EXX q-tile path. Zero selects automatically when exx_auto_tiling is true; a positive value is clipped only to the available q points.
+- **Default**: 0
 
 ### ecutexx
 

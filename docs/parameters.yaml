@@ -4716,28 +4716,44 @@ parameters:
     default_value: "True"
     unit: ""
     availability: ""
+  - name: exx_auto_tiling
+    category: Exact Exchange (PW)
+    type: Boolean
+    description: |
+      Choose PW EXX FFT, band, and q tile sizes from a per-rank managed-memory budget. Positive tile values remain user overrides; band and q values are clipped only to available work.
+    default_value: "True"
+    unit: ""
+    availability: ""
+  - name: exx_tile_memory_budget_mb
+    category: Exact Exchange (PW)
+    type: Real
+    description: |
+      Managed-memory budget in MiB enforced for automatic and explicit PW EXX tiles. A value of 0 uses the internal 1024 MiB default. The estimate is per MPI rank, assumes one rank per GPU, uses a conservative cuFFT workspace estimate, and excludes ACE projector memory.
+    default_value: "0"
+    unit: MiB
+    availability: ""
   - name: exx_batch_fft_size
     category: Exact Exchange (PW)
     type: Integer
     description: |
-      Batch size used by PW EXX batched FFTs. The default is 8. CPU paths use scalar FFT chunks; GPU KPAR paths still assemble q states one at a time but batch the subsequent EXX density FFT/application step.
-    default_value: "8"
+      Batch size used by PW EXX batched FFTs. Zero selects automatically when exx_auto_tiling is true; a positive value is an exact override. Automatic CPU mode selects one. Automatic GPU mode selects a power of two no larger than 128.
+    default_value: "0"
     unit: ""
     availability: ""
   - name: exx_band_tile_size
     category: Exact Exchange (PW)
     type: Integer
     description: |
-      Target/source band tile size used by the PW EXX q-tile path to cache real-space wavefunctions and feed batched FFTs.
-    default_value: "8"
+      Target/source band tile size used by the PW EXX q-tile path. Zero selects automatically when exx_auto_tiling is true; a positive value is clipped only to the available bands. Automatic selection prioritizes FFT batch, then band tile, then q tile.
+    default_value: "0"
     unit: ""
     availability: ""
   - name: exx_q_tile_size
     category: Exact Exchange (PW)
     type: Integer
     description: |
-      Q-point tile size used by the PW EXX q-tile path to fetch and reuse source q-state wavefunctions.
-    default_value: "4"
+      Q-point tile size used by the PW EXX q-tile path. Zero selects automatically when exx_auto_tiling is true; a positive value is clipped only to the available q points.
+    default_value: "0"
     unit: ""
     availability: ""
   - name: ecutexx

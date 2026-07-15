@@ -684,9 +684,11 @@ struct Input_para
     // EXX for planewave basis, rhx0820 2025-03-10
     bool exxace = true; // exxace, exact exchange for planewave basis, https://doi.org/10.1021/acs.jctc.6b00092
     bool exx_gamma_extrapolation = true; // gamma point extrapolation for exx, https://doi.org/10.1103/PhysRevB.79.205114
-    int exx_batch_fft_size = 8;          ///< batch size for PW EXX batched FFTs; values <= 1 use scalar chunks
-    int exx_band_tile_size = 8;          ///< target/source band tile size for PW EXX q-tile real-space reuse
-    int exx_q_tile_size = 4;             ///< q-point tile size for PW EXX q-state fetching
+    bool exx_auto_tiling = true;         ///< automatically choose PW EXX tile sizes from a memory budget
+    double exx_tile_memory_budget_mb = 0.0; ///< PW EXX managed-memory budget per rank; 0 uses 1024 MiB
+    int exx_batch_fft_size = 0;          ///< batch size for PW EXX batched FFTs; 0 selects automatically
+    int exx_band_tile_size = 0;          ///< target/source band tile size for PW EXX; 0 selects automatically
+    int exx_q_tile_size = 0;             ///< q-point tile size for PW EXX; 0 selects automatically
     std::string exx_thr_type = "density"; ///< threshold type for exx outer loop
     double exx_ene_thr = 1e-5;            ///< threshold when exx_thr_type = energy
     double ecutexx = 0.0;                 ///< energy cutoff for exx calculation, Ry

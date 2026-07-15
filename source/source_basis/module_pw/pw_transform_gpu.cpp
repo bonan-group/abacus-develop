@@ -210,7 +210,7 @@ void PW_Basis::recip_to_real_batch(const Device* ctx,
     base_device::memory::set_memory_op<std::complex<FPTYPE>, base_device::DEVICE_GPU>()(
         batch_in,
         0,
-        batch_count * nxyz);
+        static_cast<std::size_t>(batch_count) * static_cast<std::size_t>(nxyz));
 
     // Set up 3D FFT input grids for all batch elements using batched kernel
     set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>().operator_batch(

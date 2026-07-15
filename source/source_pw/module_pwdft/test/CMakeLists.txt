@@ -25,7 +25,7 @@ AddTest(
 AddTest(
 	TARGET MODULE_PW_radial_proj_test
 	LIBS parameter  base device ${math_libs}
-	SOURCES radial_proj_test.cpp ../radial_proj.cpp
+	SOURCES radial_proj_test.cpp ../radial_proj.cpp ../exx_tile_policy.cpp
 )
 
 AddTest(

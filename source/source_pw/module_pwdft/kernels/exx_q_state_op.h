@@ -5,6 +5,7 @@
 #include "source_base/vector3.h"
 #include "source_base/module_device/types.h"
 #include "source_cell/klist.h"
+#include "source_pw/module_pwdft/exx_size_utils.h"
 
 #include <cstddef>
 #include <complex>
@@ -17,8 +18,6 @@ class PW_Basis_K;
 
 namespace hamilt
 {
-bool checked_exx_size_product(std::size_t lhs, std::size_t rhs, std::size_t& result);
-
 bool is_exx_realspace_symmetry_grid_compatible(const ModulePW::PW_Basis_K* wfcpw,
                                                const K_Vectors::ExxFullPoint& full_point);
 

@@ -10,6 +10,7 @@
 #include "source_cell/klist.h"
 #include "source_lcao/module_ri/conv_coulomb_pot_k.h"
 #include "source_pw/module_pwdft/kernels/exx_q_state_op.h"
+#include "source_pw/module_pwdft/exx_tile_policy.h"
 #include "source_psi/psi.h"
 #include "source_base/module_container/ATen/kernels/lapack.h"
 
@@ -37,9 +38,10 @@ class ExxWaveRedistributorCpu;
 
 struct ExxOperatorOptions
 {
-    int batch_fft_size = 1;
-    int band_tile_size = 1;
-    int q_tile_size = 1;
+    int batch_fft_size = 0;
+    int band_tile_size = 0;
+    int q_tile_size = 0;
+    int configured_nbands = 1;
     int nspin = 1;
     double ecutexx = 0.0;
     double ecutrho = 0.0;
@@ -47,6 +49,11 @@ struct ExxOperatorOptions
     bool exxace = false;
     bool separate_loop = false;
     double hybrid_alpha = 0.0;
+    bool auto_tiling = true;
+    double tile_memory_budget_mb = 0.0;
+    ExxPotentialCacheMode potential_cache_mode = ExxPotentialCacheMode::q_tile;
+    std::size_t tile_budget_bytes = 0;
+    std::size_t tile_estimated_peak_bytes = 0;
     std::vector<std::map<std::string, std::string>> fock_params;
     std::vector<std::map<std::string, std::string>> erfc_params;
 };
@@ -330,7 +337,9 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     Real* get_exx_potential_cached(const K_Vectors::ExxFullKPoint& kpoint,
                                    const K_Vectors::ExxFullQPoint& qpoint) const;
     void clear_exx_potential_cache() const;
-    void reset_exx_potential_cache_for_scope(int cache_scope) const;
+    void reset_exx_potential_cache_for_scope(int cache_scope,
+                                             std::size_t entry_limit,
+                                             bool force_clear) const;
     int resolve_qtile_chunk_size() const;
     void ensure_qtile_workspace(std::size_t target_size, std::size_t q_size, std::size_t batch_limit) const;
     void allocate_batch_workspace(int batch_fft_size);
@@ -497,6 +506,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     mutable std::size_t weight_real_capacity = 0;
     mutable std::map<std::pair<int, int>, Real*> pot_cache;
     mutable int cached_potential_scope = std::numeric_limits<int>::min();
+    mutable std::size_t potential_cache_entry_limit = std::numeric_limits<std::size_t>::max();
 
     // Lin Lin's ACE memory, 10.1021/acs.jctc.6b00092
     mutable T* h_psi_ace = nullptr; // H \Psi, W in the paper

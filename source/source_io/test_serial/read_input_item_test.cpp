@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -208,7 +209,44 @@ TEST_F(InputTest, Item_test)
         EXPECT_THAT(output, testing::HasSubstr("NOTICE"));
     }
     { // PW EXX tile sizes
-        auto it = find_label("exx_batch_fft_size", readinput.input_lists);
+        EXPECT_TRUE(param.input.exx_auto_tiling);
+        EXPECT_DOUBLE_EQ(param.input.exx_tile_memory_budget_mb, 0.0);
+        EXPECT_EQ(param.input.exx_batch_fft_size, 0);
+        EXPECT_EQ(param.input.exx_band_tile_size, 0);
+        EXPECT_EQ(param.input.exx_q_tile_size, 0);
+
+        auto it = find_label("exx_auto_tiling", readinput.input_lists);
+        param.input.exx_auto_tiling = true;
+        param.input.exx_batch_fft_size = 0;
+        param.input.exx_band_tile_size = 0;
+        param.input.exx_q_tile_size = 0;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_auto_tiling = false;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("manual PW EXX tiling"));
+        param.input.exx_batch_fft_size = 1;
+        param.input.exx_band_tile_size = 1;
+        param.input.exx_q_tile_size = 1;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+
+        it = find_label("exx_tile_memory_budget_mb", readinput.input_lists);
+        param.input.exx_tile_memory_budget_mb = 0.0;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_tile_memory_budget_mb = 256.0;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
+        param.input.exx_tile_memory_budget_mb = -1.0;
+        testing::internal::CaptureStdout();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+        output = testing::internal::GetCapturedStdout();
+        EXPECT_THAT(output, testing::HasSubstr("exx_tile_memory_budget_mb"));
+        param.input.exx_tile_memory_budget_mb = std::numeric_limits<double>::quiet_NaN();
+        EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
+
+        it = find_label("exx_batch_fft_size", readinput.input_lists);
+        param.input.exx_batch_fft_size = 0;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
         param.input.exx_batch_fft_size = 1;
         EXPECT_NO_THROW(it->second.check_value(it->second, param));
         param.input.exx_batch_fft_size = 128;
@@ -220,18 +258,22 @@ TEST_F(InputTest, Item_test)
         EXPECT_THAT(output, testing::HasSubstr("exx_batch_fft_size"));
 
         it = find_label("exx_band_tile_size", readinput.input_lists);
+        param.input.exx_band_tile_size = 0;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
         param.input.exx_band_tile_size = 1;
         EXPECT_NO_THROW(it->second.check_value(it->second, param));
-        param.input.exx_band_tile_size = 0;
+        param.input.exx_band_tile_size = -1;
         testing::internal::CaptureStdout();
         EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
         output = testing::internal::GetCapturedStdout();
         EXPECT_THAT(output, testing::HasSubstr("exx_band_tile_size"));
 
         it = find_label("exx_q_tile_size", readinput.input_lists);
+        param.input.exx_q_tile_size = 0;
+        EXPECT_NO_THROW(it->second.check_value(it->second, param));
         param.input.exx_q_tile_size = 1;
         EXPECT_NO_THROW(it->second.check_value(it->second, param));
-        param.input.exx_q_tile_size = 0;
+        param.input.exx_q_tile_size = -1;
         testing::internal::CaptureStdout();
         EXPECT_EXIT(it->second.check_value(it->second, param), ::testing::ExitedWithCode(1), "");
         output = testing::internal::GetCapturedStdout();

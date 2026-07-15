@@ -10,6 +10,7 @@ list(APPEND objects
     op_pw.cpp
     op_pw_proj.cpp
     op_pw_exx.cpp
+    exx_tile_policy.cpp
     op_pw_exx_ace.cpp
     op_pw_exx_pot.cpp
     setup_pot.cpp

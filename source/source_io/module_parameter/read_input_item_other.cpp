@@ -4,6 +4,7 @@
 #include "read_input_tool.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 
@@ -934,19 +935,60 @@ When false (default), both the direction and magnitude of the magnetic moment ar
         this->add_item(item);
     }
     {
+        Input_Item item("exx_auto_tiling");
+        item.annotation = "whether to choose PW EXX tile sizes automatically";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Boolean";
+        item.description = "Choose PW EXX FFT, band, and q tile sizes from the configured per-rank memory budget. Positive tile sizes remain user overrides; band and q values are clipped only to available work.";
+        item.default_value = "True";
+        item.unit = "";
+        item.availability = "";
+        read_sync_bool(input.exx_auto_tiling);
+        item.check_value = [](const Input_Item& item, const Parameter& param) {
+            if (!param.input.exx_auto_tiling
+                && (param.input.exx_batch_fft_size <= 0
+                    || param.input.exx_band_tile_size <= 0
+                    || param.input.exx_q_tile_size <= 0))
+            {
+                ModuleBase::WARNING_QUIT("ReadInput",
+                                         "manual PW EXX tiling requires positive FFT, band, and q tile sizes");
+            }
+        };
+        this->add_item(item);
+    }
+    {
+        Input_Item item("exx_tile_memory_budget_mb");
+        item.annotation = "PW EXX managed-memory budget per MPI rank";
+        item.category = "Exact Exchange (PW)";
+        item.type = "Real";
+        item.description = "Managed-memory budget in MiB enforced for automatic and explicit PW EXX tiles. A value of 0 uses the internal 1024 MiB default.";
+        item.default_value = "0";
+        item.unit = "MiB";
+        item.availability = "";
+        read_sync_double(input.exx_tile_memory_budget_mb);
+        item.check_value = [](const Input_Item& item, const Parameter& param) {
+            if (!std::isfinite(param.input.exx_tile_memory_budget_mb)
+                || param.input.exx_tile_memory_budget_mb < 0.0)
+            {
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_tile_memory_budget_mb must be finite and >= 0");
+            }
+        };
+        this->add_item(item);
+    }
+    {
         Input_Item item("exx_batch_fft_size");
         item.annotation = "batch size for PW EXX batched FFTs";
         item.category = "Exact Exchange (PW)";
         item.type = "Integer";
-        item.description = "Batch size used by PW EXX batched FFTs. The default is 8. CPU paths use scalar FFT chunks; GPU KPAR paths still assemble q states one at a time but batch the subsequent EXX density FFT/application step.";
-        item.default_value = "8";
+        item.description = "Batch size used by PW EXX batched FFTs. Zero selects automatically when exx_auto_tiling is true; a positive value is an exact override.";
+        item.default_value = "0";
         item.unit = "";
         item.availability = "";
         read_sync_int(input.exx_batch_fft_size);
         item.check_value = [](const Input_Item& item, const Parameter& param) {
-            if (param.input.exx_batch_fft_size < 1 || param.input.exx_batch_fft_size > 128)
+            if (param.input.exx_batch_fft_size < 0 || param.input.exx_batch_fft_size > 128)
             {
-                ModuleBase::WARNING_QUIT("ReadInput", "exx_batch_fft_size must be in range [1, 128]");
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_batch_fft_size must be in range [0, 128]");
             }
         };
         this->add_item(item);
@@ -956,15 +998,15 @@ When false (default), both the direction and magnitude of the magnetic moment ar
         item.annotation = "band tile size for PW EXX q-tile real-space reuse";
         item.category = "Exact Exchange (PW)";
         item.type = "Integer";
-        item.description = "Target/source band tile size used by the PW EXX q-tile path to cache real-space wavefunctions and feed batched FFTs.";
-        item.default_value = "8";
+        item.description = "Target/source band tile size used by the PW EXX q-tile path. Zero selects automatically when exx_auto_tiling is true; a positive value is clipped only to the available bands.";
+        item.default_value = "0";
         item.unit = "";
         item.availability = "";
         read_sync_int(input.exx_band_tile_size);
         item.check_value = [](const Input_Item& item, const Parameter& para) {
-            if (para.input.exx_band_tile_size <= 0)
+            if (para.input.exx_band_tile_size < 0)
             {
-                ModuleBase::WARNING_QUIT("ReadInput", "exx_band_tile_size must > 0");
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_band_tile_size must be >= 0");
             }
         };
         this->add_item(item);
@@ -974,15 +1016,15 @@ When false (default), both the direction and magnitude of the magnetic moment ar
         item.annotation = "q-point tile size for PW EXX q-state fetching";
         item.category = "Exact Exchange (PW)";
         item.type = "Integer";
-        item.description = "Q-point tile size used by the PW EXX q-tile path to fetch and reuse source q-state wavefunctions.";
-        item.default_value = "4";
+        item.description = "Q-point tile size used by the PW EXX q-tile path. Zero selects automatically when exx_auto_tiling is true; a positive value is clipped only to the available q points.";
+        item.default_value = "0";
         item.unit = "";
         item.availability = "";
         read_sync_int(input.exx_q_tile_size);
         item.check_value = [](const Input_Item& item, const Parameter& para) {
-            if (para.input.exx_q_tile_size <= 0)
+            if (para.input.exx_q_tile_size < 0)
             {
-                ModuleBase::WARNING_QUIT("ReadInput", "exx_q_tile_size must > 0");
+                ModuleBase::WARNING_QUIT("ReadInput", "exx_q_tile_size must be >= 0");
             }
         };
         this->add_item(item);

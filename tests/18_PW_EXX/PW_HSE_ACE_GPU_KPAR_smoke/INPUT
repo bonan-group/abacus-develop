@@ -28,6 +28,3 @@ exx_hybrid_step   1
 exx_thr_type      energy
 exx_ene_thr       1e-4
 exx_gamma_extrapolation false
-exx_batch_fft_size 4
-exx_band_tile_size 2
-exx_q_tile_size   1

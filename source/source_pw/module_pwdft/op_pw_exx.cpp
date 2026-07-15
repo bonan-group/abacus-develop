@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <iomanip>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -32,6 +33,58 @@
 
 namespace hamilt
 {
+namespace
+{
+int active_exx_q_count(const K_Vectors& kv)
+{
+    int count = 0;
+    for (const auto& point: kv.exx_full_q_map)
+    {
+        if (point.active)
+        {
+            ++count;
+        }
+    }
+    return std::max(1, count);
+}
+
+std::size_t max_active_exx_star_size(const K_Vectors& kv)
+{
+    std::map<std::pair<int, int>, std::size_t> star_sizes;
+    std::size_t max_size = 1;
+    for (const auto& point: kv.exx_full_k_map)
+    {
+        if (!point.active)
+        {
+            continue;
+        }
+        const std::pair<int, int> representative(point.rep_pool, point.rep_local_index);
+        max_size = std::max(max_size, ++star_sizes[representative]);
+    }
+    return max_size;
+}
+
+bool estimate_fixed_exx_scratch_bytes(std::size_t nrxx,
+                                      std::size_t npw,
+                                      std::size_t exx_npwk_max,
+                                      std::size_t target_npwk_max,
+                                      std::size_t complex_bytes,
+                                      std::size_t real_bytes,
+                                      std::size_t& result)
+{
+    std::size_t nrxx_count = 0;
+    std::size_t exx_npwk_count = 0;
+    std::size_t complex_count = 0;
+    std::size_t complex_storage = 0;
+    std::size_t real_storage = 0;
+    return checked_exx_size_product(4, nrxx, nrxx_count)
+           && checked_exx_size_product(3, exx_npwk_max, exx_npwk_count)
+           && checked_exx_size_sum({nrxx_count, exx_npwk_count, target_npwk_max, npw}, complex_count)
+           && checked_exx_size_product(complex_count, complex_bytes, complex_storage)
+           && checked_exx_size_product(npw, real_bytes, real_storage)
+           && checked_exx_size_sum({complex_storage, real_storage}, result);
+}
+} // namespace
 
 template <typename T, typename Device>
 std::vector<typename GetTypeReal<T>::type> OperatorEXXPW<T, Device>::fock_div = {};
@@ -99,8 +152,6 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
     // here we can actually use different ecut to init the grids
     rhopw_dev->initgrids(rhopw->lat0, rhopw->latvec, ecut_exx);
     rhopw_dev->initparameters(rhopw->gamma_only, ecut_exx, rhopw->distribution_type, rhopw->xprime);
-    rhopw_dev->setuptransform(options.batch_fft_size);
-    rhopw_dev->collect_local_pw();
 
     wfcpw_exx = new ModulePW::PW_Basis_K(wfcpw->get_device(), exx_precision);
     wfcpw_exx->fft_bundle.setfft(wfcpw->get_device(), exx_precision);
@@ -114,6 +165,59 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                               wfcpw->kvec_d,
                               wfcpw->distribution_type,
                               wfcpw->xprime);
+
+    ExxTilePolicyInput tile_input;
+    tile_input.auto_tiling = options.auto_tiling;
+    tile_input.device = wfcpw->get_device();
+    tile_input.precision = exx_precision;
+    tile_input.memory_budget_mb = options.tile_memory_budget_mb;
+    tile_input.nbands = std::max(1, options.configured_nbands);
+    tile_input.active_q_count = active_exx_q_count(*kv);
+    tile_input.max_star_size = max_active_exx_star_size(*kv);
+    tile_input.nrxx = static_cast<std::size_t>(rhopw_dev->nrxx);
+    tile_input.npw = static_cast<std::size_t>(rhopw_dev->npw);
+    tile_input.npwk_max = static_cast<std::size_t>(wfcpw_exx->npwk_max);
+    tile_input.target_npwk_max = static_cast<std::size_t>(wfcpw->npwk_max);
+    tile_input.fft_nx = rhopw_dev->nx;
+    tile_input.fft_ny = rhopw_dev->ny;
+    tile_input.fft_nz = rhopw_dev->nz;
+    tile_input.requested_batch_fft_size = options.batch_fft_size;
+    tile_input.requested_band_tile_size = options.band_tile_size;
+    tile_input.requested_q_tile_size = options.q_tile_size;
+    if (!estimate_fixed_exx_scratch_bytes(tile_input.nrxx,
+                                          tile_input.npw,
+                                          tile_input.npwk_max,
+                                          tile_input.target_npwk_max,
+                                          sizeof(T),
+                                          sizeof(Real),
+                                          tile_input.fixed_scratch_bytes))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW", "PW EXX fixed scratch memory estimate overflows size_t");
+    }
+    const ExxTilePolicyResult tile_result = choose_exx_tiles(tile_input);
+    if (!tile_result.fits)
+    {
+        const std::size_t required_bytes = tile_result.requested_bytes > 0
+                                               ? tile_result.requested_bytes
+                                               : tile_result.minimum_required_bytes;
+        ModuleBase::WARNING_QUIT("OperatorEXXPW",
+                                 "PW EXX tile memory budget is too small: budget bytes = "
+                                     + std::to_string(tile_result.budget_bytes)
+                                     + ", required bytes = " + std::to_string(required_bytes)
+                                     + ", requested batch/band/q = "
+                                     + std::to_string(options.batch_fft_size) + "/"
+                                     + std::to_string(options.band_tile_size) + "/"
+                                     + std::to_string(options.q_tile_size));
+    }
+    options.batch_fft_size = tile_result.batch_fft_size;
+    options.band_tile_size = tile_result.band_tile_size;
+    options.q_tile_size = tile_result.q_tile_size;
+    options.potential_cache_mode = tile_result.cache_mode;
+    options.tile_budget_bytes = tile_result.budget_bytes;
+    options.tile_estimated_peak_bytes = tile_result.estimated_peak_bytes;
+
+    rhopw_dev->setuptransform(options.batch_fft_size);
+    rhopw_dev->collect_local_pw();
     wfcpw_exx->setuptransform(options.batch_fft_size);
     wfcpw_exx->collect_local_pw();
     if (rhopw_dev->nrxx != wfcpw_exx->nrxx)
@@ -132,14 +236,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
 
     if (GlobalV::MY_RANK == 0)
     {
-        int active_full_q_count = 0;
-        for (const auto& qpoint: kv->exx_full_q_map)
-        {
-            if (qpoint.active)
-            {
-                ++active_full_q_count;
-            }
-        }
+        const int active_full_q_count = active_exx_q_count(*kv);
         GlobalV::ofs_running << " EXX effective ecutexx = " << ecut_exx
                              << " Ry, charge FFT = " << rhopw->nx << " " << rhopw->ny << " " << rhopw->nz
                              << ", wfc FFT = " << wfcpw->nx << " " << wfcpw->ny << " " << wfcpw->nz
@@ -152,6 +249,17 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                              << ", q ownership = " << (kv->para_k.kpar > 1 ? "owner-local" : "local")
                              << ", reduced k = " << wfcpw->nks / nk_fac
                              << ", full q = " << active_full_q_count << std::endl;
+        const double bytes_per_mib = 1024.0 * 1024.0;
+        GlobalV::ofs_running << " PW EXX tiling: mode = " << (options.auto_tiling ? "automatic" : "manual")
+                             << ", budget = " << std::fixed << std::setprecision(1)
+                             << static_cast<double>(options.tile_budget_bytes) / bytes_per_mib
+                             << " MiB, batch = " << options.batch_fft_size
+                             << ", band = " << options.band_tile_size
+                             << ", q = " << options.q_tile_size
+                             << ", cache = " << exx_potential_cache_mode_name(options.potential_cache_mode)
+                             << ", estimated peak = "
+                             << static_cast<double>(options.tile_estimated_peak_bytes) / bytes_per_mib
+                             << " MiB" << std::defaultfloat << std::endl;
     }
 
     // allocate real-space work buffers on the actual EXX grid
@@ -380,6 +488,13 @@ void OperatorEXXPW<T, Device>::ensure_qtile_workspace(std::size_t target_size,
     {
         return;
     }
+    if (!checked_exx_allocation_bytes(target_size, sizeof(T))
+        || !checked_exx_allocation_bytes(q_size, sizeof(T))
+        || !checked_exx_allocation_bytes(batch_limit, sizeof(Real)))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::ensure_qtile_workspace",
+                                 "PW EXX q-tile workspace byte size overflows size_t");
+    }
     if (qtile_target_real_size < target_size)
     {
         delmem_complex_op()(qtile_target_real);
@@ -436,6 +551,16 @@ void OperatorEXXPW<T, Device>::allocate_batch_workspace(int batch_fft_size)
     {
         ModuleBase::WARNING_QUIT("OperatorEXXPW::allocate_batch_workspace",
                                  "PW EXX batch workspace size overflows size_t");
+    }
+    if (!checked_exx_allocation_bytes(psi_real_size, sizeof(T))
+        || !checked_exx_allocation_bytes(psi_recip_size, sizeof(T))
+        || !checked_exx_allocation_bytes(density_real_size, sizeof(T))
+        || !checked_exx_allocation_bytes(density_recip_size, sizeof(T))
+        || !checked_exx_allocation_bytes(density_recip_size, sizeof(Real))
+        || !checked_exx_allocation_bytes(batch_count, sizeof(Real)))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::allocate_batch_workspace",
+                                 "PW EXX batch workspace byte size overflows size_t");
     }
 
     resmem_complex_op()(psi_mq_batch_real, psi_real_size);
@@ -902,13 +1027,21 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
     {
         local_kpoint = target_kpoint_override != nullptr ? target_kpoint_override
                                                          : &local_representative_kpoint(this->ik, ispin);
-        reset_exx_potential_cache_for_scope(local_kpoint->full_index);
     }
     const int target_ik = target_ik_override >= 0 ? target_ik_override : this->ik;
     // Mixed band target mode uses the target outer k point, but its exchange
     // source q states and weights always come from the converged SCF EXX map.
     auto q_points = source_op_for_target != nullptr ? source_op_for_target->get_active_q_points()
                                                     : get_q_points(this->ik);
+    if (accumulate_hpsi && options.potential_cache_mode == ExxPotentialCacheMode::full_target_k)
+    {
+        std::size_t cache_limit = 0;
+        operator_exx_potential_cache_entry_limit(options.potential_cache_mode,
+                                                 q_points.size(),
+                                                 q_points.size(),
+                                                 cache_limit);
+        reset_exx_potential_cache_for_scope(local_kpoint->full_index, cache_limit, false);
+    }
 
     const int nbands_psi = psi.get_nbands();
     const int requested_target_tile_size = std::max(1, std::min(options.band_tile_size, nbands));
@@ -919,10 +1052,19 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
     const int q_tile_size = std::max(1, std::min(options.q_tile_size, static_cast<int>(q_points.size())));
     const int chunk_size = std::min(resolve_qtile_chunk_size(), source_tile_size);
     const std::size_t real_size = static_cast<std::size_t>(wfcpw_exx->nrxx);
-    const std::size_t target_size = static_cast<std::size_t>(target_tile_size) * real_size;
-    const std::size_t q_size = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size)
-                               * real_size;
-    const std::size_t q_weight_count = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size);
+    std::size_t target_size = 0;
+    std::size_t q_size = 0;
+    std::size_t q_weight_count = 0;
+    if (!checked_exx_qtile_workspace_counts(static_cast<std::size_t>(target_tile_size),
+                                            static_cast<std::size_t>(source_tile_size),
+                                            static_cast<std::size_t>(q_tile_size),
+                                            real_size,
+                                            target_size,
+                                            q_size,
+                                            q_weight_count))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::act_op_qtile", "PW EXX q-tile workspace size overflows size_t");
+    }
 
     ensure_qtile_workspace(target_size,
                            q_size,
@@ -969,6 +1111,15 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
         for (int q_start = 0; q_start < static_cast<int>(q_points.size()); q_start += q_tile_size)
         {
             const int q_count = std::min(q_tile_size, static_cast<int>(q_points.size()) - q_start);
+            if (accumulate_hpsi && options.potential_cache_mode == ExxPotentialCacheMode::q_tile)
+            {
+                std::size_t cache_limit = 0;
+                operator_exx_potential_cache_entry_limit(options.potential_cache_mode,
+                                                         q_points.size(),
+                                                         static_cast<std::size_t>(q_count),
+                                                         cache_limit);
+                reset_exx_potential_cache_for_scope(local_kpoint->full_index, cache_limit, true);
+            }
             for (int m_start = 0; m_start < nbands_psi; m_start += source_tile_size)
             {
                 const int m_count = std::min(source_tile_size, nbands_psi - m_start);
@@ -1031,6 +1182,10 @@ void OperatorEXXPW<T, Device>::act_op_qtile(const int nbands,
                                              source_tile_size,
                                              chunk_size);
                 }
+            }
+            if (accumulate_hpsi && options.potential_cache_mode == ExxPotentialCacheMode::q_tile)
+            {
+                clear_exx_potential_cache();
             }
         }
 
@@ -1219,23 +1374,51 @@ OperatorEXXPW<T, Device>::get_exx_potential_cached(const K_Vectors::ExxFullKPoin
     {
         return cache_it->second;
     }
+    if (pot_cache.size() >= potential_cache_entry_limit)
+    {
+        std::size_t entry_bytes = 0;
+        if (!checked_exx_size_product(static_cast<std::size_t>(rhopw_dev->npw), sizeof(Real), entry_bytes))
+        {
+            ModuleBase::WARNING_QUIT("OperatorEXXPW::get_exx_potential_cached",
+                                     "PW EXX potential cache entry size overflows size_t");
+        }
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::get_exx_potential_cached",
+                                 "PW EXX potential cache entry limit exceeded: entries = "
+                                     + std::to_string(pot_cache.size())
+                                     + ", limit = " + std::to_string(potential_cache_entry_limit)
+                                     + ", entry bytes = " + std::to_string(entry_bytes)
+                                     + ", mode = "
+                                     + exx_potential_cache_mode_name(options.potential_cache_mode));
+    }
 
     Real* pot_new = nullptr;
     resmem_real_op()(pot_new, rhopw_dev->npw);
-    get_exx_potential<Real, Device>(kv,
-                                    wfcpw,
-                                    rhopw_dev,
-                                    pot_new,
-                                    tpiba,
-                                    singular_correction_mode,
-                                    fock_div_local.empty() ? nullptr : &fock_div_local,
-	                                    erfc_div_local.empty() ? nullptr : &erfc_div_local,
-	                                    ucell->omega,
-	                                    kpoint,
-	                                    qpoint,
-	                                    false);
-    pot_cache[cache_key] = pot_new;
-    return pot_new;
+    try
+    {
+        get_exx_potential<Real, Device>(kv,
+                                        wfcpw,
+                                        rhopw_dev,
+                                        pot_new,
+                                        tpiba,
+                                        singular_correction_mode,
+                                        fock_div_local.empty() ? nullptr : &fock_div_local,
+                                        erfc_div_local.empty() ? nullptr : &erfc_div_local,
+                                        ucell->omega,
+                                        kpoint,
+                                        qpoint,
+                                        false);
+        const auto inserted = pot_cache.emplace(cache_key, pot_new);
+        if (!inserted.second)
+        {
+            delmem_real_op()(pot_new);
+        }
+        return inserted.first->second;
+    }
+    catch (...)
+    {
+        delmem_real_op()(pot_new);
+        throw;
+    }
 }
 
 template <typename T, typename Device>
@@ -1247,17 +1430,21 @@ void OperatorEXXPW<T, Device>::clear_exx_potential_cache() const
     }
     pot_cache.clear();
     cached_potential_scope = std::numeric_limits<int>::min();
+    potential_cache_entry_limit = std::numeric_limits<std::size_t>::max();
 }
 
 template <typename T, typename Device>
-void OperatorEXXPW<T, Device>::reset_exx_potential_cache_for_scope(int cache_scope) const
+void OperatorEXXPW<T, Device>::reset_exx_potential_cache_for_scope(int cache_scope,
+                                                                   std::size_t entry_limit,
+                                                                   bool force_clear) const
 {
-    if (cached_potential_scope == cache_scope)
+    if (!force_clear && cached_potential_scope == cache_scope && potential_cache_entry_limit == entry_limit)
     {
         return;
     }
     clear_exx_potential_cache();
     cached_potential_scope = cache_scope;
+    potential_cache_entry_limit = entry_limit;
 }
 
 template <typename T, typename Device>
@@ -1278,10 +1465,22 @@ void OperatorEXXPW<T, Device>::ensure_exx_wave_mapping() const
 
     exx_to_wfc_offsets.assign(wfcpw_exx->nks + 1, 0);
     exx_to_wfc_map_host.clear();
-    exx_to_wfc_map_host.reserve(static_cast<std::size_t>(wfcpw_exx->npwk_max) * wfcpw_exx->nks);
+    std::size_t map_capacity = 0;
+    if (!checked_exx_size_product(static_cast<std::size_t>(wfcpw_exx->npwk_max),
+                                  static_cast<std::size_t>(wfcpw_exx->nks),
+                                  map_capacity))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::ensure_exx_wave_mapping",
+                                 "PW EXX wavefunction map capacity overflows size_t");
+    }
+    exx_to_wfc_map_host.reserve(map_capacity);
     for (int ik = 0; ik < wfcpw_exx->nks; ++ik)
     {
-        exx_to_wfc_offsets[ik] = static_cast<int>(exx_to_wfc_map_host.size());
+        if (!checked_exx_size_to_int(exx_to_wfc_map_host.size(), exx_to_wfc_offsets[ik]))
+        {
+            ModuleBase::WARNING_QUIT("OperatorEXXPW::ensure_exx_wave_mapping",
+                                     "PW EXX wavefunction map offset exceeds INT_MAX");
+        }
         std::map<std::tuple<int, int, int>, int> wfc_g_to_igl;
         for (int igl = 0; igl < wfcpw->npwk[ik]; ++igl)
         {
@@ -1300,7 +1499,11 @@ void OperatorEXXPW<T, Device>::ensure_exx_wave_mapping() const
             exx_to_wfc_map_host.push_back(it == wfc_g_to_igl.end() ? -1 : it->second);
         }
     }
-    exx_to_wfc_offsets[wfcpw_exx->nks] = static_cast<int>(exx_to_wfc_map_host.size());
+    if (!checked_exx_size_to_int(exx_to_wfc_map_host.size(), exx_to_wfc_offsets[wfcpw_exx->nks]))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::ensure_exx_wave_mapping",
+                                 "PW EXX wavefunction map size exceeds INT_MAX");
+    }
 
     if (!std::is_same<Device, base_device::DEVICE_CPU>::value)
     {
@@ -1792,7 +1995,60 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
                                     target_wfcpw->kvec_d,
                                     target_wfcpw->distribution_type,
                                     target_wfcpw->xprime);
-    this->wfcpw_exx->setuptransform(options.batch_fft_size);
+    ExxTilePolicyInput tile_input;
+    tile_input.auto_tiling = this->options.auto_tiling;
+    tile_input.device = target_wfcpw->get_device();
+    tile_input.precision = exx_precision;
+    tile_input.memory_budget_mb = this->options.tile_memory_budget_mb;
+    tile_input.nbands = std::max(1, this->options.configured_nbands);
+    tile_input.active_q_count = active_exx_q_count(*this->kv);
+    tile_input.max_star_size = max_active_exx_star_size(*this->kv);
+    tile_input.nrxx = static_cast<std::size_t>(this->rhopw_dev->nrxx);
+    tile_input.npw = static_cast<std::size_t>(this->rhopw_dev->npw);
+    tile_input.npwk_max = static_cast<std::size_t>(this->wfcpw_exx->npwk_max);
+    tile_input.target_npwk_max = static_cast<std::size_t>(target_wfcpw->npwk_max);
+    tile_input.fft_nx = this->rhopw_dev->nx;
+    tile_input.fft_ny = this->rhopw_dev->ny;
+    tile_input.fft_nz = this->rhopw_dev->nz;
+    tile_input.fft_bundle_count = 1;
+    tile_input.requested_batch_fft_size = this->options.batch_fft_size;
+    tile_input.requested_band_tile_size = this->options.band_tile_size;
+    tile_input.requested_q_tile_size = this->options.q_tile_size;
+    if (!estimate_fixed_exx_scratch_bytes(tile_input.nrxx,
+                                          tile_input.npw,
+                                          tile_input.npwk_max,
+                                          tile_input.target_npwk_max,
+                                          sizeof(T),
+                                          sizeof(Real),
+                                          tile_input.fixed_scratch_bytes))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW", "mixed-target EXX scratch estimate overflows size_t");
+    }
+    if (!checked_exx_size_sum({tile_input.fixed_scratch_bytes,
+                               source_op->options.tile_estimated_peak_bytes},
+                              tile_input.fixed_scratch_bytes))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW",
+                                 "mixed-target EXX resident source memory estimate overflows size_t");
+    }
+    const ExxTilePolicyResult tile_result = choose_exx_tiles(tile_input);
+    if (!tile_result.fits)
+    {
+        const std::size_t required_bytes = tile_result.requested_bytes > 0
+                                               ? tile_result.requested_bytes
+                                               : tile_result.minimum_required_bytes;
+        ModuleBase::WARNING_QUIT("OperatorEXXPW",
+                                 "mixed-target PW EXX tile memory budget is too small: budget bytes = "
+                                     + std::to_string(tile_result.budget_bytes)
+                                     + ", required bytes = " + std::to_string(required_bytes));
+    }
+    this->options.batch_fft_size = tile_result.batch_fft_size;
+    this->options.band_tile_size = tile_result.band_tile_size;
+    this->options.q_tile_size = tile_result.q_tile_size;
+    this->options.potential_cache_mode = tile_result.cache_mode;
+    this->options.tile_budget_bytes = tile_result.budget_bytes;
+    this->options.tile_estimated_peak_bytes = tile_result.estimated_peak_bytes;
+    this->wfcpw_exx->setuptransform(this->options.batch_fft_size);
     this->wfcpw_exx->collect_local_pw();
 
     if (this->wfcpw_exx->nrxx != source_op->wfcpw_exx->nrxx
@@ -1834,6 +2090,19 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
     {
         GlobalV::ofs_running << " Mixed band target EXX singular correction = smooth target-k"
                              << " (source q mesh fixed, MP gamma mask disabled for target k)" << std::endl;
+        const double bytes_per_mib = 1024.0 * 1024.0;
+        GlobalV::ofs_running << " Mixed band target PW EXX tiling: mode = "
+                             << (this->options.auto_tiling ? "automatic" : "manual")
+                             << ", budget = " << std::fixed << std::setprecision(1)
+                             << static_cast<double>(this->options.tile_budget_bytes) / bytes_per_mib
+                             << " MiB, batch = " << this->options.batch_fft_size
+                             << ", band = " << this->options.band_tile_size
+                             << ", q = " << this->options.q_tile_size
+                             << ", cache = "
+                             << exx_potential_cache_mode_name(this->options.potential_cache_mode)
+                             << ", estimated peak = "
+                             << static_cast<double>(this->options.tile_estimated_peak_bytes) / bytes_per_mib
+                             << " MiB" << std::defaultfloat << std::endl;
     }
 
     resmem_complex_op()(psi_nk_real, wfcpw_exx->nrxx);
@@ -1927,9 +2196,20 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
     const int q_tile_size = std::max(1, std::min(options.q_tile_size, static_cast<int>(q_points.size())));
     const int chunk_size = std::min(resolve_qtile_chunk_size(), source_tile_size);
     const std::size_t real_size = static_cast<std::size_t>(wfcpw_exx->nrxx);
-    const std::size_t q_size = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size)
-                               * real_size;
-    const std::size_t q_weight_count = static_cast<std::size_t>(q_tile_size) * static_cast<std::size_t>(source_tile_size);
+    std::size_t unused_target_size = 0;
+    std::size_t q_size = 0;
+    std::size_t q_weight_count = 0;
+    if (!checked_exx_qtile_workspace_counts(0,
+                                            static_cast<std::size_t>(source_tile_size),
+                                            static_cast<std::size_t>(q_tile_size),
+                                            real_size,
+                                            unused_target_size,
+                                            q_size,
+                                            q_weight_count))
+    {
+        ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                 "PW EXX energy q-tile workspace size overflows size_t");
+    }
 
     ensure_qtile_workspace(0,
                            q_size,
@@ -1971,7 +2251,17 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
         for (int q_start = 0; q_start < static_cast<int>(q_points.size()); q_start += q_tile_size)
         {
             const int q_count = std::min(q_tile_size, static_cast<int>(q_points.size()) - q_start);
-            reset_exx_potential_cache_for_scope(exx_energy_k_policy::representative_cache_scope(energy_kpoint));
+            std::size_t cache_limit = 0;
+            if (!direct_exx_potential_cache_entry_limit(star_k_points.size(),
+                                                        static_cast<std::size_t>(q_count),
+                                                        cache_limit))
+            {
+                ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",
+                                         "PW EXX direct potential-cache entry limit overflows size_t");
+            }
+            reset_exx_potential_cache_for_scope(exx_energy_k_policy::representative_cache_scope(energy_kpoint),
+                                                cache_limit,
+                                                true);
             for (int m_start = 0; m_start < nbands_psi; m_start += source_tile_size)
             {
                 const int m_count = std::min(source_tile_size, nbands_psi - m_start);
@@ -2086,9 +2376,6 @@ double OperatorEXXPW<T, Device>::cal_exx_energy_op_qtile(psi::Psi<T, Device> *pp
                     }
                 }
             }
-            const std::size_t cache_limit = exx_energy_k_policy::direct_potential_cache_entry_limit(
-                star_k_points.size(),
-                static_cast<std::size_t>(q_count));
             if (pot_cache.size() > cache_limit)
             {
                 ModuleBase::WARNING_QUIT("OperatorEXXPW::cal_exx_energy_op_qtile",

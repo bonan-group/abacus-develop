@@ -1,11 +1,54 @@
 #include "fft_cuda.h"
 
 #include <cassert>
+#include <limits>
 #include "source_base/module_device/memory_op.h"
 #include "source_base/module_device/device_check.h"
+#include "source_base/tool_quit.h"
 
 namespace ModuleBase
 {
+namespace
+{
+std::size_t checked_fft_grid_size(int nx, int ny, int nz)
+{
+    if (nx <= 0 || ny <= 0 || nz <= 0)
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "FFT grid dimensions must be positive");
+    }
+    std::size_t grid_size = static_cast<std::size_t>(nx);
+    if (static_cast<std::size_t>(ny) > std::numeric_limits<std::size_t>::max() / grid_size)
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "FFT grid size overflows size_t");
+    }
+    grid_size *= static_cast<std::size_t>(ny);
+    if (static_cast<std::size_t>(nz) > std::numeric_limits<std::size_t>::max() / grid_size)
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "FFT grid size overflows size_t");
+    }
+    return grid_size * static_cast<std::size_t>(nz);
+}
+
+std::size_t checked_fft_batch_size(std::size_t grid_size, int batch_size)
+{
+    if (batch_size <= 0
+        || static_cast<std::size_t>(batch_size) > std::numeric_limits<std::size_t>::max() / grid_size)
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "batched FFT buffer size overflows size_t");
+    }
+    return static_cast<std::size_t>(batch_size) * grid_size;
+}
+
+std::size_t checked_fft_byte_size(std::size_t element_count, std::size_t element_size)
+{
+    if (element_count != 0 && element_size > std::numeric_limits<std::size_t>::max() / element_count)
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "FFT allocation byte size overflows size_t");
+    }
+    return element_count * element_size;
+}
+} // namespace
+
 template <typename FPTYPE>
 void FFT_CUDA<FPTYPE>::initfft(int nx_in, int ny_in, int nz_in)
 {
@@ -17,13 +60,17 @@ template <>
 void FFT_CUDA<float>::setupFFT()
 {
     cufftPlan3d(&c_handle, this->nx, this->ny, this->nz, CUFFT_C2C);
-    resmem_cd_op()(this->c_auxr_3d, this->nx * this->ny * this->nz);
+    const std::size_t grid_size = checked_fft_grid_size(this->nx, this->ny, this->nz);
+    checked_fft_byte_size(grid_size, sizeof(std::complex<float>));
+    resmem_cd_op()(this->c_auxr_3d, grid_size);
 }
 template <>
 void FFT_CUDA<double>::setupFFT()
 {
     cufftPlan3d(&z_handle, this->nx, this->ny, this->nz, CUFFT_Z2Z);
-    resmem_zd_op()(this->z_auxr_3d, this->nx * this->ny * this->nz);
+    const std::size_t grid_size = checked_fft_grid_size(this->nx, this->ny, this->nz);
+    checked_fft_byte_size(grid_size, sizeof(std::complex<double>));
+    resmem_zd_op()(this->z_auxr_3d, grid_size);
 }
 template <>
 void FFT_CUDA<float>::cleanFFT()
@@ -175,8 +222,13 @@ void FFT_CUDA<float>::setupBatchFFT(int batch_size_in)
 
     const int rank = 3;
     int n[3] = {this->nx, this->ny, this->nz};
-    const int idist = this->nx * this->ny * this->nz;
-    const int odist = this->nx * this->ny * this->nz;
+    const std::size_t grid_size = checked_fft_grid_size(this->nx, this->ny, this->nz);
+    if (grid_size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "batched FFT grid size exceeds cuFFT int distance range");
+    }
+    const int idist = static_cast<int>(grid_size);
+    const int odist = static_cast<int>(grid_size);
     const int istride = 1;
     const int ostride = 1;
 
@@ -189,7 +241,8 @@ void FFT_CUDA<float>::setupBatchFFT(int batch_size_in)
                               this->batch_size));
 
     // Allocate batch buffers on device
-    const size_t batch_buffer_size = this->batch_size * this->nx * this->ny * this->nz;
+    const std::size_t batch_buffer_size = checked_fft_batch_size(grid_size, this->batch_size);
+    checked_fft_byte_size(batch_buffer_size, sizeof(std::complex<float>));
     resmem_cd_op()(this->c_auxr_batch_in, batch_buffer_size, "FFT_CUDA::c_batch_in");
     resmem_cd_op()(this->c_auxr_batch_out, batch_buffer_size, "FFT_CUDA::c_batch_out");
 }
@@ -211,8 +264,13 @@ void FFT_CUDA<double>::setupBatchFFT(int batch_size_in)
 
     const int rank = 3;
     int n[3] = {this->nx, this->ny, this->nz};
-    const int idist = this->nx * this->ny * this->nz;
-    const int odist = this->nx * this->ny * this->nz;
+    const std::size_t grid_size = checked_fft_grid_size(this->nx, this->ny, this->nz);
+    if (grid_size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    {
+        ModuleBase::WARNING_QUIT("FFT_CUDA", "batched FFT grid size exceeds cuFFT int distance range");
+    }
+    const int idist = static_cast<int>(grid_size);
+    const int odist = static_cast<int>(grid_size);
     const int istride = 1;
     const int ostride = 1;
 
@@ -225,7 +283,8 @@ void FFT_CUDA<double>::setupBatchFFT(int batch_size_in)
                               this->batch_size));
 
     // Allocate batch buffers on device
-    const size_t batch_buffer_size = this->batch_size * this->nx * this->ny * this->nz;
+    const std::size_t batch_buffer_size = checked_fft_batch_size(grid_size, this->batch_size);
+    checked_fft_byte_size(batch_buffer_size, sizeof(std::complex<double>));
     resmem_zd_op()(this->z_auxr_batch_in, batch_buffer_size, "FFT_CUDA::z_batch_in");
     resmem_zd_op()(this->z_auxr_batch_out, batch_buffer_size, "FFT_CUDA::z_batch_out");
 }
@@ -238,7 +297,7 @@ void FFT_CUDA<float>::fft3D_forward_batch(std::complex<float>* in_batch,
     // Validate batch_count - programming error if out of range
     assert(batch_count > 0 && "batch_count must be positive");
     assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
-    const std::size_t nxyz = static_cast<std::size_t>(this->nx) * this->ny * this->nz;
+    const std::size_t nxyz = checked_fft_grid_size(this->nx, this->ny, this->nz);
 
     if (batch_count == this->batch_size)
     {
@@ -249,12 +308,13 @@ void FFT_CUDA<float>::fft3D_forward_batch(std::complex<float>* in_batch,
         return;
     }
 
-    const std::size_t valid_size = static_cast<std::size_t>(batch_count) * nxyz;
+    const std::size_t valid_size = checked_fft_batch_size(nxyz, batch_count);
+    const std::size_t valid_bytes = checked_fft_byte_size(valid_size, sizeof(std::complex<float>));
     if (in_batch != this->c_auxr_batch_in)
     {
         CHECK_CUDA(cudaMemcpy(this->c_auxr_batch_in,
                               in_batch,
-                              valid_size * sizeof(std::complex<float>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
     CHECK_CUFFT(cufftExecC2C(this->c_batch_handle,
@@ -265,7 +325,7 @@ void FFT_CUDA<float>::fft3D_forward_batch(std::complex<float>* in_batch,
     {
         CHECK_CUDA(cudaMemcpy(out_batch,
                               this->c_auxr_batch_out,
-                              valid_size * sizeof(std::complex<float>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
 }
@@ -278,7 +338,7 @@ void FFT_CUDA<double>::fft3D_forward_batch(std::complex<double>* in_batch,
     // Validate batch_count - programming error if out of range
     assert(batch_count > 0 && "batch_count must be positive");
     assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
-    const std::size_t nxyz = static_cast<std::size_t>(this->nx) * this->ny * this->nz;
+    const std::size_t nxyz = checked_fft_grid_size(this->nx, this->ny, this->nz);
 
     if (batch_count == this->batch_size)
     {
@@ -289,12 +349,13 @@ void FFT_CUDA<double>::fft3D_forward_batch(std::complex<double>* in_batch,
         return;
     }
 
-    const std::size_t valid_size = static_cast<std::size_t>(batch_count) * nxyz;
+    const std::size_t valid_size = checked_fft_batch_size(nxyz, batch_count);
+    const std::size_t valid_bytes = checked_fft_byte_size(valid_size, sizeof(std::complex<double>));
     if (in_batch != this->z_auxr_batch_in)
     {
         CHECK_CUDA(cudaMemcpy(this->z_auxr_batch_in,
                               in_batch,
-                              valid_size * sizeof(std::complex<double>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
     CHECK_CUFFT(cufftExecZ2Z(this->z_batch_handle,
@@ -305,7 +366,7 @@ void FFT_CUDA<double>::fft3D_forward_batch(std::complex<double>* in_batch,
     {
         CHECK_CUDA(cudaMemcpy(out_batch,
                               this->z_auxr_batch_out,
-                              valid_size * sizeof(std::complex<double>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
 }
@@ -318,7 +379,7 @@ void FFT_CUDA<float>::fft3D_backward_batch(std::complex<float>* in_batch,
     // Validate batch_count - programming error if out of range
     assert(batch_count > 0 && "batch_count must be positive");
     assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
-    const std::size_t nxyz = static_cast<std::size_t>(this->nx) * this->ny * this->nz;
+    const std::size_t nxyz = checked_fft_grid_size(this->nx, this->ny, this->nz);
 
     if (batch_count == this->batch_size)
     {
@@ -329,12 +390,13 @@ void FFT_CUDA<float>::fft3D_backward_batch(std::complex<float>* in_batch,
         return;
     }
 
-    const std::size_t valid_size = static_cast<std::size_t>(batch_count) * nxyz;
+    const std::size_t valid_size = checked_fft_batch_size(nxyz, batch_count);
+    const std::size_t valid_bytes = checked_fft_byte_size(valid_size, sizeof(std::complex<float>));
     if (in_batch != this->c_auxr_batch_in)
     {
         CHECK_CUDA(cudaMemcpy(this->c_auxr_batch_in,
                               in_batch,
-                              valid_size * sizeof(std::complex<float>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
     CHECK_CUFFT(cufftExecC2C(this->c_batch_handle,
@@ -345,7 +407,7 @@ void FFT_CUDA<float>::fft3D_backward_batch(std::complex<float>* in_batch,
     {
         CHECK_CUDA(cudaMemcpy(out_batch,
                               this->c_auxr_batch_out,
-                              valid_size * sizeof(std::complex<float>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
 }
@@ -358,7 +420,7 @@ void FFT_CUDA<double>::fft3D_backward_batch(std::complex<double>* in_batch,
     // Validate batch_count - programming error if out of range
     assert(batch_count > 0 && "batch_count must be positive");
     assert(batch_count <= this->batch_size && "batch_count exceeds allocated batch_size");
-    const std::size_t nxyz = static_cast<std::size_t>(this->nx) * this->ny * this->nz;
+    const std::size_t nxyz = checked_fft_grid_size(this->nx, this->ny, this->nz);
 
     if (batch_count == this->batch_size)
     {
@@ -369,12 +431,13 @@ void FFT_CUDA<double>::fft3D_backward_batch(std::complex<double>* in_batch,
         return;
     }
 
-    const std::size_t valid_size = static_cast<std::size_t>(batch_count) * nxyz;
+    const std::size_t valid_size = checked_fft_batch_size(nxyz, batch_count);
+    const std::size_t valid_bytes = checked_fft_byte_size(valid_size, sizeof(std::complex<double>));
     if (in_batch != this->z_auxr_batch_in)
     {
         CHECK_CUDA(cudaMemcpy(this->z_auxr_batch_in,
                               in_batch,
-                              valid_size * sizeof(std::complex<double>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
     CHECK_CUFFT(cufftExecZ2Z(this->z_batch_handle,
@@ -385,7 +448,7 @@ void FFT_CUDA<double>::fft3D_backward_batch(std::complex<double>* in_batch,
     {
         CHECK_CUDA(cudaMemcpy(out_batch,
                               this->z_auxr_batch_out,
-                              valid_size * sizeof(std::complex<double>),
+                              valid_bytes,
                               cudaMemcpyDeviceToDevice));
     }
 }

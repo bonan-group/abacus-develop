@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <complex>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <vector>
@@ -36,19 +37,32 @@ struct IntGKeyHash
 {
     std::size_t operator()(const IntGKey& key) const
     {
-        std::size_t h = static_cast<std::size_t>(key.x * 73856093);
-        h ^= static_cast<std::size_t>(key.y * 19349663);
-        h ^= static_cast<std::size_t>(key.z * 83492791);
+        std::size_t h = std::hash<int>()(key.x) * static_cast<std::size_t>(73856093);
+        h ^= std::hash<int>()(key.y) * static_cast<std::size_t>(19349663);
+        h ^= std::hash<int>()(key.z) * static_cast<std::size_t>(83492791);
         return h;
     }
 };
 
+int checked_rounded_g_component(double value)
+{
+    const double rounded = std::round(value);
+    if (!std::isfinite(rounded)
+        || rounded < static_cast<double>(std::numeric_limits<int>::min())
+        || rounded > static_cast<double>(std::numeric_limits<int>::max()))
+    {
+        ModuleBase::WARNING_QUIT("build_exx_symmetry_remap",
+                                 "reciprocal-grid component cannot be represented as int");
+    }
+    return static_cast<int>(rounded);
+}
+
 IntGKey make_int_g_key(const ModuleBase::Vector3<double>& g)
 {
     IntGKey key;
-    key.x = static_cast<int>(std::lround(g.x));
-    key.y = static_cast<int>(std::lround(g.y));
-    key.z = static_cast<int>(std::lround(g.z));
+    key.x = checked_rounded_g_component(g.x);
+    key.y = checked_rounded_g_component(g.y);
+    key.z = checked_rounded_g_component(g.z);
     return key;
 }
 
@@ -189,16 +203,6 @@ MPI_Datatype mpi_complex_type<std::complex<double>>()
 }
 #endif
 } // namespace
-
-bool checked_exx_size_product(std::size_t lhs, std::size_t rhs, std::size_t& result)
-{
-    if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs)
-    {
-        return false;
-    }
-    result = lhs * rhs;
-    return true;
-}
 
 bool is_exx_realspace_symmetry_grid_compatible(const ModulePW::PW_Basis_K* wfcpw,
                                                const K_Vectors::ExxFullPoint& full_point)
