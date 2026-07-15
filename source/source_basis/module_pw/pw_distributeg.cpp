@@ -230,8 +230,8 @@ void PW_Basis::get_ig2isz_is2fftixy(
         int iz = isz % this->nz;
         int is = isz / this->nz;
         int ixy = this->is2fftixy[is];
-        int iy = ixy % this->ny;
-        int ix = ixy / this->ny;
+        int iy = ixy % this->fftny;
+        int ix = ixy / this->fftny;
         ig2ixyz[igl] = iz + iy * nz + ix * ny * nz;
     }
 #if defined(__CUDA) || defined(__ROCM)

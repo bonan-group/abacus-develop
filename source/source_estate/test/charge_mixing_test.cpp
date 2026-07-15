@@ -106,7 +106,30 @@ class ChargeMixingTest : public ::testing::Test
     }
     ModulePW::PW_Basis pw_basis;
     ModulePW::PW_Basis_Sup pw_dbasis;
-    Charge charge;    
+    Charge charge;
+
+    void configure_gpu_eligibility(Charge_Mixing& mixing,
+                                   const std::string& mode,
+                                   const double angle,
+                                   const bool mix_tau)
+    {
+        mixing.mixing_mode = mode;
+        mixing.mixing_angle = angle;
+        mixing.mixing_tau = mix_tau;
+        mixing.mixing_gpu_enabled = true;
+        mixing.set_device("gpu");
+    }
+
+    void set_angle_test_context(const int nspin,
+                                const bool double_grid,
+                                const int scf_thr_type,
+                                const double angle)
+    {
+        PARAM.input.nspin = nspin;
+        PARAM.sys.double_grid = double_grid;
+        PARAM.input.scf_thr_type = scf_thr_type;
+        PARAM.input.mixing_angle = angle;
+    }
 };
 
 TEST_F(ChargeMixingTest, SetMixingTest)
@@ -303,6 +326,267 @@ TEST_F(ChargeMixingTest, GPUFFTRejectsMultipleRanksPerPool)
     const std::string output = testing::internal::GetCapturedStdout();
     EXPECT_THAT(output, testing::HasSubstr("GPU FFT with poolnproc > 1 is not supported"));
     EXPECT_THAT(output, testing::HasSubstr("Charge_Mixing::get_drho"));
+}
+
+TEST_F(ChargeMixingTest, PlainNspin1EligibleForGpuResidentMixing)
+{
+    Charge_Mixing CMtest;
+    CMtest.set_rhopw(&pw_basis, &pw_basis);
+    configure_gpu_eligibility(CMtest, "plain", 0.0, false);
+
+    Charge chr;
+    chr.device_ = "gpu";
+    chr.nspin = 1;
+
+    EXPECT_TRUE(CMtest.can_use_gpu_resident_mixing(&chr));
+}
+
+TEST_F(ChargeMixingTest, PlainSpinfulEligibleForGpuResidentMixing)
+{
+    Charge chr;
+    chr.device_ = "gpu";
+
+    for (const int nspin : {2, 4})
+    {
+        chr.nspin = nspin;
+
+        Charge_Mixing CMtest;
+        CMtest.set_rhopw(&pw_basis, &pw_basis);
+        configure_gpu_eligibility(CMtest, "plain", 0.0, false);
+
+        EXPECT_TRUE(CMtest.can_use_gpu_resident_mixing(&chr)) << "nspin=" << nspin;
+    }
+}
+
+TEST_F(ChargeMixingTest, DiisSpinfulEligibleForGpuResidentMixing)
+{
+    Charge chr;
+    chr.device_ = "gpu";
+
+    for (const std::string mixing_mode : {"broyden", "pulay"})
+    {
+        for (const int nspin : {2, 4})
+        {
+            chr.nspin = nspin;
+
+            Charge_Mixing CMtest;
+            CMtest.set_rhopw(&pw_basis, &pw_basis);
+            configure_gpu_eligibility(CMtest, mixing_mode, 0.0, false);
+
+            EXPECT_TRUE(CMtest.can_use_gpu_resident_mixing(&chr))
+                << "mixing_mode=" << mixing_mode << ", nspin=" << nspin;
+        }
+    }
+}
+
+TEST_F(ChargeMixingTest, DoubleGridNspin1EligibleForGpuResidentMixing)
+{
+    Charge chr;
+    chr.device_ = "gpu";
+    chr.nspin = 1;
+
+    for (const std::string mixing_mode : {"plain", "broyden", "pulay"})
+    {
+        Charge_Mixing CMtest;
+        CMtest.set_rhopw(&pw_basis, &pw_dbasis);
+        configure_gpu_eligibility(CMtest, mixing_mode, 0.0, false);
+
+        EXPECT_TRUE(CMtest.can_use_gpu_resident_mixing(&chr)) << "mixing_mode=" << mixing_mode;
+    }
+
+}
+
+TEST_F(ChargeMixingTest, DoubleGridSpinfulEligibleForGpuResidentMixing)
+{
+    Charge chr;
+    chr.device_ = "gpu";
+
+    for (const std::string mixing_mode : {"plain", "broyden", "pulay"})
+    {
+        for (const int nspin : {2, 4})
+        {
+            chr.nspin = nspin;
+
+            Charge_Mixing CMtest;
+            CMtest.set_rhopw(&pw_basis, &pw_dbasis);
+            configure_gpu_eligibility(CMtest, mixing_mode, 0.0, false);
+
+            EXPECT_TRUE(CMtest.can_use_gpu_resident_mixing(&chr))
+                << "mixing_mode=" << mixing_mode << ", nspin=" << nspin;
+        }
+    }
+
+}
+
+TEST_F(ChargeMixingTest, DoubleGridTauEligibleForGpuResidentMixing)
+{
+    XC_Functional::ked_flag = true;
+    Charge chr;
+    chr.device_ = "gpu";
+
+    for (const std::string mixing_mode : {"plain", "broyden", "pulay"})
+    {
+        for (const int nspin : {1, 2, 4})
+        {
+            chr.nspin = nspin;
+
+            Charge_Mixing CMtest;
+            CMtest.set_rhopw(&pw_basis, &pw_dbasis);
+            configure_gpu_eligibility(CMtest, mixing_mode, 0.0, true);
+
+            EXPECT_TRUE(CMtest.can_use_gpu_resident_mixing(&chr))
+                << "mixing_mode=" << mixing_mode << ", nspin=" << nspin;
+        }
+    }
+
+    XC_Functional::ked_flag = false;
+}
+
+TEST_F(ChargeMixingTest, GpuResidentMixingRejectsUnsupportedConfigurations)
+{
+    XC_Functional::ked_flag = false;
+
+    Charge chr;
+    chr.device_ = "gpu";
+    chr.nspin = 1;
+    Charge_Mixing CMtest;
+    CMtest.set_rhopw(&pw_basis, &pw_basis);
+    configure_gpu_eligibility(CMtest, "broyden", 0.0, false);
+
+    EXPECT_FALSE(CMtest.can_use_gpu_resident_mixing(nullptr));
+    CMtest.mixing_gpu_enabled = false;
+    EXPECT_FALSE(CMtest.can_use_gpu_resident_mixing(&chr));
+    CMtest.mixing_gpu_enabled = true;
+    CMtest.device_ = "cpu";
+    EXPECT_FALSE(CMtest.can_use_gpu_resident_mixing(&chr));
+    CMtest.device_ = "gpu";
+    chr.device_ = "cpu";
+    EXPECT_FALSE(CMtest.can_use_gpu_resident_mixing(&chr));
+    chr.device_ = "gpu";
+    chr.nspin = 4;
+    CMtest.mixing_angle = 1.0;
+    EXPECT_FALSE(CMtest.can_use_gpu_resident_mixing(&chr));
+
+    CMtest.mixing_tau = false;
+    XC_Functional::ked_flag = false;
+}
+
+TEST_F(ChargeMixingTest, MixingAngleDoubleGridMatchesPlainMixReference)
+{
+    const int nspin = 4;
+    const double mixing_beta = 0.7;
+    const double mixing_beta_mag = 0.5;
+    const double mixing_angle = 1.0;
+    set_angle_test_context(nspin, true, 1, mixing_angle);
+    XC_Functional::ked_flag = false;
+
+    const int nrxx = pw_dbasis.nrxx;
+    const int npw = pw_dbasis.npw;
+    std::vector<double> rho_data(nspin * nrxx);
+    std::vector<double> rho_save_data(nspin * nrxx);
+    std::vector<double> rho_original(nspin * nrxx);
+    std::vector<double> rho_save_original(nspin * nrxx);
+    std::vector<std::complex<double>> rhog_data(nspin * npw);
+    std::vector<std::complex<double>> rhog_save_data(nspin * npw);
+    std::vector<double*> rho(nspin);
+    std::vector<double*> rho_save(nspin);
+    std::vector<std::complex<double>*> rhog(nspin);
+    std::vector<std::complex<double>*> rhog_save(nspin);
+    for (int is = 0; is < nspin; ++is)
+    {
+        rho[is] = rho_data.data() + is * nrxx;
+        rho_save[is] = rho_save_data.data() + is * nrxx;
+        rhog[is] = rhog_data.data() + is * npw;
+        rhog_save[is] = rhog_save_data.data() + is * npw;
+        for (int ir = 0; ir < nrxx; ++ir)
+        {
+            rho[is][ir] = 0.2 * (is + 1) + 0.01 * ir;
+            rho_save[is][ir] = 0.08 * (is + 1) + 0.003 * (nspin - is) * ir
+                               + 0.01 * ((is + ir) % 3);
+        }
+        pw_dbasis.real2recip(rho[is], rhog[is]);
+        pw_dbasis.real2recip(rho_save[is], rhog_save[is]);
+    }
+    rho_original = rho_data;
+    rho_save_original = rho_save_data;
+
+    std::vector<double> magnitude(nrxx);
+    std::vector<double> magnitude_save(nrxx);
+    std::vector<double> expected_magnitude(nrxx);
+    std::vector<std::complex<double>> magnitude_g(npw);
+    std::vector<std::complex<double>> magnitude_save_g(npw);
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        double magnitude2 = 0.0;
+        double magnitude_save2 = 0.0;
+        for (int is = 1; is < nspin; ++is)
+        {
+            magnitude2 += rho_original[is * nrxx + ir] * rho_original[is * nrxx + ir];
+            magnitude_save2 += rho_save_original[is * nrxx + ir] * rho_save_original[is * nrxx + ir];
+        }
+        magnitude[ir] = std::sqrt(magnitude2);
+        magnitude_save[ir] = std::sqrt(magnitude_save2);
+    }
+    pw_dbasis.real2recip(magnitude.data(), magnitude_g.data());
+    pw_dbasis.real2recip(magnitude_save.data(), magnitude_save_g.data());
+    for (int ig = 0; ig < npw; ++ig)
+    {
+        magnitude_g[ig]
+            = magnitude_save_g[ig] + mixing_beta_mag * (magnitude_g[ig] - magnitude_save_g[ig]);
+    }
+    pw_dbasis.recip2real(magnitude_g.data(), expected_magnitude.data());
+
+    Charge angle_charge;
+    angle_charge.set_rhopw(&pw_dbasis);
+    angle_charge.rho = rho.data();
+    angle_charge.rho_save = rho_save.data();
+    angle_charge.rhog = rhog.data();
+    angle_charge.rhog_save = rhog_save.data();
+    angle_charge.nspin = nspin;
+
+    Charge_Mixing CMtest;
+    CMtest.set_rhopw(&pw_basis, &pw_dbasis);
+    CMtest.set_mixing("plain",
+                      mixing_beta,
+                      1,
+                      0.0,
+                      false,
+                      mixing_beta_mag,
+                      0.0,
+                      0.1,
+                      mixing_angle,
+                      false,
+                      ucell.omega,
+                      ucell.tpiba,
+                      true);
+    CMtest.init_mixing();
+    CMtest.mix_rho(&angle_charge);
+
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        const double expected_charge
+            = rho_save_original[ir] + mixing_beta * (rho_original[ir] - rho_save_original[ir]);
+        EXPECT_NEAR(rho[0][ir], expected_charge, 1e-10);
+
+        double original_mag2 = 0.0;
+        double mixed_mag2 = 0.0;
+        for (int is = 1; is < nspin; ++is)
+        {
+            original_mag2 += rho_original[is * nrxx + ir] * rho_original[is * nrxx + ir];
+            mixed_mag2 += rho[is][ir] * rho[is][ir];
+        }
+        const double original_mag = std::sqrt(original_mag2);
+        const double mixed_mag = std::sqrt(mixed_mag2);
+        EXPECT_NEAR(mixed_mag, expected_magnitude[ir], 1e-10);
+        for (int is = 1; is < nspin; ++is)
+        {
+            EXPECT_NEAR(rho[is][ir] / mixed_mag,
+                        rho_original[is * nrxx + ir] / original_mag,
+                        1e-10);
+        }
+    }
+
+    set_angle_test_context(1, false, 1, -10.0);
 }
 
 TEST_F(ChargeMixingTest, InnerDotRealTest)
@@ -1114,6 +1398,15 @@ TEST_F(ChargeMixingTest, MixDivCombTest)
     CMtest.clean_data(datas2, datahf2);
     EXPECT_EQ(datas2, nullptr);
     EXPECT_EQ(datahf2, nullptr);
+
+    // Distinct spin channels with equal smooth/dense basis sizes have no high-frequency buffer.
+    CMtest.set_rhopw(&pw_basis, &pw_basis);
+    data.assign(pw_basis.npw * 2, std::complex<double>(2.0, -1.0));
+    dataout.assign(pw_basis.npw * 2, std::complex<double>());
+    CMtest.divide_data(data.data(), datas, datahf);
+    EXPECT_EQ(datahf, nullptr);
+    CMtest.combine_data(dataout.data(), datas, datahf);
+    EXPECT_EQ(dataout, data);
 }
 
 TEST_F(ChargeMixingTest, SCFOscillationTest)

@@ -61,10 +61,76 @@ FPTYPE inner_product_recip_hartree_op<FPTYPE, base_device::DEVICE_CPU>::operator
     return result * tpiba2;
 }
 
+template <typename FPTYPE>
+void pack_spin_recip_op<FPTYPE, base_device::DEVICE_CPU>::operator()(
+    const base_device::DEVICE_CPU* ctx,
+    std::complex<FPTYPE>* packed,
+    const std::complex<FPTYPE>* spin_data,
+    const int npw,
+    const int nspin)
+{
+    if (nspin == 2)
+    {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 512)
+#endif
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            packed[ig] = spin_data[ig] + spin_data[npw + ig];
+            packed[npw + ig] = spin_data[ig] - spin_data[npw + ig];
+        }
+    }
+    else if (nspin == 4)
+    {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 512)
+#endif
+        for (int i = 0; i < nspin * npw; ++i)
+        {
+            packed[i] = spin_data[i];
+        }
+    }
+}
+
+template <typename FPTYPE>
+void unpack_spin_recip_op<FPTYPE, base_device::DEVICE_CPU>::operator()(
+    const base_device::DEVICE_CPU* ctx,
+    std::complex<FPTYPE>* spin_data,
+    const std::complex<FPTYPE>* packed,
+    const int npw,
+    const int nspin)
+{
+    if (nspin == 2)
+    {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 512)
+#endif
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            spin_data[ig] = static_cast<FPTYPE>(0.5) * (packed[ig] + packed[npw + ig]);
+            spin_data[npw + ig] = static_cast<FPTYPE>(0.5) * (packed[ig] - packed[npw + ig]);
+        }
+    }
+    else if (nspin == 4)
+    {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 512)
+#endif
+        for (int i = 0; i < nspin * npw; ++i)
+        {
+            spin_data[i] = packed[i];
+        }
+    }
+}
+
 // Explicit template instantiations
 template struct kerker_screen_recip_op<float, base_device::DEVICE_CPU>;
 template struct kerker_screen_recip_op<double, base_device::DEVICE_CPU>;
 template struct inner_product_recip_hartree_op<float, base_device::DEVICE_CPU>;
 template struct inner_product_recip_hartree_op<double, base_device::DEVICE_CPU>;
+template struct pack_spin_recip_op<float, base_device::DEVICE_CPU>;
+template struct pack_spin_recip_op<double, base_device::DEVICE_CPU>;
+template struct unpack_spin_recip_op<float, base_device::DEVICE_CPU>;
+template struct unpack_spin_recip_op<double, base_device::DEVICE_CPU>;
 
 } // namespace elecstate

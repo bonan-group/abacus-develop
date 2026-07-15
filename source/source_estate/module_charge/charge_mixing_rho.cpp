@@ -16,10 +16,9 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 // Full GPU-resident mixing path
 // Re-enabled after fixing the complex vector_axpy_op aliasing bug
 #if __CUDA
-    // Full GPU-resident mixing path for nspin=1 with Broyden or Pulay mixing
+    // Full GPU-resident mixing path for supported reciprocal mixing cases.
     // This path keeps all mixing history and operations on GPU
-    if (this->mixing_gpu_enabled && device_ == "gpu" && chr->get_device() == "gpu" &&
-        nspin == 1 && (mixing_mode == "broyden" || mixing_mode == "pulay") && !double_grid)
+    if (this->can_use_gpu_resident_mixing(chr))
     {
         validate_gpu_fft_poolnproc(chr->rhopw, "Charge_Mixing::mix_rho_recip");
 
@@ -39,17 +38,17 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
         {
             this->log_gpu_charge_mixing_fallback("charge density is not resident on GPU");
         }
+        else if (mixing_mode != "plain" && mixing_mode != "broyden" && mixing_mode != "pulay")
+        {
+            this->log_gpu_charge_mixing_fallback("only plain, Broyden, and Pulay mixing are supported");
+        }
+        else if (nspin == 4 && this->mixing_angle > 0.0)
+        {
+            this->log_gpu_charge_mixing_fallback("mixing_angle > 0 is not supported");
+        }
         else if (nspin != 1)
         {
-            this->log_gpu_charge_mixing_fallback("only nspin=1 is supported");
-        }
-        else if (mixing_mode != "broyden" && mixing_mode != "pulay")
-        {
-            this->log_gpu_charge_mixing_fallback("only Broyden and Pulay mixing are supported");
-        }
-        else if (double_grid)
-        {
-            this->log_gpu_charge_mixing_fallback("double_grid is enabled");
+            this->log_gpu_charge_mixing_fallback("this spin configuration is not supported");
         }
     }
 #elif defined(__ROCM)
@@ -194,53 +193,63 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
         // special broyden mixing for {rho, |m|} proposed by J. Phys. Soc. Jpn. 82 (2013) 114706
         // here only consider the case of mixing_angle = 1, which mean only change |m| and keep angle fixed
         // old support see mix_rho_recip()
-        if ( PARAM.globalv.double_grid)
-        {
-            ModuleBase::WARNING_QUIT("Charge_Mixing", "double_grid is not supported for new mixing method yet.");
-        }
+        const bool use_double_grid = double_grid;
+        const int smooth_npw = this->rhopw->npw;
+        const int dense_npw = use_double_grid ? this->rhodpw->npw : this->rhopw->npw;
+        const int real_nrxx = use_double_grid ? this->rhodpw->nrxx : this->rhopw->nrxx;
         // allocate memory for rho_magabs and rho_magabs_save
-        const int nrxx = this->rhopw->nrxx;
-        double* rho_magabs = new double[nrxx];
-        double* rho_magabs_save = new double[nrxx];
-        ModuleBase::GlobalFunc::ZEROS(rho_magabs, nrxx);
-        ModuleBase::GlobalFunc::ZEROS(rho_magabs_save, nrxx);
+        std::vector<double> rho_magabs(real_nrxx, 0.0);
+        std::vector<double> rho_magabs_save(real_nrxx, 0.0);
         // calculate rho_magabs and rho_magabs_save
-        for (int ir = 0; ir < nrxx; ir++)
+        for (int ir = 0; ir < real_nrxx; ir++)
         {
             // |m| for rho
-            rho_magabs[ir] = std::sqrt(chr->rho[1][ir] * chr->rho[1][ir] 
-            + chr->rho[2][ir] * chr->rho[2][ir] 
+            rho_magabs[ir] = std::sqrt(chr->rho[1][ir] * chr->rho[1][ir]
+            + chr->rho[2][ir] * chr->rho[2][ir]
             + chr->rho[3][ir] * chr->rho[3][ir]);
             // |m| for rho_save
-            rho_magabs_save[ir] = std::sqrt(chr->rho_save[1][ir] * chr->rho_save[1][ir] 
-            + chr->rho_save[2][ir] * chr->rho_save[2][ir]  
+            rho_magabs_save[ir] = std::sqrt(chr->rho_save[1][ir] * chr->rho_save[1][ir]
+            + chr->rho_save[2][ir] * chr->rho_save[2][ir]
             + chr->rho_save[3][ir] * chr->rho_save[3][ir]);
         }
         // allocate memory for rhog_magabs and rhog_magabs_save
-        const int npw = this->rhopw->npw;
-        std::complex<double>* rhog_magabs = new std::complex<double>[npw * 2];
-        std::complex<double>* rhog_magabs_save = new std::complex<double>[npw * 2];
-        ModuleBase::GlobalFunc::ZEROS(rhog_magabs, npw * 2);
-        ModuleBase::GlobalFunc::ZEROS(rhog_magabs_save, npw * 2);
+        std::vector<std::complex<double>> rhog_magabs_dense(dense_npw);
+        std::vector<std::complex<double>> rhog_magabs_save_dense(dense_npw);
+        std::vector<std::complex<double>> rhog_magabs(smooth_npw * 2);
+        std::vector<std::complex<double>> rhog_magabs_save(smooth_npw * 2);
         // calculate rhog_magabs and rhog_magabs_save
-        for (int ig = 0; ig < npw; ig++)
+        for (int ig = 0; ig < smooth_npw; ig++)
         {
-            rhog_magabs[ig] = chr->rhog[0][ig]; // rho
-            rhog_magabs_save[ig] = chr->rhog_save[0][ig]; // rho_save
+            rhog_magabs[ig] = use_double_grid ? rhogs_out[ig] : chr->rhog[0][ig]; // rho
+            rhog_magabs_save[ig] = use_double_grid ? rhogs_in[ig] : chr->rhog_save[0][ig]; // rho_save
         }
         // FT to get rhog_magabs and rhog_magabs_save
-        this->rhopw->real2recip(rho_magabs, rhog_magabs + this->rhopw->npw);
-        this->rhopw->real2recip(rho_magabs_save, rhog_magabs_save + this->rhopw->npw);
+        if (use_double_grid)
+        {
+            this->rhodpw->real2recip(rho_magabs.data(), rhog_magabs_dense.data());
+            this->rhodpw->real2recip(rho_magabs_save.data(), rhog_magabs_save_dense.data());
+        }
+        else
+        {
+            this->rhopw->real2recip(rho_magabs.data(), rhog_magabs_dense.data());
+            this->rhopw->real2recip(rho_magabs_save.data(), rhog_magabs_save_dense.data());
+        }
+        for (int ig = 0; ig < smooth_npw; ++ig)
+        {
+            rhog_magabs[ig + smooth_npw] = rhog_magabs_dense[ig];
+            rhog_magabs_save[ig + smooth_npw] = rhog_magabs_save_dense[ig];
+        }
         //
-        rhog_in = rhog_magabs_save;
-        rhog_out = rhog_magabs;
+        rhog_in = rhog_magabs_save.data();
+        rhog_out = rhog_magabs.data();
         auto screen = std::bind(&Charge_Mixing::Kerker_screen_recip, this, std::placeholders::_1); // use old one
-        auto twobeta_mix
-            = [this, npw](std::complex<double>* out, const std::complex<double>* in, const std::complex<double>* sres) {
+        auto twobeta_mix = [this, smooth_npw](std::complex<double>* out,
+                                               const std::complex<double>* in,
+                                               const std::complex<double>* sres) {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 256)
 #endif
-                  for (int i = 0; i < npw; ++i)
+                  for (int i = 0; i < smooth_npw; ++i)
                   {
                       out[i] = in[i] + this->mixing_beta * sres[i];
                   }
@@ -248,7 +257,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static, 256)
 #endif
-                  for (int i = npw; i < 2 * npw; ++i)
+                  for (int i = smooth_npw; i < 2 * smooth_npw; ++i)
                   {
                       out[i] = in[i] + this->mixing_beta_mag * sres[i];
                   }
@@ -256,32 +265,69 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
         this->mixing->push_data(this->rho_mdata, rhog_in, rhog_out, screen, twobeta_mix, true);
         this->mixing->cal_coef(this->rho_mdata, inner_product);
         this->mixing->mix_data(this->rho_mdata, rhog_out);
-        // get new |m| in real space using FT
-        this->rhopw->recip2real(rhog_magabs + this->rhopw->npw, rho_magabs);
-        // use new |m| and angle to update {mx, my, mz}
-        for (int ig = 0; ig < npw; ig++)
+        if (use_double_grid)
         {
-			chr->rhog[0][ig] = rhog_magabs[ig]; // rhog
-			double norm = std::sqrt(chr->rho[1][ig] * chr->rho[1][ig] 
-					+ chr->rho[2][ig] * chr->rho[2][ig] 
-					+ chr->rho[3][ig] * chr->rho[3][ig]);
-			if (std::abs(norm) < 1e-10) 
-			{ 
-				continue;
-			}
-            double rescale_tmp = rho_magabs[npw + ig] / norm; 
-            chr->rho[1][ig] *= rescale_tmp;
-            chr->rho[2][ig] *= rescale_tmp;
-            chr->rho[3][ig] *= rescale_tmp;
+            const int high_frequency_npw = dense_npw - smooth_npw;
+            if (high_frequency_npw > 0)
+            {
+                this->mixing_highf->plain_mix(rhoghf_out,
+                                              rhoghf_in,
+                                              rhoghf_out,
+                                              high_frequency_npw,
+                                              nullptr);
+                Base_Mixing::Plain_Mixing magnetic_highf_mixing(this->mixing_beta_mag);
+                magnetic_highf_mixing.plain_mix(rhog_magabs_dense.data() + smooth_npw,
+                                                 rhog_magabs_save_dense.data() + smooth_npw,
+                                                 rhog_magabs_dense.data() + smooth_npw,
+                                                 high_frequency_npw,
+                                                 nullptr);
+            }
+            for (int ig = 0; ig < smooth_npw; ++ig)
+            {
+                chr->rhog[0][ig] = rhog_magabs[ig];
+                rhog_magabs_dense[ig] = rhog_magabs[ig + smooth_npw];
+            }
+            for (int ig = 0; ig < high_frequency_npw; ++ig)
+            {
+                chr->rhog[0][smooth_npw + ig] = rhoghf_out[ig];
+            }
+            this->rhodpw->recip2real(rhog_magabs_dense.data(), rho_magabs.data());
+            clean_data(rhogs_in, rhoghf_in);
+            clean_data(rhogs_out, rhoghf_out);
         }
-        // delete
-        delete[] rhog_magabs;
-        delete[] rhog_magabs_save;
-        delete[] rho_magabs;
-        delete[] rho_magabs_save;
+        else
+        {
+            for (int ig = 0; ig < smooth_npw; ++ig)
+            {
+                chr->rhog[0][ig] = rhog_magabs[ig];
+                rhog_magabs_dense[ig] = rhog_magabs[ig + smooth_npw];
+            }
+            // get new |m| in real space using FT
+            this->rhopw->recip2real(rhog_magabs_dense.data(), rho_magabs.data());
+        }
+        // use new |m| and angle to update {mx, my, mz}
+        for (int ir = 0; ir < real_nrxx; ir++)
+        {
+            const double norm = std::sqrt(chr->rho[1][ir] * chr->rho[1][ir]
+                + chr->rho[2][ir] * chr->rho[2][ir]
+                + chr->rho[3][ir] * chr->rho[3][ir]);
+            if (std::abs(norm) < 1e-10)
+            {
+                continue;
+            }
+            const double rescale_tmp = rho_magabs[ir] / norm;
+            chr->rho[1][ir] *= rescale_tmp;
+            chr->rho[2][ir] *= rescale_tmp;
+            chr->rho[3][ir] *= rescale_tmp;
+        }
+        ModulePW::PW_Basis* output_basis = use_double_grid ? this->rhodpw : this->rhopw;
+        for (int is = 1; is < nspin; ++is)
+        {
+            output_basis->real2recip(chr->rho[is], chr->rhog[is]);
+        }
     }
 
-    if ( PARAM.globalv.double_grid)
+    if (double_grid && !(nspin == 4 && this->mixing_angle > 0))
     {
         // plain mixing for high_frequencies
         const int ndimhf = (this->rhodpw->npw - this->rhopw->npw) * nspin;
@@ -296,13 +342,19 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
     if (nspin == 4 && PARAM.inp.mixing_angle > 0)
     {
         // only tranfer rhog[0]
-        // do not support double_grid, use rhopw directly
-        chr->rhopw->recip2real(chr->rhog[0], chr->rho[0]);
+        ModulePW::PW_Basis* output_basis = double_grid ? this->rhodpw : this->rhopw;
+        output_basis->recip2real(chr->rhog[0], chr->rho[0]);
+#if __CUDA || __ROCM
+        if (device_ == "gpu" && chr->get_device() == "gpu")
+        {
+            chr->sync_rho_to_device<base_device::DEVICE_GPU>();
+        }
+#endif
     }
     else
     {
 #if __CUDA || __ROCM
-        // GPU path: use GPU FFT when device="gpu"
+        // GPU path: use GPU FFT when device="gpu".
         if (device_ == "gpu" && chr->get_device() == "gpu")
         {
             // Sync rhog to GPU (mixing was done on CPU, result in chr->rhog[is])
@@ -328,6 +380,12 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
                 // rhodpw is the same as rhopw for ! PARAM.globalv.double_grid
                 this->rhodpw->recip_to_real<std::complex<double>,double,base_device::DEVICE_CPU>(chr->rhog[is], chr->rho[is]);
             }
+#if __CUDA || __ROCM
+            if (device_ == "gpu" && chr->get_device() == "gpu")
+            {
+                chr->sync_rho_to_device<base_device::DEVICE_GPU>();
+            }
+#endif
         }
     }
     // For kinetic energy density

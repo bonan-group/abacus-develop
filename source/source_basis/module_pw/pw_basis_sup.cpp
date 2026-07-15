@@ -1,5 +1,7 @@
 #include "source_base/timer.h"
 #include "pw_basis.h"
+
+#include <vector>
 namespace ModulePW
 {
 
@@ -323,6 +325,8 @@ void PW_Basis_Sup::get_ig2isz_is2fftixy(
         {
             delmem_int_op()(this->d_is2fftixy);
             d_is2fftixy = nullptr;
+            delmem_int_op()(this->ig2ixyz_gpu);
+            ig2ixyz_gpu = nullptr;
         }
 #endif
         return;
@@ -437,11 +441,25 @@ void PW_Basis_Sup::get_ig2isz_is2fftixy(
     delete[] fftixy2is;
     delete[] found;
 
+    std::vector<int> ig2ixyz(this->npw);
+    for (int ig = 0; ig < this->npw; ++ig)
+    {
+        const int isz = this->ig2isz[ig];
+        const int iz = isz % this->nz;
+        const int is = isz / this->nz;
+        const int ixy = this->is2fftixy[is];
+        const int iy = ixy % this->fftny;
+        const int ix = ixy / this->fftny;
+        ig2ixyz[ig] = iz + iy * this->nz + ix * this->ny * this->nz;
+    }
+
 #if defined(__CUDA) || defined(__ROCM)
     if (this->device == "gpu")
     {
         resmem_int_op()(d_is2fftixy, this->nst);
         syncmem_int_h2d_op()(this->d_is2fftixy, this->is2fftixy, this->nst);
+        resmem_int_op()(ig2ixyz_gpu, this->npw);
+        syncmem_int_h2d_op()(ig2ixyz_gpu, ig2ixyz.data(), this->npw);
     }
 #endif
     return;

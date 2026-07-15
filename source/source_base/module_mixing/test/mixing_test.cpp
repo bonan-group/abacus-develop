@@ -378,8 +378,10 @@ template <typename MixerCpu, typename MixerGpu, typename FPTYPE>
 void compare_cpu_gpu_mixing_history()
 {
     constexpr int length = 4;
+    constexpr int split = 2;
     constexpr int mixing_ndim = 3;
-    constexpr double mixing_beta = 0.6;
+    constexpr double mixing_beta = 0.25;
+    constexpr double mixing_beta_secondary = 0.75;
     const std::vector<std::vector<FPTYPE>> inputs = {
         {FPTYPE(0.1), FPTYPE(-0.2), FPTYPE(0.3), FPTYPE(0.7)},
         {FPTYPE(0.4), FPTYPE(0.1), FPTYPE(-0.5), FPTYPE(0.2)},
@@ -417,10 +419,26 @@ void compare_cpu_gpu_mixing_history()
     std::vector<FPTYPE> cpu_mixed(length);
     std::vector<FPTYPE> gpu_mixed(length);
     auto cpu_mix = [](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
-        for (int i = 0; i < length; ++i)
+        for (int i = 0; i < split; ++i)
         {
             out[i] = in[i] + static_cast<FPTYPE>(mixing_beta) * residual[i];
         }
+        for (int i = split; i < length; ++i)
+        {
+            out[i] = in[i] + static_cast<FPTYPE>(mixing_beta_secondary) * residual[i];
+        }
+    };
+    auto gpu_mix = [](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
+        const base_device::DEVICE_GPU* ctx = nullptr;
+        mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
+            ctx, out, in, static_cast<FPTYPE>(mixing_beta), residual, split);
+        mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
+            ctx,
+            out + split,
+            in + split,
+            static_cast<FPTYPE>(mixing_beta_secondary),
+            residual + split,
+            length - split);
     };
     for (std::size_t step = 0; step < inputs.size(); ++step)
     {
@@ -433,7 +451,7 @@ void compare_cpu_gpu_mixing_history()
             input_d, inputs[step].data(), length);
         base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
             output_d, outputs[step].data(), length);
-        gpu_mixer.push_data(gpu_data, input_d, output_d, nullptr, true);
+        gpu_mixer.push_data(gpu_data, input_d, output_d, nullptr, gpu_mix, true);
         gpu_mixer.cal_coef(gpu_data,
                            [workspace_d](const FPTYPE* a, const FPTYPE* b) {
                                return gpu_inner_product(a, b, length, workspace_d);

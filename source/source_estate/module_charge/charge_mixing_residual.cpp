@@ -16,8 +16,8 @@ void Charge_Mixing::validate_gpu_fft_poolnproc(const ModulePW::PW_Basis* rhopw, 
     if (rhopw->poolnproc > 1)
     {
         ModuleBase::WARNING_QUIT(caller,
-                                 "GPU FFT with poolnproc > 1 is not supported. "
-                                 "Use one MPI rank per pool for GPU PW runs.");
+                                 "GPU FFT with poolnproc > 1 is not supported in " + caller
+                                     + ". Use one MPI rank per pool for GPU PW runs.");
     }
 }
 

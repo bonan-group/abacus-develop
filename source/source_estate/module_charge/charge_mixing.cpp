@@ -154,6 +154,21 @@ void Charge_Mixing::log_gpu_charge_mixing_fallback(const std::string& reason)
     this->gpu_charge_mixing_fallback_logged_ = true;
 }
 
+bool Charge_Mixing::can_use_gpu_resident_mixing(const Charge* chr) const
+{
+    if (!this->mixing_gpu_enabled || this->device_ != "gpu" || chr == nullptr || chr->get_device() != "gpu")
+    {
+        return false;
+    }
+
+    const int nspin = chr->nspin;
+    const bool spin_supported = (nspin == 1 || nspin == 2 || (nspin == 4 && this->mixing_angle <= 0.0));
+    const bool supported_mode
+        = (this->mixing_mode == "plain" || this->mixing_mode == "broyden" || this->mixing_mode == "pulay");
+
+    return spin_supported && supported_mode;
+}
+
 void Charge_Mixing::init_mixing()
 {
     // this init should be called at the 1-st iteration of each scf loop

@@ -450,7 +450,7 @@ void ElecStatePW<T, Device>::add_usrho(const psi::Psi<T, Device>& psi)
     {
         for (int is = 0; is < PARAM.inp.nspin; is++)
         {
-            this->rhopw_smooth->real2recip(this->rho[is], this->rhog[is]);
+            this->rhopw_smooth->real_to_recip<Real, T, Device>(this->rho[is], this->rhog[is]);
         }
     }
 
@@ -465,7 +465,7 @@ void ElecStatePW<T, Device>::add_usrho(const psi::Psi<T, Device>& psi)
     {
         for (int is = 0; is < PARAM.inp.nspin; is++)
         {
-            this->charge->rhopw->recip2real(this->rhog[is], this->rho[is]);
+            this->charge->rhopw->recip_to_real<T, Real, Device>(this->rhog[is], this->rho[is]);
         }
     }
 }

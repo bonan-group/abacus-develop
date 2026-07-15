@@ -25,7 +25,12 @@ void Charge_Mixing::divide_data(std::complex<double>* data_d,
         for (int is = 0; is < PARAM.inp.nspin; ++is)
         {
             std::memcpy(data_s + is * ndims, data_d + is * ndimd, ndims * sizeof(std::complex<double>));
-            std::memcpy(data_hf + is * ndimhf, data_d + is * ndimd + ndims, ndimhf * sizeof(std::complex<double>));
+            if (ndimhf > 0)
+            {
+                std::memcpy(data_hf + is * ndimhf,
+                            data_d + is * ndimd + ndims,
+                            ndimhf * sizeof(std::complex<double>));
+            }
         }
     }
 }
@@ -48,7 +53,12 @@ void Charge_Mixing::combine_data(std::complex<double>* data_d,
         for (int is = 0; is < PARAM.inp.nspin; ++is)
         {
             std::memcpy(data_d + is * ndimd, data_s + is * ndims, ndims * sizeof(std::complex<double>));
-            std::memcpy(data_d + is * ndimd + ndims, data_hf + is * ndimhf, ndimhf * sizeof(std::complex<double>));
+            if (ndimhf > 0)
+            {
+                std::memcpy(data_d + is * ndimd + ndims,
+                            data_hf + is * ndimhf,
+                            ndimhf * sizeof(std::complex<double>));
+            }
         }
         delete[] data_s;
         delete[] data_hf;

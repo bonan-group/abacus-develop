@@ -1309,7 +1309,7 @@
 ### mixing_gpu
 
 - **Type**: Boolean
-- **Availability**: *Only effective for CUDA plane-wave charge mixing with nspin=1, Broyden or Pulay mixing, GPU-resident charge density, and no double grid.*
+- **Availability**: *Only effective for CUDA plane-wave reciprocal charge mixing with GPU-resident charge density. The GPU-resident path supports plain, Broyden, and Pulay mixing for nspin=1, nspin=2, and traditional nspin=4 mixing_angle<=0, including double-grid and tau-mixing cases. Noncollinear angle mixing uses the existing CPU charge mixing path.*
 - **Description**: Controls whether supported GPU plane-wave calculations use the GPU-resident charge mixing path.
 
   - True: use GPU-resident charge mixing when the current build and input are supported.
@@ -1389,6 +1389,7 @@
 - **Description**: Normal broyden mixing can give the converged result for a given magnetic configuration. If one is not interested in the energies of a given magnetic configuration but wants to determine the ground state by relaxing the magnetic moments' directions, one cannot rely on the standard Broyden mixing algorithm. To enhance the ability to find correct magnetic configuration for non-colinear calculations, ABACUS implements a promising mixing method proposed by J. Phys. Soc. Jpn. 82 (2013) 114706. Here, mixing_angle is the angle mixing parameter. In fact, only mixing_angle=1.0 is implemented currently.
   - &lt;=0: Normal broyden mixing
   - &gt;0: Angle mixing for the modulus with mixing_angle=1.0
+  When double grid is enabled, angle mixing is applied to the smooth rho and |m| components and the high-frequency rho and |m| components are plain mixed.
 - **Default**: -10.0
 
 ### mixing_tau

@@ -89,12 +89,14 @@ class Broyden_Mixing_GPU
      * @param data_in_d Input data on GPU (x_in)
      * @param data_out_d Output data on GPU (x_out = f(x_in))
      * @param screen GPU screening function (e.g., Kerker)
+     * @param mix Optional component-aware mixing function
      * @param need_calcoef Whether to prepare for coefficient calculation
      */
     void push_data(Mixing_Data_GPU<FPTYPE>& mdata,
                    const FPTYPE* data_in_d,
                    const FPTYPE* data_out_d,
                    std::function<void(FPTYPE*)> screen,
+                   std::function<void(FPTYPE*, const FPTYPE*, const FPTYPE*)> mix,
                    const bool& need_calcoef);
 
     /**
@@ -267,6 +269,7 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
     const FPTYPE* data_in_d,
     const FPTYPE* data_out_d,
     std::function<void(FPTYPE*)> screen,
+    std::function<void(FPTYPE*, const FPTYPE*, const FPTYPE*)> mix,
     const bool& need_calcoef)
 {
     const std::size_t len = mdata.length;
@@ -283,10 +286,15 @@ void Broyden_Mixing_GPU<FPTYPE>::push_data(
         screen(temp_d);
     }
 
-    // mixed = data_in + mixing_beta * F (on GPU)
-    // Store in temp buffer first, then push to mdata
-    mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
-        ctx, temp_d, data_in_d, mixing_beta, temp_d, len_i);
+    if (mix != nullptr)
+    {
+        mix(temp_d, data_in_d, temp_d);
+    }
+    else
+    {
+        mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
+            ctx, temp_d, data_in_d, mixing_beta, temp_d, len_i);
+    }
 
     // Push mixed data to history
     mdata.push(temp_d);

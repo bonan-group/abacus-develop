@@ -160,6 +160,7 @@ class Charge_Mixing
     
   private:
     static void validate_gpu_fft_poolnproc(const ModulePW::PW_Basis* rhopw, const std::string& caller);
+    bool can_use_gpu_resident_mixing(const Charge* chr) const;
     void log_gpu_charge_mixing_fallback(const std::string& reason);
 
     // mixing_data
@@ -226,8 +227,17 @@ class Charge_Mixing
     std::complex<double>* tau_g_d = nullptr;
     std::complex<double>* tau_g_save_d = nullptr;
 
+    /// Reusable GPU workspaces for packed spin and double-grid mixing
+    std::complex<double>* rho_mix_in_d = nullptr;
+    std::complex<double>* rho_mix_out_d = nullptr;
+    std::complex<double>* rho_smooth_in_d = nullptr;
+    std::complex<double>* rho_smooth_out_d = nullptr;
+    std::complex<double>* rho_high_frequency_in_d = nullptr;
+    std::complex<double>* rho_high_frequency_out_d = nullptr;
+    std::complex<double>* plain_residual_d = nullptr;
+
     /// Initialize GPU mixing resources
-    void init_mixing_gpu();
+    void init_mixing_gpu(int nspin);
 
     /// Release GPU mixing resources
     void free_mixing_gpu();
@@ -241,10 +251,16 @@ class Charge_Mixing
     void build_recip_hartree_beta_row_gpu(const std::complex<double>* vectors_d,
                                            int nvec,
                                            int row,
+                                           int nspin,
+                                           bool gamma_only,
+                                           bool include_magnetism,
                                            ModuleBase::matrix& beta);
     void build_recip_hartree_gamma_gpu(const std::complex<double>* vectors_d,
                                         const std::complex<double>* rhs_d,
                                         int nvec,
+                                        int nspin,
+                                        bool gamma_only,
+                                        bool include_magnetism,
                                         std::vector<double>& gamma);
 #endif
 
