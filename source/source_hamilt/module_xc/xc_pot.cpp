@@ -20,6 +20,9 @@
 
 #ifdef USE_LIBXC
 #include "libxc_abacus.h"
+#ifdef __EXX
+#include "source_hamilt/module_xc/exx_info.h"
+#endif
 #endif
 
 namespace
@@ -544,9 +547,12 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const UnitCell* ucell,
     const int nspin,
     const bool domag,
-    const bool domag_z)
+    const bool domag_z,
+    const double hybrid_alpha,
+    const double hse_omega)
 {
-    return XC_Functional::v_xc(nrxx, chr, ucell, "cpu", nspin, domag, domag_z);
+    return XC_Functional::v_xc(
+        nrxx, chr, ucell, "cpu", nspin, domag, domag_z, hybrid_alpha, hse_omega);
 }
 
 std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
@@ -555,13 +561,21 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const UnitCell* ucell,
     const std::string& device)
 {
+    const double hybrid_alpha = XC_Functional::get_hybrid_alpha();
+#ifdef __EXX
+    const double hse_omega = XC_Functional::get_hse_omega();
+#else
+    const double hse_omega = 0.0;
+#endif
     return XC_Functional::v_xc(nrxx,
                                chr,
                                ucell,
                                device,
                                PARAM.inp.nspin,
                                PARAM.globalv.domag,
-                               PARAM.globalv.domag_z);
+                               PARAM.globalv.domag_z,
+                               hybrid_alpha,
+                               hse_omega);
 }
 
 std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
@@ -571,7 +585,9 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const std::string& device,
     const int nspin,
     const bool domag,
-    const bool domag_z)
+    const bool domag_z,
+    const double hybrid_alpha,
+    const double hse_omega)
 {
     ModuleBase::TITLE("XC_Functional", "v_xc");
     log_explicit_xc_gpu_env_if_needed(device);
@@ -591,7 +607,9 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
                                                nspin,
                                                domag,
                                                domag_z,
-                                               &(scaling_factor_xc));
+                                               &(scaling_factor_xc),
+                                               hybrid_alpha,
+                                               hse_omega);
 #else
         ModuleBase::WARNING_QUIT("v_xc", "compile with LIBXC");
 #endif
@@ -743,7 +761,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 #ifdef USE_LIBXC
                     double rhoup = arhox * (1.0+zeta) / 2.0;
                     double rhodw = arhox * (1.0-zeta) / 2.0;
-                    XC_Functional_Libxc::xc_spin_libxc(XC_Functional::get_func_id(), rhoup, rhodw, exc, vxc[0], vxc[1]);
+                    XC_Functional_Libxc::xc_spin_libxc(XC_Functional::get_func_id(), rhoup, rhodw, exc, vxc[0], vxc[1], hybrid_alpha, hse_omega);
 #else
                     ModuleBase::WARNING_QUIT("v_xc", "compile with LIBXC");
 #endif
@@ -782,7 +800,20 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     // which is not used here
     std::vector<double> dum;
     ModuleBase::timer::start("XC_Functional", "gradcorr");
-    gradcorr(etxc, vtxc, v, chr, chr->rhopw, ucell, dum, false, nspin, domag, domag_z, device);
+    gradcorr(etxc,
+             vtxc,
+             v,
+             chr,
+             chr->rhopw,
+             ucell,
+             dum,
+             false,
+             nspin,
+             domag,
+             domag_z,
+             hybrid_alpha,
+             hse_omega,
+             device);
     ModuleBase::timer::end("XC_Functional", "gradcorr");
 
     // parallel code : collect vtxc,etxc

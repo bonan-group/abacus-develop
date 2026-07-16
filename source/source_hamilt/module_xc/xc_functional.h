@@ -55,7 +55,9 @@ class XC_Functional
         const UnitCell* ucell,
         const int nspin,
         const bool domag,
-        const bool domag_z);
+        const bool domag_z,
+        const double hybrid_alpha,
+        const double hse_omega);
     static std::tuple<double, double, ModuleBase::matrix> v_xc(
         const int& nrxx,
         const Charge* const chr,
@@ -76,7 +78,9 @@ class XC_Functional
         const std::string& device,
         const int nspin,
         const bool domag,
-        const bool domag_z);
+        const bool domag_z,
+        const double hybrid_alpha,
+        const double hse_omega);
 
 //-------------------
 //  xc_functional.cpp
@@ -106,6 +110,13 @@ class XC_Functional
         return hybrid_alpha;
     };
 
+    static void set_hse_omega(const double omega_in);
+
+    static double get_hse_omega()
+    {
+        return hse_omega;
+    };
+
     static bool get_ked_flag()
     {
         return ked_flag;
@@ -125,6 +136,9 @@ class XC_Functional
 
     // exx_hybrid_alpha for mixing exx in hybrid functional:
     static double hybrid_alpha;
+
+    // hse_omega for HSE functional:
+    static double hse_omega;
 
     // added by jghan, 2024-07-07
     // as a scaling factor for different xc-functionals
@@ -247,7 +261,9 @@ class XC_Functional
         const bool is_stress,
         const int nspin,
         const bool domag,
-        const bool domag_z);
+        const bool domag_z,
+        const double hybrid_alpha,
+        const double hse_omega);
     static void gradcorr(
         double& etxc,
         double& vtxc,
@@ -270,6 +286,8 @@ class XC_Functional
         const int nspin,
         const bool domag,
         const bool domag_z,
+        const double hybrid_alpha,
+        const double hse_omega,
         const std::string& device);
     static bool gradcorr_stress_gpu(
         const Charge* const chr,
