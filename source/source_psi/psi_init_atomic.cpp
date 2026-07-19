@@ -64,6 +64,7 @@ void psi_init_atomic<T>::initialize(const Structure_Factor* sf,         //< stru
     }
     // import
     psi_initializer<T>::initialize(sf, pw_wfc, p_ucell, p_kv_in, random_seed, p_pspot_nl, rank);
+    this->table_interval_ = PARAM.globalv.dq;
     this->nbands_start_ = std::max(this->p_ucell_->natomwfc, PARAM.inp.nbands);
     this->nbands_complem_ = this->nbands_start_ - this->p_ucell_->natomwfc;
     // allocate
@@ -98,7 +99,7 @@ void psi_init_atomic<T>::tabulate()
     std::vector<double> aux(max_msh);
     std::vector<double> vchi(max_msh);
 
-	ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running,"dq(describe PAO in reciprocal space)",PARAM.globalv.dq);
+	ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running,"dq(describe PAO in reciprocal space)",this->table_interval_);
 	ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running,"max q",PARAM.globalv.nqx);
 
     for (int it=0; it<this->p_ucell_->ntype; it++)
@@ -203,7 +204,7 @@ void psi_init_atomic<T>::tabulate()
             const int l = atom->ncpp.lchi[ic];
             for (int iq = startq; iq < PARAM.globalv.nqx; iq++)
             {
-                const double q = PARAM.globalv.dq * iq;
+                const double q = this->table_interval_ * iq;
                 ModuleBase::Sphbes::Spherical_Bessel(atom->ncpp.msh, atom->ncpp.r.data(), q, l, aux.data());
                 for (int ir = 0; ir < atom->ncpp.msh; ir++)
                 {
@@ -273,7 +274,7 @@ void psi_init_atomic<T>::init_psig(T* psig,  const int& ik)
                     {
                         ovlp_pswfcjlg[ig] = ModuleBase::PolyInt::Polynomial_Interpolation(
                             this->ovlp_pswfcjlq_, it, ipswfc, 
-                            PARAM.globalv.nqx, PARAM.globalv.dq, gk[ig].norm() * this->p_ucell_->tpiba );
+                            PARAM.globalv.nqx, this->table_interval_, gk[ig].norm() * this->p_ucell_->tpiba );
                     }
 /* NSPIN == 4 */
                     if(PARAM.inp.nspin == 4)
@@ -366,7 +367,7 @@ void psi_init_atomic<T>::init_psig(T* psig,  const int& ik)
                                         chiaux[ig] =  l *
                                             ModuleBase::PolyInt::Polynomial_Interpolation(
                                                 this->ovlp_pswfcjlq_, it, ipswfc_noncolin_soc, 
-                                                PARAM.globalv.nqx, PARAM.globalv.dq, gk[ig].norm() * this->p_ucell_->tpiba);
+                                                PARAM.globalv.nqx, this->table_interval_, gk[ig].norm() * this->p_ucell_->tpiba);
                                         chiaux[ig] += ovlp_pswfcjlg[ig] * (l + 1.0) ;
                                         chiaux[ig] *= 1/(2.0*l+1.0);
                                     }

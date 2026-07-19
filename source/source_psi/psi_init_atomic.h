@@ -30,10 +30,20 @@ class psi_init_atomic : public psi_initializer<T>
     virtual void tabulate() override;
     virtual void init_psig(T* psig, const int& ik) override;
 
+    const ModuleBase::realArray& overlap_table() const
+    {
+        return this->ovlp_pswfcjlq_;
+    }
+    double table_interval() const
+    {
+        return this->table_interval_;
+    }
+
   protected:
     // allocate memory for overlap table
     void allocate_ps_table();
     std::vector<std::string> pseudopot_files_;
     ModuleBase::realArray ovlp_pswfcjlq_;
+    double table_interval_ = 0.0;
 };
 #endif
