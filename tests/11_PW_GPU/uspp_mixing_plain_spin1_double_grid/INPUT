@@ -1,0 +1,23 @@
+INPUT_PARAMETERS
+suffix             autotest
+calculation        scf
+basis_type         pw
+device             gpu
+precision          double
+pseudo_dir         ../../PP_ORB
+symmetry           0
+latname            fcc
+init_wfc           atomic
+nspin              1
+ecutwfc            20
+ecutrho            160
+nbands             8
+scf_thr            1e-12
+scf_nmax           3
+smearing_method    gaussian
+smearing_sigma     0.01
+mixing_type        plain
+mixing_beta        0.3
+mixing_gpu         true
+cal_force          false
+cal_stress         false

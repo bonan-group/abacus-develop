@@ -183,6 +183,15 @@ class Potential : public PotBase
     template <typename FPTYPE>
     FPTYPE* get_veff_smooth_data();
 
+    const double* get_eff_v_device_data() const
+    {
+        return this->d_v_eff;
+    }
+    int get_nspin() const
+    {
+        return this->v_eff.nr;
+    }
+
     template <typename FPTYPE>
     FPTYPE* get_vofk_smooth_data();
 
@@ -244,6 +253,8 @@ class Potential : public PotBase
     float *s_veff_smooth = nullptr;
     float *s_vofk_smooth = nullptr;
     double *d_veff_smooth = nullptr;
+    double *d_v_eff = nullptr;
+    std::complex<double>* d_v_eff_recip = nullptr;
     double *d_vofk_smooth = nullptr;
 
     ModuleBase::matrix vofk_eff;

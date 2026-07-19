@@ -5,6 +5,91 @@
 #include <complex>
 
 namespace hamilt {
+template <typename FPTYPE, typename Device>
+struct uspp_qgm_build_op
+{
+    void operator()(const Device* dev,
+                    int ntype,
+                    int nh_tot,
+                    int npw,
+                    int lmaxq,
+                    int radial_pair_count,
+                    int nqxq,
+                    int max_terms,
+                    FPTYPE dq,
+                    FPTYPE tpiba,
+                    const FPTYPE* gcar,
+                    const int* pair_term_count,
+                    const int* pair_radial_index,
+                    const int* pair_l,
+                    const int* pair_lm,
+                    const std::complex<FPTYPE>* pair_coefficient,
+                    const FPTYPE* qrad,
+                    const FPTYPE* ylm,
+                    std::complex<FPTYPE>* qgm);
+};
+
+template <typename FPTYPE, typename Device>
+struct uspp_overlap_op
+{
+    void operator()(const Device* dev,
+                    int atom_count,
+                    int nbands,
+                    int nh,
+                    int nhm,
+                    int nkb,
+                    int projector_offset,
+                    bool projector_major,
+                    const FPTYPE* qq,
+                    std::complex<FPTYPE>* ps,
+                    const std::complex<FPTYPE>* becp);
+};
+
+template <typename FPTYPE, typename Device>
+struct uspp_deeq_op
+{
+    void operator()(const Device* dev,
+                    int nspin,
+                    int atom_count,
+                    int nh,
+                    int nhm,
+                    int npw,
+                    int atom_offset,
+                    int nat,
+                    FPTYPE omega,
+                    bool gamma_only,
+                    int g0_index,
+                    const std::complex<FPTYPE>* vaux,
+                    const std::complex<FPTYPE>* qgm,
+                    const std::complex<FPTYPE>* phase,
+                    const FPTYPE* dvan,
+                    FPTYPE* deeq);
+};
+
+template <typename FPTYPE, typename Device>
+struct uspp_force_op;
+
+template <typename FPTYPE, typename Device>
+struct uspp_stress_op
+{
+    void operator()(const Device* dev,
+                    int nspin,
+                    int atom_count,
+                    int nij,
+                    int npw,
+                    int atom_offset,
+                    int nat,
+                    int nh_tot,
+                    int ipol,
+                    FPTYPE tpiba,
+                    const std::complex<FPTYPE>* vaux,
+                    const std::complex<FPTYPE>* dqgm,
+                    const std::complex<FPTYPE>* phase,
+                    const FPTYPE* gcar,
+                    const FPTYPE* becsum,
+                    FPTYPE* stress);
+};
+
 template <typename FPTYPE, typename Device> 
 struct nonlocal_pw_op {
   /// @brief Compute the nonlocal potential of hPsi
@@ -77,6 +162,109 @@ struct nonlocal_pw_op {
 };
                       
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+template <typename FPTYPE>
+struct uspp_qgm_build_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* dev,
+                    int ntype,
+                    int nh_tot,
+                    int npw,
+                    int lmaxq,
+                    int radial_pair_count,
+                    int nqxq,
+                    int max_terms,
+                    FPTYPE dq,
+                    FPTYPE tpiba,
+                    const FPTYPE* gcar,
+                    const int* pair_term_count,
+                    const int* pair_radial_index,
+                    const int* pair_l,
+                    const int* pair_lm,
+                    const std::complex<FPTYPE>* pair_coefficient,
+                    const FPTYPE* qrad,
+                    const FPTYPE* ylm,
+                    std::complex<FPTYPE>* qgm);
+};
+
+template <typename FPTYPE>
+struct uspp_overlap_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* dev,
+                    int atom_count,
+                    int nbands,
+                    int nh,
+                    int nhm,
+                    int nkb,
+                    int projector_offset,
+                    bool projector_major,
+                    const FPTYPE* qq,
+                    std::complex<FPTYPE>* ps,
+                    const std::complex<FPTYPE>* becp);
+};
+
+template <typename FPTYPE>
+struct uspp_deeq_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* dev,
+                    int nspin,
+                    int atom_count,
+                    int nh,
+                    int nhm,
+                    int npw,
+                    int atom_offset,
+                    int nat,
+                    FPTYPE omega,
+                    bool gamma_only,
+                    int g0_index,
+                    const std::complex<FPTYPE>* vaux,
+                    const std::complex<FPTYPE>* qgm,
+                    const std::complex<FPTYPE>* phase,
+                    const FPTYPE* dvan,
+                    FPTYPE* deeq);
+};
+
+template <typename FPTYPE>
+struct uspp_force_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* dev,
+                    int nspin,
+                    int atom_count,
+                    int nij,
+                    int npw,
+                    int atom_offset,
+                    int nat,
+                    int nh_tot,
+                    FPTYPE omega,
+                    FPTYPE tpiba,
+                    const std::complex<FPTYPE>* vaux,
+                    const std::complex<FPTYPE>* qgm,
+                    const std::complex<FPTYPE>* phase,
+                    const FPTYPE* gcar,
+                    const FPTYPE* becsum,
+                    FPTYPE* force);
+};
+
+template <typename FPTYPE>
+struct uspp_stress_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* dev,
+                    int nspin,
+                    int atom_count,
+                    int nij,
+                    int npw,
+                    int atom_offset,
+                    int nat,
+                    int nh_tot,
+                    int ipol,
+                    FPTYPE tpiba,
+                    const std::complex<FPTYPE>* vaux,
+                    const std::complex<FPTYPE>* dqgm,
+                    const std::complex<FPTYPE>* phase,
+                    const FPTYPE* gcar,
+                    const FPTYPE* becsum,
+                    FPTYPE* stress);
+};
+
 // Partially specialize functor for base_device::GpuDevice.
 template <typename FPTYPE>
 struct nonlocal_pw_op<FPTYPE, base_device::DEVICE_GPU>

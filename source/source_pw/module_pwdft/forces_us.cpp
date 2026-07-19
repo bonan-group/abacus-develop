@@ -6,6 +6,10 @@
 #include "source_base/math_ylmreal.h"
 #include "source_base/timer.h"
 #include "source_estate/elecstate_pw.h"
+#include "source_pw/module_pwdft/kernels/nonlocal_op.h"
+#include "source_base/module_device/memory_op.h"
+
+#include <type_traits>
 
 // This routine computes the contribution to atomic forces due
 // to the dependence of the Q function on the atomic position.
@@ -32,6 +36,75 @@ void Forces<FPTYPE, Device>::cal_force_us(ModuleBase::matrix& forcenl,
     double* becsum = static_cast<const elecstate::ElecStatePW<std::complex<FPTYPE>, Device>&>(elec).becsum;
 
     ModuleBase::matrix forceq(ucell.nat, 3);
+    const int nspin = elec.pot->get_nspin();
+
+#if defined(__CUDA) || defined(__ROCM)
+    if (std::is_same<Device, base_device::DEVICE_GPU>::value
+        && elec.pot->get_eff_v_device_data() != nullptr)
+    {
+        std::complex<double>* vg_device = nullptr;
+        double* force_device = nullptr;
+        base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            vg_device,
+            nspin * npw,
+            "Forces::uspp_vg");
+        base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(
+            force_device,
+            ucell.nat * 3,
+            "Forces::uspp_force");
+        base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>()(
+            force_device,
+            0,
+            ucell.nat * 3);
+        const double* veff_device = elec.pot->get_eff_v_device_data();
+        for (int is = 0; is < nspin; ++is)
+        {
+            rho_basis->real2recip_gpu<double>(veff_device + is * rho_basis->nrxx,
+                                              vg_device + is * npw);
+        }
+        const std::complex<double>* qgm = nlpp.get_qgm_data<double>();
+        const std::complex<double>* phase = nlpp.get_qgm_phase_data<double>();
+        for (int it = 0; it < ucell.ntype; ++it)
+        {
+            const Atom* atom = &ucell.atoms[it];
+            if (!atom->ncpp.tvanp)
+            {
+                continue;
+            }
+            const int nij = atom->ncpp.nh * (atom->ncpp.nh + 1) / 2;
+            const int first_iat = ucell.itia2iat(it, 0);
+            hamilt::uspp_force_op<double, base_device::DEVICE_GPU>()(
+                nullptr,
+                nspin,
+                atom->na,
+                nij,
+                npw,
+                first_iat,
+                ucell.nat,
+                nh_tot,
+                ucell.omega,
+                ucell.tpiba,
+                vg_device,
+                qgm + it * nh_tot * npw,
+                phase + first_iat * npw,
+                nlpp.get_qgm_gcar_data(),
+                becsum,
+                force_device);
+        }
+        base_device::memory::synchronize_memory_op<double,
+                                                   base_device::DEVICE_CPU,
+                                                   base_device::DEVICE_GPU>()(
+            forceq.c,
+            force_device,
+            ucell.nat * 3);
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vg_device);
+        base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(force_device);
+        Parallel_Reduce::reduce_all(forceq.c, forceq.nr * forceq.nc);
+        forcenl += forceq;
+        ModuleBase::timer::end("Forces", "cal_force_us");
+        return;
+    }
+#endif
 
     ModuleBase::matrix veff = elec.pot->get_eff_v();
     ModuleBase::ComplexMatrix vg(PARAM.inp.nspin, npw);

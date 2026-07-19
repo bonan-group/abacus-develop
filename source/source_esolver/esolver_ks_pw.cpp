@@ -33,6 +33,8 @@
 #include "source_pw/module_pwdft/dftu_pw.h" // mohan add 20250309
 #include "source_pw/module_pwdft/deltaspin_pw.h" // mohan add 20250309
 
+#include <type_traits>
+
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 
 namespace ModuleESolver
@@ -257,8 +259,16 @@ void ESolver_KS_PW<T, Device>::iter_finish(UnitCell& ucell, const int istep, int
     // pp projectors, liuyu 2023-10-24
     if (PARAM.globalv.use_uspp)
     {
-        ModuleBase::matrix veff = this->pelec->pot->get_eff_v();
-        this->ppcell.cal_effective_D(veff, this->pw_rhod, ucell);
+        if (std::is_same<Device, base_device::DEVICE_GPU>::value
+            && this->pelec->pot->get_eff_v_device_data() != nullptr)
+        {
+            this->ppcell.cal_effective_D_gpu(this->pelec->pot->get_eff_v_device_data(), this->pw_rhod, ucell);
+        }
+        else
+        {
+            ModuleBase::matrix veff = this->pelec->pot->get_eff_v();
+            this->ppcell.cal_effective_D(veff, this->pw_rhod, ucell);
+        }
     }
 
     // Handle EXX-related operations after SCF iteration

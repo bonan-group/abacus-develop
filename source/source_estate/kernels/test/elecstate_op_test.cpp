@@ -126,8 +126,8 @@ TEST_F(TestModuleElecstateMultiDevice, elecstate_pw_op_gpu)
         EXPECT_LT(fabs(rho_data[ii] - expected_rho[ii]), 6e-5);
     }
     delete [] rho;
-    delete_memory_var_op()(this->gpu_ctx, d_rho_data);
-    delete_memory_complex_op()(this->gpu_ctx, d_wfcr);
+    delete_memory_var_op()(d_rho_data);
+    delete_memory_complex_op()(d_wfcr);
 }
 
 TEST_F(TestModuleElecstateMultiDevice, elecstate_pw_spin_op_gpu)
@@ -164,9 +164,354 @@ TEST_F(TestModuleElecstateMultiDevice, elecstate_pw_spin_op_gpu)
         EXPECT_LT(fabs(rho_data_2[ii] - expected_rho_2[ii]), 5e-4);
     }
     delete [] rho;
-    delete_memory_var_op()(this->gpu_ctx, d_rho_data_2);
-    delete_memory_complex_op()(this->gpu_ctx, d_wfcr_2);
-    delete_memory_complex_op()(this->gpu_ctx, d_wfcr_another_spin_2);
+    delete_memory_var_op()(d_rho_data_2);
+    delete_memory_complex_op()(d_wfcr_2);
+    delete_memory_complex_op()(d_wfcr_another_spin_2);
 }
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
 
+TEST(TestModuleElecstateUspp, becsum_cpu_packs_symmetric_pairs)
+{
+    const int atom_count = 2;
+    const int nbands = 3;
+    const int nh = 2;
+    const int nkb = 5;
+    const int projector_offset = 1;
+    const int atom_offset = 1;
+    const int nat = 4;
+    const int nh_tot = 6;
+    const int spin = 1;
+    const std::vector<double> weights = {0.5, 1.25, 0.75};
+    const std::vector<std::complex<double>> becp = {
+        {0.0, 0.0}, {1.0, 0.5}, {2.0, -0.25}, {3.0, 0.75}, {4.0, -0.5},
+        {0.0, 0.0}, {-1.0, 0.25}, {0.5, 1.0}, {1.5, -0.75}, {2.5, 0.5},
+        {0.0, 0.0}, {0.25, -0.5}, {1.25, 0.75}, {2.25, 0.25}, {3.25, -1.0}
+    };
+    std::vector<double> expected(2 * nat * nh_tot, 0.0);
+    for (int ia = 0; ia < atom_count; ++ia)
+    {
+        const int atom_projector_offset = projector_offset + ia * nh;
+        int ijh = 0;
+        for (int ih = 0; ih < nh; ++ih)
+        {
+            for (int jh = ih; jh < nh; ++jh)
+            {
+                double value = 0.0;
+                for (int ib = 0; ib < nbands; ++ib)
+                {
+                    value += weights[ib]
+                             * std::real(std::conj(becp[ib * nkb + atom_projector_offset + ih])
+                                         * becp[ib * nkb + atom_projector_offset + jh]);
+                }
+                expected[spin * nat * nh_tot + (atom_offset + ia) * nh_tot + ijh]
+                    = ih == jh ? value : 2.0 * value;
+                ++ijh;
+            }
+        }
+    }
+
+    std::vector<double> actual(expected.size(), 0.0);
+    elecstate::uspp_becsum_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                 atom_count,
+                                                                 nbands,
+                                                                 nh,
+                                                                 nkb,
+                                                                 projector_offset,
+                                                                 atom_offset,
+                                                                 nat,
+                                                                 nh_tot,
+                                                                 spin,
+                                                                 weights.data(),
+                                                                 becp.data(),
+                                                                 actual.data());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(actual[i], expected[i], 1.0e-12);
+    }
+}
+
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestModuleElecstateUspp, becsum_gpu_matches_cpu)
+{
+    const int atom_count = 2;
+    const int nbands = 3;
+    const int nh = 2;
+    const int nkb = 5;
+    const int projector_offset = 1;
+    const int atom_offset = 1;
+    const int nat = 4;
+    const int nh_tot = 6;
+    const int spin = 1;
+    const std::vector<double> weights = {0.5, 1.25, 0.75};
+    const std::vector<std::complex<double>> becp = {
+        {0.0, 0.0}, {1.0, 0.5}, {2.0, -0.25}, {3.0, 0.75}, {4.0, -0.5},
+        {0.0, 0.0}, {-1.0, 0.25}, {0.5, 1.0}, {1.5, -0.75}, {2.5, 0.5},
+        {0.0, 0.0}, {0.25, -0.5}, {1.25, 0.75}, {2.25, 0.25}, {3.25, -1.0}
+    };
+    std::vector<double> expected(2 * nat * nh_tot, 0.0);
+    elecstate::uspp_becsum_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                 atom_count,
+                                                                 nbands,
+                                                                 nh,
+                                                                 nkb,
+                                                                 projector_offset,
+                                                                 atom_offset,
+                                                                 nat,
+                                                                 nh_tot,
+                                                                 spin,
+                                                                 weights.data(),
+                                                                 becp.data(),
+                                                                 expected.data());
+
+    double* weights_device = nullptr;
+    double* actual_device = nullptr;
+    std::complex<double>* becp_device = nullptr;
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(weights_device, weights.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(actual_device, expected.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(becp_device, becp.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(weights_device,
+                                                                         weights.data(),
+                                                                         weights.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(becp_device,
+                                                                         becp.data(),
+                                                                         becp.size());
+    base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>()(actual_device, 0, expected.size());
+    elecstate::uspp_becsum_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                 atom_count,
+                                                                 nbands,
+                                                                 nh,
+                                                                 nkb,
+                                                                 projector_offset,
+                                                                 atom_offset,
+                                                                 nat,
+                                                                 nh_tot,
+                                                                 spin,
+                                                                 weights_device,
+                                                                 becp_device,
+                                                                 actual_device);
+    std::vector<double> actual(expected.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(actual.data(),
+                                                                         actual_device,
+                                                                         actual.size());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(actual[i], expected[i], 1.0e-12);
+    }
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(weights_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(actual_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(becp_device);
+}
+#endif
+
+TEST(TestModuleElecstateUspp, augmentation_helpers_cpu)
+{
+    const int atom_count = 2;
+    const int npw = 3;
+    const int nij = 3;
+    const int nat = 4;
+    const int nh_tot = 6;
+    const int spin = 1;
+    const int atom_offset = 1;
+    const std::vector<double> gcar = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0
+    };
+    const std::vector<double> tau = {
+        0.0, 0.0, 0.0,
+        0.25, 0.5, 0.0
+    };
+    std::vector<std::complex<double>> phase(atom_count * npw);
+    elecstate::uspp_atom_phase_op<double, base_device::DEVICE_CPU>()(
+        nullptr, atom_count, npw, gcar.data(), tau.data(), phase.data());
+    EXPECT_NEAR(std::abs(phase[0] - std::complex<double>(1.0, 0.0)), 0.0, 1.0e-12);
+    EXPECT_NEAR(std::abs(phase[4] - std::complex<double>(0.0, -1.0)), 0.0, 1.0e-12);
+    EXPECT_NEAR(std::abs(phase[5] - std::complex<double>(-1.0, 0.0)), 0.0, 1.0e-12);
+
+    std::vector<double> becsum(2 * nat * nh_tot, 0.0);
+    for (int ia = 0; ia < atom_count; ++ia)
+    {
+        for (int ij = 0; ij < nij; ++ij)
+        {
+            becsum[spin * nat * nh_tot + (atom_offset + ia) * nh_tot + ij] = 10.0 * ia + ij + 1.0;
+        }
+    }
+    std::vector<std::complex<double>> packed(atom_count * nij);
+    elecstate::uspp_pack_becsum_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                      atom_count,
+                                                                      nij,
+                                                                      nat,
+                                                                      nh_tot,
+                                                                      spin,
+                                                                      atom_offset,
+                                                                      becsum.data(),
+                                                                      packed.data());
+    EXPECT_EQ(packed[0], std::complex<double>(1.0, 0.0));
+    EXPECT_EQ(packed[5], std::complex<double>(13.0, 0.0));
+
+    const std::vector<std::complex<double>> qgm = {
+        {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0},
+        {0.5, 0.0}, {1.0, 0.0}, {1.5, 0.0},
+        {-1.0, 0.0}, {-2.0, 0.0}, {-3.0, 0.0}
+    };
+    const std::vector<std::complex<double>> aux = {
+        {2.0, 0.0}, {3.0, 0.0}, {4.0, 0.0},
+        {4.0, 0.0}, {5.0, 0.0}, {6.0, 0.0},
+        {1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}
+    };
+    std::vector<std::complex<double>> rhog(npw, {0.25, 0.0});
+    elecstate::uspp_accumulate_rhog_op<double, base_device::DEVICE_CPU>()(
+        nullptr, npw, nij, qgm.data(), aux.data(), rhog.data());
+    EXPECT_NEAR(rhog[0].real(), 3.25, 1.0e-12);
+    EXPECT_NEAR(rhog[1].real(), 9.25, 1.0e-12);
+    EXPECT_NEAR(rhog[2].real(), 18.25, 1.0e-12);
+}
+
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestModuleElecstateUspp, augmentation_helpers_gpu_match_cpu)
+{
+    const int atom_count = 2;
+    const int npw = 3;
+    const int nij = 3;
+    const int nat = 4;
+    const int nh_tot = 6;
+    const int spin = 1;
+    const int atom_offset = 1;
+    const std::vector<double> gcar = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0
+    };
+    const std::vector<double> tau = {
+        0.0, 0.0, 0.0,
+        0.25, 0.5, 0.0
+    };
+    std::vector<double> becsum(2 * nat * nh_tot, 0.0);
+    for (int ia = 0; ia < atom_count; ++ia)
+    {
+        for (int ij = 0; ij < nij; ++ij)
+        {
+            becsum[spin * nat * nh_tot + (atom_offset + ia) * nh_tot + ij] = 10.0 * ia + ij + 1.0;
+        }
+    }
+    const std::vector<std::complex<double>> qgm = {
+        {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0},
+        {0.5, 0.0}, {1.0, 0.0}, {1.5, 0.0},
+        {-1.0, 0.0}, {-2.0, 0.0}, {-3.0, 0.0}
+    };
+    const std::vector<std::complex<double>> aux = {
+        {2.0, 0.0}, {3.0, 0.0}, {4.0, 0.0},
+        {4.0, 0.0}, {5.0, 0.0}, {6.0, 0.0},
+        {1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}
+    };
+
+    std::vector<std::complex<double>> expected_phase(atom_count * npw);
+    std::vector<std::complex<double>> expected_packed(atom_count * nij);
+    std::vector<std::complex<double>> expected_rhog(npw, {0.25, 0.0});
+    elecstate::uspp_atom_phase_op<double, base_device::DEVICE_CPU>()(
+        nullptr, atom_count, npw, gcar.data(), tau.data(), expected_phase.data());
+    elecstate::uspp_pack_becsum_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                      atom_count,
+                                                                      nij,
+                                                                      nat,
+                                                                      nh_tot,
+                                                                      spin,
+                                                                      atom_offset,
+                                                                      becsum.data(),
+                                                                      expected_packed.data());
+    elecstate::uspp_accumulate_rhog_op<double, base_device::DEVICE_CPU>()(
+        nullptr, npw, nij, qgm.data(), aux.data(), expected_rhog.data());
+
+    double* gcar_device = nullptr;
+    double* tau_device = nullptr;
+    double* becsum_device = nullptr;
+    std::complex<double>* phase_device = nullptr;
+    std::complex<double>* packed_device = nullptr;
+    std::complex<double>* qgm_device = nullptr;
+    std::complex<double>* aux_device = nullptr;
+    std::complex<double>* rhog_device = nullptr;
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(gcar_device, gcar.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(tau_device, tau.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(becsum_device, becsum.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phase_device,
+                                                                                           expected_phase.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(packed_device,
+                                                                                           expected_packed.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(qgm_device, qgm.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(aux_device, aux.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(rhog_device,
+                                                                                           expected_rhog.size());
+    base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+        gcar_device, gcar.data(), gcar.size());
+    base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+        tau_device, tau.data(), tau.size());
+    base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+        becsum_device, becsum.data(), becsum.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(qgm_device, qgm.data(), qgm.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(aux_device, aux.data(), aux.size());
+    std::vector<std::complex<double>> initial_rhog(npw, {0.25, 0.0});
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(rhog_device,
+                                                                         initial_rhog.data(),
+                                                                         initial_rhog.size());
+
+    elecstate::uspp_atom_phase_op<double, base_device::DEVICE_GPU>()(
+        nullptr, atom_count, npw, gcar_device, tau_device, phase_device);
+    elecstate::uspp_pack_becsum_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                      atom_count,
+                                                                      nij,
+                                                                      nat,
+                                                                      nh_tot,
+                                                                      spin,
+                                                                      atom_offset,
+                                                                      becsum_device,
+                                                                      packed_device);
+    elecstate::uspp_accumulate_rhog_op<double, base_device::DEVICE_GPU>()(
+        nullptr, npw, nij, qgm_device, aux_device, rhog_device);
+
+    std::vector<std::complex<double>> phase(expected_phase.size());
+    std::vector<std::complex<double>> packed(expected_packed.size());
+    std::vector<std::complex<double>> rhog(expected_rhog.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(phase.data(), phase_device, phase.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(packed.data(), packed_device, packed.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(rhog.data(), rhog_device, rhog.size());
+    for (std::size_t i = 0; i < phase.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(phase[i] - expected_phase[i]), 0.0, 1.0e-12);
+    }
+    for (std::size_t i = 0; i < packed.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(packed[i] - expected_packed[i]), 0.0, 1.0e-12);
+    }
+    for (std::size_t i = 0; i < rhog.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(rhog[i] - expected_rhog[i]), 0.0, 1.0e-12);
+    }
+
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(gcar_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(tau_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(becsum_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phase_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(packed_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(qgm_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(aux_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(rhog_device);
+}
+#endif

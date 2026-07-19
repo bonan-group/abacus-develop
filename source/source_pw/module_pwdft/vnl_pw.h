@@ -35,12 +35,6 @@ inline int get_vnl_chunk_size_override()
     return env == nullptr ? 0 : std::max(0, std::atoi(env));
 }
 
-inline bool vnl_matrix_free_enabled()
-{
-    const char* env = std::getenv("ABACUS_VNL_MATRIX_FREE");
-    return env == nullptr || std::string(env) != "0";
-}
-
 inline size_t get_vnl_chunk_memory_budget_override()
 {
     const char* env = std::getenv("ABACUS_VNL_CHUNK_BUDGET_MB");
@@ -70,22 +64,6 @@ inline size_t vnl_chunking_memory_budget_bytes()
     }
 #endif
     return 4ULL * gib;
-}
-
-inline bool vnl_matrix_free_memory_available(const int nkb, const int nbands, const size_t element_size)
-{
-#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
-    return false;
-#else
-    const size_t coeff_bytes = 2ULL * static_cast<size_t>(nkb) * static_cast<size_t>(nbands) * element_size;
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && free_bytes > 0)
-    {
-        return coeff_bytes < free_bytes / 4;
-    }
-    return coeff_bytes < vnl_chunking_memory_budget_bytes() / 4;
-#endif
 }
 
 inline bool vnl_chunking_enabled(const int nkb, const int npwx, const size_t element_size)
@@ -136,12 +114,24 @@ class pseudopot_cell_vnl
 
     int lmaxkb = 0; // max angular momentum for non-local projectors
 
-    void init_vnl(UnitCell& cell, const ModulePW::PW_Basis* rho_basis);
+    void init_vnl(UnitCell& cell,
+                  const ModulePW::PW_Basis* rho_basis,
+                  bool prepare_uspp_stress);
 
     void rescale_vnl(const double& omega_in);
 
     template <typename FPTYPE, typename Device>
     void getvnl(Device* ctx, const UnitCell& ucell, const int& ik, std::complex<FPTYPE>* vkb_in) const;
+
+    template <typename FPTYPE, typename Device>
+    void cal_becp_matrix_free(Device* ctx,
+                              const UnitCell& ucell,
+                              int ik,
+                              int npw,
+                              int npwx,
+                              int nbands,
+                              const std::complex<FPTYPE>* psi,
+                              std::complex<FPTYPE>* becp) const;
 
     template <typename FPTYPE, typename Device>
     void getvnl_atoms_cached(Device* ctx,
@@ -194,6 +184,7 @@ class pseudopot_cell_vnl
     bool multi_proj = false;
     float* s_deeq = nullptr;
     double* d_deeq = nullptr;
+    double* d_dvan = nullptr;
     ModuleBase::ComplexArray deeq_nc;          //(:,:,:,:), the spin-orbit case
     std::complex<float>* c_deeq_nc = nullptr;  // GPU array of deeq_nc
     std::complex<double>* z_deeq_nc = nullptr; // GPU array of deeq_nc
@@ -209,11 +200,21 @@ class pseudopot_cell_vnl
     ModuleBase::IntArray lpx;       // for each input limi,ljmj is the number of LM in the sum
     ModuleBase::IntArray lpl;       // for each input limi,ljmj points to the allowed LM
     ModuleBase::realArray qrad;     // radial FT of Q functions
+    ModuleBase::ComplexArray qgm;   // packed Q functions on the dense reciprocal grid
+    ModuleBase::ComplexArray dqgm;  // Cartesian derivatives of packed Q functions
+    ModuleBase::ComplexMatrix qgm_phase; // atom phases on the dense reciprocal grid
+    ModuleBase::matrix qgm_gcar; // dense reciprocal vectors for USPP device contractions
 
     float* s_qq_nt = nullptr;
     double* d_qq_nt = nullptr;
     std::complex<float>* c_qq_so = nullptr;  // GPU array of qq_so
     std::complex<double>* z_qq_so = nullptr; // GPU array of qq_so
+    std::complex<float>* c_qgm = nullptr;
+    std::complex<double>* z_qgm = nullptr;
+    std::complex<double>* z_dqgm = nullptr;
+    std::complex<float>* c_qgm_phase = nullptr;
+    std::complex<double>* z_qgm_phase = nullptr;
+    double* d_qgm_gcar = nullptr;
 
     mutable ModuleBase::ComplexMatrix vkb;    // all beta functions in reciprocal space
     mutable ModuleBase::ComplexArray gradvkb; // gradient of beta functions
@@ -265,6 +266,24 @@ class pseudopot_cell_vnl
                       const double* qnorm,
                       const ModuleBase::matrix ylm,
                       std::complex<double>* qg) const;
+
+    /**
+     * @brief Compute one Cartesian derivative of a packed USPP Q function.
+     *
+     * The radial interpolation and spherical-harmonic derivative are shared by
+     * the host stress path and the derivative-Q device cache.
+     */
+    void radial_fft_dq(const int ng,
+                       const int ih,
+                       const int jh,
+                       const int itype,
+                       const int ipol,
+                       const ModuleBase::Vector3<double>* g,
+                       const double* qnorm,
+                       const double tpiba,
+                       const ModuleBase::matrix& ylm,
+                       const ModuleBase::matrix& dylm,
+                       std::complex<double>* dqg) const;
     template <typename FPTYPE, typename Device>
     void radial_fft_q(Device* ctx,
                       const int ng,
@@ -283,6 +302,9 @@ class pseudopot_cell_vnl
      * @param cell UnitCell
      */
     void cal_effective_D(const ModuleBase::matrix& veff, const ModulePW::PW_Basis* rho_basis, UnitCell& cell);
+    void cal_effective_D_gpu(const double* veff,
+                             const ModulePW::PW_Basis* rho_basis,
+                             UnitCell& cell);
 #ifdef __LCAO
     ORB_gaunt_table MGT;
 #endif
@@ -304,12 +326,29 @@ class pseudopot_cell_vnl
     template <typename FPTYPE>
     std::complex<FPTYPE>* get_vkb_data() const;
     template <typename FPTYPE>
+    std::complex<FPTYPE>* get_qgm_data() const;
+    template <typename FPTYPE>
+    std::complex<FPTYPE>* get_qgm_phase_data() const;
+    const std::complex<double>* get_dqgm_data() const
+    {
+        return this->z_dqgm;
+    }
+    const double* get_qgm_gcar_data() const
+    {
+        return this->d_qgm_gcar;
+    }
+    bool has_qgm_cache() const
+    {
+        return this->qgm_cache_ready;
+    }
+    template <typename FPTYPE>
     std::complex<FPTYPE>* get_deeq_nc_data() const;
 
     void release_memory();
 
   private:
     bool memory_released = false;
+    bool qgm_cache_ready = false;
     float* s_nhtol = nullptr;
     float* s_nhtolm = nullptr;
     float* s_indv = nullptr;

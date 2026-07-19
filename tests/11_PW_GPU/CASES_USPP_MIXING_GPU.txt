@@ -1,0 +1,3 @@
+uspp_mixing_plain_spin1_double_grid
+uspp_mixing_broyden_spin2_double_grid
+uspp_mixing_pulay_tau_spin2_double_grid

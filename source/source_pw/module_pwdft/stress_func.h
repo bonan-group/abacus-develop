@@ -200,42 +200,6 @@ class Stress_Func
                                        const FPTYPE& table_interval,
                                        const FPTYPE& x);
 
-    /**
-     * @brief Compute the derivatives of the radial Fourier transform of the Q functions
-     *
-     * This routine computes the derivatives of the Fourier transform of
-     * the Q function needed in stress assuming that the radial fourier
-     * transform is already computed and stored in table qrad.
-     * The formula implemented here is:
-     *
-     *   dq(g,i,j) = sum_lm (-i)^l ap(lm,i,j) *
-     *              ( yr_lm(g^) dqrad(g,l,i,j) + dyr_lm(g^) qrad(g,l,i,j))
-     *
-     * @param ih [in] the first index of Q
-     * @param jh [in] the second index of Q
-     * @param itype [in] the atomic type
-     * @param ipol [in] the polarization of the derivative
-     * @param ng [in] the number of G vectors
-     * @param g [in] the G vectors
-     * @param qnorm [in] the norm of q+g vectors
-     * @param tpiba [in] 2pi/a factor, multiplies G vectors
-     * @param ylmk0 [in] the real spherical harmonics
-     * @param dylmk0 [in] derivetives of spherical harmonics
-     * @param dqg [out] the Fourier transform of interest
-     */
-    void dqvan2(const pseudopot_cell_vnl& ppcell_in,
-                const int ih,
-                const int jh,
-                const int itype,
-                const int ipol,
-                const int ng,
-                const ModuleBase::Vector3<FPTYPE>* g,
-                const FPTYPE* qnorm,
-                const FPTYPE& tpiba,
-                const ModuleBase::matrix& ylmk0,
-                const ModuleBase::matrix& dylmk0,
-                std::complex<FPTYPE>* dqg);
-
   protected:
     Device* ctx = {};
     base_device::DEVICE_CPU* cpu_ctx = {};

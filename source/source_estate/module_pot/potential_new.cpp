@@ -56,6 +56,8 @@ Potential::~Potential()
         delmem_sd_op()(s_veff_smooth);
         delmem_sd_op()(s_vofk_smooth);
         delmem_dd_op()(d_veff_smooth);
+        delmem_dd_op()(d_v_eff);
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(d_v_eff_recip);
         delmem_dd_op()(d_vofk_smooth);
     }
     else
@@ -148,6 +150,11 @@ void Potential::allocate()
         {
             resmem_dd_op()(d_veff_smooth, nspin * nrxx_smooth);
         }
+        resmem_dd_op()(d_v_eff, nspin * nrxx);
+        base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            d_v_eff_recip,
+            nspin * this->rho_basis_->npw,
+            "Pot::d_v_eff_recip");
     }
     else
     {
@@ -196,6 +203,7 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
 
     if (this->use_gpu_)
     {
+        syncmem_d2d_h2d_op()(d_v_eff, this->v_eff.c, this->v_eff.nr * this->v_eff.nc);
         if (PARAM.globalv.has_float_data)
         {
             castmem_d2s_h2d_op()(s_veff_smooth, this->veff_smooth.c, this->veff_smooth.nr * this->veff_smooth.nc);
@@ -231,9 +239,9 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
 
 bool Potential::supports_resident_gpu_update() const
 {
-    if (!this->use_gpu_ || PARAM.globalv.double_grid || XC_Functional::get_ked_flag()
+    if (!this->use_gpu_ || XC_Functional::get_ked_flag()
         || this->rho_basis_ == nullptr || this->rho_basis_smooth_ == nullptr
-        || this->rho_basis_->nrxx != this->rho_basis_smooth_->nrxx)
+        || this->rho_basis_->gamma_only != this->rho_basis_smooth_->gamma_only)
     {
         return false;
     }
@@ -287,13 +295,12 @@ bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const Un
             this->components[i]->cal_v_eff(chg, ucell, this->v_eff);
         }
     }
-    this->interpolate_vrs();
-
-    syncmem_d2d_h2d_op()(this->d_veff_smooth, this->veff_smooth.c, nspin * nrxx);
+    syncmem_d2d_h2d_op()(this->d_v_eff, this->v_eff.c, nspin * nrxx);
 
     double etxc = 0.0;
     double vtxc = 0.0;
-    const bool used_resident_xc = XC_Functional::add_v_xc_to_device(nrxx, chg, ucell, "gpu", this->d_veff_smooth, etxc, vtxc);
+    const bool used_resident_xc
+        = XC_Functional::add_v_xc_to_device(nrxx, chg, ucell, "gpu", this->d_v_eff, etxc, vtxc);
     if (!used_resident_xc)
     {
         ModuleBase::timer::end("Potential", "update_resident_gpu");
@@ -304,13 +311,33 @@ bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const Un
     *(this->vtxc_) = vtxc;
     this->v_eff_host_stale_ = true;
 
+    if (this->rho_basis_ != this->rho_basis_smooth_)
+    {
+        for (int is = 0; is < nspin; ++is)
+        {
+            std::complex<double>* v_eff_recip = this->d_v_eff_recip + is * this->rho_basis_->npw;
+            this->rho_basis_->real2recip_gpu<double>(this->d_v_eff + is * nrxx, v_eff_recip);
+            this->rho_basis_smooth_->recip2real_gpu<double>(v_eff_recip,
+                                                            this->d_veff_smooth
+                                                                + is * this->rho_basis_smooth_->nrxx);
+        }
+    }
+    else
+    {
+        base_device::memory::synchronize_memory_op<double,
+                                                   base_device::DEVICE_GPU,
+                                                   base_device::DEVICE_GPU>()(
+            this->d_veff_smooth,
+            this->d_v_eff,
+            nspin * nrxx);
+    }
+
     if (PARAM.globalv.has_float_data)
     {
         using castmem_d2s_d2d_op
             = base_device::memory::cast_memory_op<float, double, base_device::DEVICE_GPU, base_device::DEVICE_GPU>;
         castmem_d2s_d2d_op()(this->s_veff_smooth, this->d_veff_smooth, nspin * nrxx);
     }
-
     ModuleBase::timer::end("Potential", "update_resident_gpu");
     return true;
 #else
@@ -326,8 +353,17 @@ void Potential::materialize_eff_v_host() const
     }
 
     const int size = this->v_eff.nr * this->v_eff.nc;
-    syncmem_d2d_d2h_op()(this->v_eff.c, this->d_veff_smooth, size);
-    this->veff_smooth = this->v_eff;
+    syncmem_d2d_d2h_op()(this->v_eff.c, this->d_v_eff, size);
+    if (this->veff_smooth.nc == this->v_eff.nc)
+    {
+        this->veff_smooth = this->v_eff;
+    }
+    else
+    {
+        syncmem_d2d_d2h_op()(this->veff_smooth.c,
+                             this->d_veff_smooth,
+                             this->veff_smooth.nr * this->veff_smooth.nc);
+    }
     this->v_eff_host_stale_ = false;
 }
 

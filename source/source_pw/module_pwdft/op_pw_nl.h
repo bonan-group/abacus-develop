@@ -70,8 +70,11 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
         return this->becp;
     }
 
+    void apply_uspp_overlap(const T* psi, T* spsi, int nrow, int npw, int nbands) const;
+
   private:
-    void add_nonlocal_pp(T *hpsi_in, const T *becp, const int m) const;
+    void add_nonlocal_pp(T* hpsi_in, int nbands) const;
+    void build_nonlocal_coefficients(int nbands) const;
 
     void act_chunked(const int nbands,
                      const int nbasis,
@@ -81,36 +84,26 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
                      const int ngk_ik,
                      const bool is_first_node) const;
 
-    void act_matrix_free(const int nbands,
-                         const int nbasis,
-                         const int npol,
-                         const T* tmpsi_in,
-                         T* tmhpsi,
-                         const int ngk_ik,
-                         const bool is_first_node) const;
-
     int calculate_optimal_chunk_size(int npw, int nkb, int nbands) const;
 
-    void ensure_chunk_buffers(int chunk_nkb, int npw, int nbands) const;
-
-    void process_atom_chunk(const T* psi,
-                            T* hpsi,
-                            int nbands,
-                            int npw,
-                            int atom_start,
-                            int atom_end,
-                            int chunk_nkb) const;
-
-    void add_nonlocal_pp_chunk(T* hpsi_in,
-                               const T* becp_chunk,
-                               int atom_start,
-                               int atom_end,
-                               int chunk_nkb,
-                               int m) const;
+    void ensure_chunk_buffer(int chunk_nkb, int npw) const;
+    void materialize_atom_chunk(int npw, int atom_start, int atom_end, int chunk_nkb) const;
 
     void ensure_kpoint_caches(int ik, int npw) const;
     void invalidate_kpoint_caches() const;
     void ensure_type_metadata_cache() const;
+
+    void invalidate_becp_cache() const;
+    void cache_becp_for(const T* psi, int nrow, int nbands) const;
+    bool becp_cache_matches(const T* psi, int nrow, int nbands) const;
+    void ensure_becp_capacity(int nbands) const;
+    void ensure_ps_capacity(int nbands) const;
+    void compute_overlap_becp(const T* psi, int nrow, int nbands, std::false_type) const;
+    void compute_overlap_becp(const T* psi, int nrow, int nbands, std::true_type) const;
+    void add_overlap_from_projectors(T* spsi, int nrow, int nbands, std::false_type) const;
+    void add_overlap_from_projectors(T* spsi, int nrow, int nbands, std::true_type) const;
+    void add_overlap_chunked(T* spsi, int nrow, int nbands) const;
+    void build_overlap_coefficients(int nbands, bool projector_major) const;
 
     mutable int max_npw = 0;
 
@@ -120,6 +113,11 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
 
     mutable size_t ps_capacity = 0;
     mutable size_t becp_capacity = 0;
+    mutable const T* becp_psi = nullptr;
+    mutable int becp_ik = -1;
+    mutable int becp_npw = 0;
+    mutable int becp_nrow = 0;
+    mutable int becp_nbands = 0;
 
     const int* isk = nullptr;
 
@@ -133,13 +131,10 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     mutable T *vkb = nullptr;
     mutable T *becp = nullptr;
     mutable T* vkb_chunk = nullptr;
-    mutable T* becp_chunk = nullptr;
-    mutable T* ps_chunk = nullptr;
     mutable bool full_vkb_ready = false;
     mutable int full_vkb_ready_ik = -1;
     mutable int chunk_buffer_capacity = 0;
     mutable int chunk_npw_capacity = 0;
-    mutable int chunk_nbands_capacity = 0;
 
     mutable Real* cached_gk = nullptr;
     mutable Real* cached_ylm = nullptr;

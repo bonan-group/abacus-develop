@@ -3,6 +3,8 @@
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
 #include "source_base/parallel_reduce.h"
+#include "source_base/parallel_comm.h"
+#include "source_base/parallel_device.h"
 #include "source_base/tool_quit.h"
 #include "source_base/math_ylmreal.h"
 #include "source_pw/module_pwdft/kernels/vnl_op.h"
@@ -40,8 +42,6 @@ Nonlocal<OperatorPW<T, Device>>::~Nonlocal() {
     delmem_complex_op()(this->ps);
     delmem_complex_op()(this->becp);
     delmem_complex_op()(this->vkb_chunk);
-    delmem_complex_op()(this->becp_chunk);
-    delmem_complex_op()(this->ps_chunk);
 #if defined(__CUDA) || defined(__UT_USE_CUDA)
     invalidate_kpoint_caches();
 #endif
@@ -52,6 +52,7 @@ void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
 {
     ModuleBase::timer::start("Nonlocal", "getvnl");
     this->ik = ik_in;
+    this->invalidate_becp_cache();
     this->full_vkb_ready = false;
     this->full_vkb_ready_ik = -1;
 #if defined(__CUDA) || defined(__UT_USE_CUDA)
@@ -82,104 +83,62 @@ void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
 // this function sum up each non-local pseudopotential located on each atom,
 //--------------------------------------------------------------------------
 template<typename T, typename Device>
-void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T *hpsi_in, const T *becp, const int m) const
+void Nonlocal<OperatorPW<T, Device>>::build_nonlocal_coefficients(int nbands) const
 {
-    ModuleBase::timer::start("Nonlocal", "add_nonlocal_pp");
+    const int nkb = this->ppcell->nkb;
+    this->ensure_ps_capacity(nbands);
+    setmem_complex_op()(this->ps, 0, static_cast<size_t>(nkb) * nbands);
 
-    // number of projectors
-    int nkb = this->ppcell->nkb;
-
-    // T *ps = new T[nkb * m];
-    // ModuleBase::GlobalFunc::ZEROS(ps, m * nkb);
-    const size_t ps_size = static_cast<size_t>(nkb) * static_cast<size_t>(m);
-    if (this->ps_capacity < ps_size)
-    {
-        resmem_complex_op()(this->ps, ps_size, "Nonlocal<PW>::ps");
-        this->ps_capacity = ps_size;
-    }
-    setmem_complex_op()(this->ps, 0, ps_size);
-
-    int sum = 0;
-    int iat = 0;
+    int projector_offset = 0;
+    int atom_offset = 0;
     if (this->npol == 1)
     {
         const int current_spin = this->isk[this->ik];
-        for (int it = 0; it < this->ucell->ntype; it++)
+        for (int it = 0; it < this->ucell->ntype; ++it)
         {
-            const int nproj = this->ucell->atoms[it].ncpp.nh;
-            // denghui replace 2022-10-20
-            // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-            nonlocal_op()(
-                this->ctx,   // device context
-                this->ucell->atoms[it].na, m, nproj, // four loop size
-                sum, iat, current_spin, nkb,   // additional index params
-                this->ppcell->deeq.getBound2(), this->ppcell->deeq.getBound3(), this->ppcell->deeq.getBound4(), // realArray operator()
-                this->deeq, // array of data
-                this->ps, this->becp); //  array of data
-            // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-            // for (int ia = 0; ia < this->ucell->atoms[it].na; ia++)
-            // {
-            //     // each atom has nproj, means this is with structure factor;
-            //     // each projector (each atom) must multiply coefficient
-            //     // with all the other projectors.
-            //     for (int ib = 0; ib < m; ++ib)
-            //     {
-            //         for (int ip2 = 0; ip2 < nproj; ip2++)
-            //         {
-            //             for (int ip = 0; ip < nproj; ip++)
-            //             {
-            //                 this->ps[(sum + ip2) * m + ib]
-            //                     += this->ppcell->deeq(current_spin, iat, ip, ip2) * this->becp[ib * nkb + sum + ip];
-            //             } // end ib
-            //         } // end ih
-            //     } // end jh
-            //     sum += nproj;
-            //     ++iat;
-            // } // end na
-        } // end nt
+            nonlocal_op()(this->ctx,
+                          this->ucell->atoms[it].na,
+                          nbands,
+                          this->ucell->atoms[it].ncpp.nh,
+                          projector_offset,
+                          atom_offset,
+                          current_spin,
+                          nkb,
+                          this->ppcell->deeq.getBound2(),
+                          this->ppcell->deeq.getBound3(),
+                          this->ppcell->deeq.getBound4(),
+                          this->deeq,
+                          this->ps,
+                          this->becp);
+        }
+        return;
     }
-    else
+
+    for (int it = 0; it < this->ucell->ntype; ++it)
     {
-        for (int it = 0; it < this->ucell->ntype; it++)
-        {
-            const int nproj = this->ucell->atoms[it].ncpp.nh;
-            // added by denghui at 20221109
-            // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-            nonlocal_op()(
-                this->ctx,   // device context
-                this->ucell->atoms[it].na, m, nproj, // four loop size
-                sum, iat, nkb,   // additional index params
-                this->ppcell->deeq_nc.getBound2(), this->ppcell->deeq_nc.getBound3(), this->ppcell->deeq_nc.getBound4(), // realArray operator()
-                this->deeq_nc, // array of data
-                this->ps, this->becp); //  array of data
-            // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-            // for (int ia = 0; ia < this->ucell->atoms[it].na; ia++)
-            // {
-            //     // each atom has nproj, means this is with structure factor;
-            //     // each projector (each atom) must multiply coefficient
-            //     // with all the other projectors.
-            //     for (int ib = 0; ib < m; ib+=2)
-            //     {
-            //         for (int ip2 = 0; ip2 < nproj; ip2++)
-            //         {
-            //             for (int ip = 0; ip < nproj; ip++)
-            //             {
-            //                 psind = (sum + ip2) * m + ib;
-            //                 becpind = ib * nkb + sum + ip;
-            //                 becp1 = becp[becpind];
-            //                 becp2 = becp[becpind + nkb];
-            //                 ps[psind] += this->ppcell->deeq_nc(0, iat, ip2, ip) * becp1
-            //                              + this->ppcell->deeq_nc(1, iat, ip2, ip) * becp2;
-            //                 ps[psind + 1] += this->ppcell->deeq_nc(2, iat, ip2, ip) * becp1
-            //                                  + this->ppcell->deeq_nc(3, iat, ip2, ip) * becp2;
-            //             } // end ib
-            //         } // end ih
-            //     } // end jh
-            //     sum += nproj;
-            //     ++iat;
-            // } // end na
-        } // end nt
+        nonlocal_op()(this->ctx,
+                      this->ucell->atoms[it].na,
+                      nbands,
+                      this->ucell->atoms[it].ncpp.nh,
+                      projector_offset,
+                      atom_offset,
+                      nkb,
+                      this->ppcell->deeq_nc.getBound2(),
+                      this->ppcell->deeq_nc.getBound3(),
+                      this->ppcell->deeq_nc.getBound4(),
+                      this->deeq_nc,
+                      this->ps,
+                      this->becp);
     }
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp(T* hpsi_in, int m) const
+{
+    ModuleBase::timer::start("Nonlocal", "add_nonlocal_pp");
+
+    const int nkb = this->ppcell->nkb;
+    this->build_nonlocal_coefficients(m);
 
     // use simple method.
     //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -250,12 +209,6 @@ void Nonlocal<OperatorPW<T, Device>>::act(
     if (this->ppcell->nkb > 0
         && (!full_vkb_ready || use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T))))
     {
-        if (vnl_matrix_free_enabled() && npol == 1
-            && vnl_matrix_free_memory_available(this->ppcell->nkb, nbands, sizeof(T)))
-        {
-            this->act_matrix_free(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
-            return;
-        }
         this->act_chunked(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
         return;
     }
@@ -336,10 +289,276 @@ void Nonlocal<OperatorPW<T, Device>>::act(
 
         Parallel_Reduce::reduce_pool(becp, static_cast<int>(becp_size));
 
-        this->add_nonlocal_pp(tmhpsi, becp, nbands);
+        this->cache_becp_for(tmpsi_in, this->max_npw, nbands);
+
+        this->add_nonlocal_pp(tmhpsi, nbands);
     }
 
     ModuleBase::timer::end("Operator", "nonlocal_pw");
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::invalidate_becp_cache() const
+{
+    this->becp_psi = nullptr;
+    this->becp_ik = -1;
+    this->becp_npw = 0;
+    this->becp_nrow = 0;
+    this->becp_nbands = 0;
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::cache_becp_for(const T* psi, int nrow, int nbands) const
+{
+    this->becp_psi = psi;
+    this->becp_ik = this->ik;
+    this->becp_npw = this->npw;
+    this->becp_nrow = nrow;
+    this->becp_nbands = nbands;
+}
+
+template<typename T, typename Device>
+bool Nonlocal<OperatorPW<T, Device>>::becp_cache_matches(const T* psi, int nrow, int nbands) const
+{
+    return this->becp != nullptr && this->becp_psi == psi && this->becp_ik == this->ik
+           && this->becp_npw == this->npw && this->becp_nrow == nrow && this->becp_nbands == nbands;
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::ensure_becp_capacity(int nbands) const
+{
+    const size_t required = static_cast<size_t>(this->ppcell->nkb) * static_cast<size_t>(nbands);
+    if (this->becp_capacity < required)
+    {
+        delmem_complex_op()(this->becp);
+        this->becp = nullptr;
+        resmem_complex_op()(this->becp, required, "Nonlocal<PW>::becp");
+        this->becp_capacity = required;
+        this->invalidate_becp_cache();
+    }
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::ensure_ps_capacity(int nbands) const
+{
+    const size_t required = static_cast<size_t>(this->ppcell->nkb) * static_cast<size_t>(nbands);
+    if (this->ps_capacity < required)
+    {
+        delmem_complex_op()(this->ps);
+        this->ps = nullptr;
+        resmem_complex_op()(this->ps, required, "Nonlocal<PW>::ps");
+        this->ps_capacity = required;
+    }
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::compute_overlap_becp(const T* psi,
+                                                           int nrow,
+                                                           int nbands,
+                                                           std::false_type) const
+{
+    this->ensure_becp_capacity(nbands);
+    if (nbands == 1)
+    {
+        const int inc = 1;
+        gemv_op()('C',
+                  this->npw,
+                  this->ppcell->nkb,
+                  &this->one,
+                  this->vkb,
+                  this->ppcell->vkbnc,
+                  psi,
+                  inc,
+                  &this->zero,
+                  this->becp,
+                  inc);
+    }
+    else
+    {
+        gemm_op()('C',
+                  'N',
+                  this->ppcell->nkb,
+                  nbands,
+                  this->npw,
+                  &this->one,
+                  this->vkb,
+                  this->ppcell->vkbnc,
+                  psi,
+                  nrow,
+                  &this->zero,
+                  this->becp,
+                  this->ppcell->nkb);
+    }
+#ifdef __MPI
+    Parallel_Common::reduce_dev<T, Device>(this->becp, this->ppcell->nkb * nbands, POOL_WORLD);
+#endif
+    this->cache_becp_for(psi, nrow, nbands);
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::compute_overlap_becp(const T* psi,
+                                                           int nrow,
+                                                           int nbands,
+                                                           std::true_type) const
+{
+    const bool matrix_free = !this->full_vkb_ready
+                             || use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T));
+    if (!matrix_free)
+    {
+        this->compute_overlap_becp(psi, nrow, nbands, std::false_type());
+        return;
+    }
+
+    this->ensure_kpoint_caches(this->ik, this->npw);
+    this->ensure_becp_capacity(nbands);
+    hamilt::cal_becp_from_vkb1_cache_op<Real, base_device::DEVICE_GPU>()(
+        nullptr,
+        this->npw,
+        nrow,
+        nbands,
+        this->ppcell->nkb,
+        this->ppcell->nhm,
+        this->cached_jkb_to_iat,
+        this->cached_jkb_to_it,
+        this->cached_jkb_to_ih,
+        this->cached_jkb_pref_sign,
+        this->cached_vkb1,
+        this->cached_sk,
+        psi,
+        this->becp);
+#ifdef __MPI
+    Parallel_Common::reduce_dev<T, Device>(this->becp, this->ppcell->nkb * nbands, POOL_WORLD);
+#endif
+    this->cache_becp_for(psi, nrow, nbands);
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::build_overlap_coefficients(int nbands, bool projector_major) const
+{
+    this->ensure_ps_capacity(nbands);
+    setmem_complex_op()(this->ps, 0, static_cast<size_t>(this->ppcell->nkb) * nbands);
+    const Real* qq_nt = this->ppcell->template get_qq_nt_data<Real>();
+    for (int it = 0; it < this->ucell->ntype; ++it)
+    {
+        const Atom& atoms = this->ucell->atoms[it];
+        if (!atoms.ncpp.tvanp)
+        {
+            continue;
+        }
+        const int first_iat = this->ucell->itia2iat(it, 0);
+        uspp_overlap_op<Real, Device>()(this->ctx,
+                                        atoms.na,
+                                        nbands,
+                                        atoms.ncpp.nh,
+                                        this->ppcell->nhm,
+                                        this->ppcell->nkb,
+                                        this->ppcell->indv_ijkb0[first_iat],
+                                        projector_major,
+                                        qq_nt + it * this->ppcell->nhm * this->ppcell->nhm,
+                                        this->ps,
+                                        this->becp);
+    }
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::add_overlap_from_projectors(T* spsi,
+                                                                  int nrow,
+                                                                  int nbands,
+                                                                  std::false_type) const
+{
+    this->build_overlap_coefficients(nbands, false);
+    if (nbands == 1)
+    {
+        const int inc = 1;
+        gemv_op()('N',
+                  this->npw,
+                  this->ppcell->nkb,
+                  &this->one,
+                  this->vkb,
+                  this->ppcell->vkbnc,
+                  this->ps,
+                  inc,
+                  &this->one,
+                  spsi,
+                  inc);
+    }
+    else
+    {
+        gemm_op()('N',
+                  'N',
+                  this->npw,
+                  nbands,
+                  this->ppcell->nkb,
+                  &this->one,
+                  this->vkb,
+                  this->ppcell->vkbnc,
+                  this->ps,
+                  this->ppcell->nkb,
+                  &this->one,
+                  spsi,
+                  nrow);
+    }
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::add_overlap_from_projectors(T* spsi,
+                                                                  int nrow,
+                                                                  int nbands,
+                                                                  std::true_type) const
+{
+    const bool matrix_free = !this->full_vkb_ready
+                             || use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T));
+    if (!matrix_free)
+    {
+        this->add_overlap_from_projectors(spsi, nrow, nbands, std::false_type());
+        return;
+    }
+
+    this->add_overlap_chunked(spsi, nrow, nbands);
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::apply_uspp_overlap(const T* psi,
+                                                         T* spsi,
+                                                         int nrow,
+                                                         int npw,
+                                                         int nbands) const
+{
+    bool has_uspp = false;
+    for (int it = 0; it < this->ucell->ntype; ++it)
+    {
+        has_uspp = has_uspp || this->ucell->atoms[it].ncpp.tvanp;
+    }
+    if (!has_uspp || this->ppcell->nkb <= 0 || nbands <= 0)
+    {
+        return;
+    }
+    if (PARAM.inp.noncolin)
+    {
+        ModuleBase::WARNING_QUIT("NonlocalPW", "noncollinear USPP overlap is not implemented");
+    }
+    if (npw <= 0 || nrow < npw)
+    {
+        ModuleBase::WARNING_QUIT("NonlocalPW", "invalid plane-wave dimensions for USPP overlap");
+    }
+    if (this->npw != npw || this->max_npw != nrow)
+    {
+        this->npw = npw;
+        this->max_npw = nrow;
+        this->invalidate_becp_cache();
+    }
+
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    typedef typename std::is_same<Device, base_device::DEVICE_GPU>::type gpu_tag;
+#else
+    typedef std::false_type gpu_tag;
+#endif
+    if (!this->becp_cache_matches(psi, nrow, nbands))
+    {
+        this->compute_overlap_becp(psi, nrow, nbands, gpu_tag());
+    }
+    this->add_overlap_from_projectors(spsi, nrow, nbands, gpu_tag());
+    this->invalidate_becp_cache();
 }
 
 #if defined(__CUDA) || defined(__UT_USE_CUDA)
@@ -356,38 +575,44 @@ int Nonlocal<OperatorPW<T, Device>>::calculate_optimal_chunk_size(int npw, int n
 }
 
 template<typename T, typename Device>
-void Nonlocal<OperatorPW<T, Device>>::ensure_chunk_buffers(int chunk_nkb, int npw, int nbands) const
+void Nonlocal<OperatorPW<T, Device>>::ensure_chunk_buffer(int chunk_nkb, int npw) const
 {
-    const bool need_realloc = chunk_nkb > this->chunk_buffer_capacity
-                              || npw > this->chunk_npw_capacity
-                              || nbands > this->chunk_nbands_capacity;
+    const bool need_realloc = chunk_nkb > this->chunk_buffer_capacity || npw > this->chunk_npw_capacity;
     if (!need_realloc)
     {
         return;
     }
 
     delmem_complex_op()(this->vkb_chunk);
-    delmem_complex_op()(this->becp_chunk);
-    delmem_complex_op()(this->ps_chunk);
     this->vkb_chunk = nullptr;
-    this->becp_chunk = nullptr;
-    this->ps_chunk = nullptr;
 
     this->chunk_buffer_capacity = std::max(chunk_nkb, this->chunk_buffer_capacity);
     this->chunk_npw_capacity = std::max(npw, this->chunk_npw_capacity);
-    this->chunk_nbands_capacity = std::max(nbands, this->chunk_nbands_capacity);
 
     resmem_complex_op()(this->vkb_chunk,
                         static_cast<size_t>(this->chunk_buffer_capacity) * static_cast<size_t>(this->wfcpw->npwk_max),
                         "Nonlocal<PW>::vkb_chunk");
-    resmem_complex_op()(this->becp_chunk,
-                        static_cast<size_t>(this->chunk_buffer_capacity)
-                            * static_cast<size_t>(this->chunk_nbands_capacity),
-                        "Nonlocal<PW>::becp_chunk");
-    resmem_complex_op()(this->ps_chunk,
-                        static_cast<size_t>(this->chunk_buffer_capacity)
-                            * static_cast<size_t>(this->chunk_nbands_capacity),
-                        "Nonlocal<PW>::ps_chunk");
+}
+
+template<typename T, typename Device>
+void Nonlocal<OperatorPW<T, Device>>::materialize_atom_chunk(int npw,
+                                                             int atom_start,
+                                                             int atom_end,
+                                                             int chunk_nkb) const
+{
+    this->ensure_chunk_buffer(chunk_nkb, npw);
+    hamilt::cal_vnl_from_vkb1_cache_op<Real, Device>()(this->ctx,
+                                                       npw,
+                                                       this->wfcpw->npwk_max,
+                                                       this->ppcell->nhm,
+                                                       this->cached_atom_nh,
+                                                       atom_start,
+                                                       atom_end,
+                                                       this->ppcell->template get_nhtol_data<Real>(),
+                                                       this->cached_vkb1,
+                                                       this->cached_sk,
+                                                       this->cached_iat2it,
+                                                       this->vkb_chunk);
 }
 
 template<typename T, typename Device>
@@ -400,6 +625,7 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
                                                   const bool is_first_node) const
 {
     ModuleBase::timer::start("Operator", "nonlocal_pw_chunked");
+    this->invalidate_becp_cache();
     if (is_first_node)
     {
         setmem_complex_op()(tmhpsi, 0, nbasis * nbands / npol);
@@ -418,6 +644,12 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
     ensure_kpoint_caches(this->ik, ngk_ik);
 
     const int nkb = this->ppcell->nkb;
+    const size_t coeff_size = static_cast<size_t>(nkb) * static_cast<size_t>(nbands);
+    if (coeff_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+    {
+        ModuleBase::WARNING_QUIT("NonlocalPW", "nkb * nbands exceeds the reduction size limit.");
+    }
+    this->ensure_becp_capacity(nbands);
     const int target_chunk = calculate_optimal_chunk_size(ngk_ik, nkb, nbands);
 
     int atom_begin = 0;
@@ -438,13 +670,99 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
             ++atom_end;
         }
 
-        process_atom_chunk(tmpsi_in,
-                           tmhpsi,
-                           nbands,
-                           ngk_ik,
-                           atom_begin,
-                           atom_end,
-                           ikb_end - ikb_begin);
+        const int chunk_nkb = ikb_end - ikb_begin;
+        this->materialize_atom_chunk(ngk_ik, atom_begin, atom_end, chunk_nkb);
+        if (nbands == 1)
+        {
+            const int inc = 1;
+            gemv_op()('C',
+                      ngk_ik,
+                      chunk_nkb,
+                      &this->one,
+                      this->vkb_chunk,
+                      this->wfcpw->npwk_max,
+                      tmpsi_in,
+                      inc,
+                      &this->zero,
+                      this->becp + ikb_begin,
+                      inc);
+        }
+        else
+        {
+            gemm_op()('C',
+                      'N',
+                      chunk_nkb,
+                      nbands,
+                      ngk_ik,
+                      &this->one,
+                      this->vkb_chunk,
+                      this->wfcpw->npwk_max,
+                      tmpsi_in,
+                      this->max_npw,
+                      &this->zero,
+                      this->becp + ikb_begin,
+                      nkb);
+        }
+
+        atom_begin = atom_end;
+        ikb_begin = ikb_end;
+    }
+
+    Parallel_Reduce::reduce_pool(this->becp, static_cast<int>(coeff_size));
+    this->cache_becp_for(tmpsi_in, this->max_npw, nbands);
+    this->build_nonlocal_coefficients(nbands);
+
+    atom_begin = 0;
+    ikb_begin = 0;
+    while (ikb_begin < nkb)
+    {
+        int atom_end = atom_begin;
+        int ikb_end = ikb_begin;
+        while (atom_end < this->ucell->nat)
+        {
+            const int it = this->ucell->iat2it[atom_end];
+            const int nh = this->ucell->atoms[it].ncpp.nh;
+            if (ikb_end > ikb_begin && ikb_end + nh > ikb_begin + target_chunk)
+            {
+                break;
+            }
+            ikb_end += nh;
+            ++atom_end;
+        }
+
+        const int chunk_nkb = ikb_end - ikb_begin;
+        this->materialize_atom_chunk(ngk_ik, atom_begin, atom_end, chunk_nkb);
+        if (nbands == 1)
+        {
+            const int inc = 1;
+            gemv_op()('N',
+                      ngk_ik,
+                      chunk_nkb,
+                      &this->one,
+                      this->vkb_chunk,
+                      this->wfcpw->npwk_max,
+                      this->ps + ikb_begin,
+                      inc,
+                      &this->one,
+                      tmhpsi,
+                      inc);
+        }
+        else
+        {
+            gemm_op()('N',
+                      'T',
+                      ngk_ik,
+                      nbands,
+                      chunk_nkb,
+                      &this->one,
+                      this->vkb_chunk,
+                      this->wfcpw->npwk_max,
+                      this->ps + static_cast<size_t>(ikb_begin) * nbands,
+                      nbands,
+                      &this->one,
+                      tmhpsi,
+                      this->max_npw);
+        }
 
         atom_begin = atom_end;
         ikb_begin = ikb_end;
@@ -454,291 +772,69 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
 }
 
 template<typename T, typename Device>
-void Nonlocal<OperatorPW<T, Device>>::act_matrix_free(const int nbands,
-                                                      const int nbasis,
-                                                      const int npol,
-                                                      const T* tmpsi_in,
-                                                      T* tmhpsi,
-                                                      const int ngk_ik,
-                                                      const bool is_first_node) const
+void Nonlocal<OperatorPW<T, Device>>::add_overlap_chunked(T* spsi, int nrow, int nbands) const
 {
-    ModuleBase::timer::start("Operator", "nonlocal_pw_matrix_free");
-    if (is_first_node)
-    {
-        setmem_complex_op()(tmhpsi, 0, nbasis * nbands / npol);
-    }
-
-    if (nbands <= 0 || ngk_ik <= 0 || this->ppcell->nkb <= 0)
-    {
-        ModuleBase::timer::end("Operator", "nonlocal_pw_matrix_free");
-        return;
-    }
-
-    this->npw = ngk_ik;
-    this->max_npw = nbasis / npol;
-    this->npol = npol;
-
-    ensure_kpoint_caches(this->ik, ngk_ik);
+    this->build_overlap_coefficients(nbands, false);
+    this->ensure_kpoint_caches(this->ik, this->npw);
 
     const int nkb = this->ppcell->nkb;
-    const size_t coeff_size = static_cast<size_t>(nbands) * static_cast<size_t>(nkb);
-    if (coeff_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+    const int target_chunk = this->calculate_optimal_chunk_size(this->npw, nkb, nbands);
+    int atom_begin = 0;
+    int ikb_begin = 0;
+    while (ikb_begin < nkb)
     {
-        ModuleBase::WARNING_QUIT("NonlocalPW", "nkb * nbands exceeds the reduction size limit.");
-    }
-    if (this->becp_capacity < coeff_size)
-    {
-        delmem_complex_op()(this->becp);
-        this->becp = nullptr;
-        resmem_complex_op()(this->becp, coeff_size, "Nonlocal<PW>::becp");
-        this->becp_capacity = coeff_size;
-    }
-    if (this->ps_capacity < coeff_size)
-    {
-        delmem_complex_op()(this->ps);
-        this->ps = nullptr;
-        resmem_complex_op()(this->ps, coeff_size, "Nonlocal<PW>::ps");
-        this->ps_capacity = coeff_size;
-    }
+        int atom_end = atom_begin;
+        int ikb_end = ikb_begin;
+        while (atom_end < this->ucell->nat)
+        {
+            const int it = this->ucell->iat2it[atom_end];
+            const int nh = this->ucell->atoms[it].ncpp.nh;
+            if (ikb_end > ikb_begin && ikb_end + nh > ikb_begin + target_chunk)
+            {
+                break;
+            }
+            ikb_end += nh;
+            ++atom_end;
+        }
 
-    hamilt::cal_becp_from_vkb1_cache_op<Real, Device>()(this->ctx,
-                                                        this->npw,
-                                                        this->max_npw,
-                                                        nbands,
-                                                        nkb,
-                                                        this->ppcell->nhm,
-                                                        this->cached_jkb_to_iat,
-                                                        this->cached_jkb_to_it,
-                                                        this->cached_jkb_to_ih,
-                                                        this->cached_jkb_pref_sign,
-                                                        this->cached_vkb1,
-                                                        this->cached_sk,
-                                                        tmpsi_in,
-                                                        this->becp);
+        const int chunk_nkb = ikb_end - ikb_begin;
+        this->materialize_atom_chunk(this->npw, atom_begin, atom_end, chunk_nkb);
 
-    Parallel_Reduce::reduce_pool(this->becp, static_cast<int>(coeff_size));
-
-    setmem_complex_op()(this->ps, 0, coeff_size);
-
-    int sum = 0;
-    int iat = 0;
-    const int current_spin = this->isk[this->ik];
-    for (int it = 0; it < this->ucell->ntype; it++)
-    {
-        const int nproj = this->ucell->atoms[it].ncpp.nh;
-        nonlocal_op()(this->ctx,
-                      this->ucell->atoms[it].na,
+        if (nbands == 1)
+        {
+            const int inc = 1;
+            gemv_op()('N',
+                      this->npw,
+                      chunk_nkb,
+                      &this->one,
+                      this->vkb_chunk,
+                      this->wfcpw->npwk_max,
+                      this->ps + ikb_begin,
+                      inc,
+                      &this->one,
+                      spsi,
+                      inc);
+        }
+        else
+        {
+            gemm_op()('N',
+                      'N',
+                      this->npw,
                       nbands,
-                      nproj,
-                      sum,
-                      iat,
-                      current_spin,
+                      chunk_nkb,
+                      &this->one,
+                      this->vkb_chunk,
+                      this->wfcpw->npwk_max,
+                      this->ps + ikb_begin,
                       nkb,
-                      this->ppcell->deeq.getBound2(),
-                      this->ppcell->deeq.getBound3(),
-                      this->ppcell->deeq.getBound4(),
-                      this->deeq,
-                      this->ps,
-                      this->becp);
-    }
-
-    hamilt::cal_hpsi_from_vkb1_cache_op<Real, Device>()(this->ctx,
-                                                        this->npw,
-                                                        this->max_npw,
-                                                        nbands,
-                                                        nkb,
-                                                        this->ppcell->nhm,
-                                                        this->cached_jkb_to_iat,
-                                                        this->cached_jkb_to_it,
-                                                        this->cached_jkb_to_ih,
-                                                        this->cached_jkb_pref_sign,
-                                                        this->cached_vkb1,
-                                                        this->cached_sk,
-                                                        this->ps,
-                                                        tmhpsi);
-
-    ModuleBase::timer::end("Operator", "nonlocal_pw_matrix_free");
-}
-
-template<typename T, typename Device>
-void Nonlocal<OperatorPW<T, Device>>::process_atom_chunk(const T* psi,
-                                                         T* hpsi,
-                                                         int nbands,
-                                                         int npw,
-                                                         int atom_start,
-                                                         int atom_end,
-                                                         int chunk_nkb) const
-{
-    ModuleBase::timer::start("Nonlocal", "process_chunk");
-    if (nbands <= 0 || npw <= 0 || chunk_nkb <= 0)
-    {
-        ModuleBase::timer::end("Nonlocal", "process_chunk");
-        return;
-    }
-
-    const size_t chunk_coeff_size = static_cast<size_t>(chunk_nkb) * static_cast<size_t>(nbands);
-    if (chunk_coeff_size > static_cast<size_t>(std::numeric_limits<int>::max()))
-    {
-        ModuleBase::WARNING_QUIT("NonlocalPW", "chunk_nkb * nbands exceeds the reduction size limit.");
-    }
-
-    ensure_chunk_buffers(chunk_nkb, npw, nbands);
-
-    hamilt::cal_vnl_from_vkb1_cache_op<Real, Device>()(this->ctx,
-                                                       npw,
-                                                       this->wfcpw->npwk_max,
-                                                       this->ppcell->nhm,
-                                                       this->cached_atom_nh,
-                                                       atom_start,
-                                                       atom_end,
-                                                       this->ppcell->template get_nhtol_data<Real>(),
-                                                       this->cached_vkb1,
-                                                       this->cached_sk,
-                                                       this->cached_iat2it,
-                                                       this->vkb_chunk);
-
-    char transa = 'C';
-    char transb = 'N';
-    if (nbands == 1)
-    {
-        int inc = 1;
-        gemv_op()(transa,
-                  npw,
-                  chunk_nkb,
-                  &this->one,
-                  this->vkb_chunk,
-                  this->wfcpw->npwk_max,
-                  psi,
-                  inc,
-                  &this->zero,
-                  this->becp_chunk,
-                  inc);
-    }
-    else
-    {
-#ifdef __DSP
-        ModuleBase::gemm_op_mt<T, Device>()
-#else
-        gemm_op()
-#endif
-            (transa,
-             transb,
-             chunk_nkb,
-             nbands,
-             npw,
-             &this->one,
-             this->vkb_chunk,
-             this->wfcpw->npwk_max,
-             psi,
-             this->max_npw,
-             &this->zero,
-             this->becp_chunk,
-             chunk_nkb);
-    }
-
-    Parallel_Reduce::reduce_pool(this->becp_chunk, static_cast<int>(chunk_coeff_size));
-    add_nonlocal_pp_chunk(hpsi, this->becp_chunk, atom_start, atom_end, chunk_nkb, nbands);
-    ModuleBase::timer::end("Nonlocal", "process_chunk");
-}
-
-template<typename T, typename Device>
-void Nonlocal<OperatorPW<T, Device>>::add_nonlocal_pp_chunk(T* hpsi_in,
-                                                            const T* becp_chunk,
-                                                            int atom_start,
-                                                            int atom_end,
-                                                            int chunk_nkb,
-                                                            int m) const
-{
-    ModuleBase::timer::start("Nonlocal", "add_nonlocal_pp_chunk");
-    setmem_complex_op()(this->ps_chunk, 0, chunk_nkb * m);
-
-    int sum = 0;
-    if (this->npol == 1)
-    {
-        const int current_spin = this->isk[this->ik];
-        for (int iat = atom_start; iat < atom_end; ++iat)
-        {
-            const int it = this->ucell->iat2it[iat];
-            const int nproj = this->ucell->atoms[it].ncpp.nh;
-            int global_iat = iat;
-            nonlocal_op()(this->ctx,
-                          1,
-                          m,
-                          nproj,
-                          sum,
-                          global_iat,
-                          current_spin,
-                          chunk_nkb,
-                          this->ppcell->deeq.getBound2(),
-                          this->ppcell->deeq.getBound3(),
-                          this->ppcell->deeq.getBound4(),
-                          this->deeq,
-                          this->ps_chunk,
-                          becp_chunk);
+                      &this->one,
+                      spsi,
+                      nrow);
         }
-    }
-    else
-    {
-        for (int iat = atom_start; iat < atom_end; ++iat)
-        {
-            const int it = this->ucell->iat2it[iat];
-            const int nproj = this->ucell->atoms[it].ncpp.nh;
-            int global_iat = iat;
-            nonlocal_op()(this->ctx,
-                          1,
-                          m,
-                          nproj,
-                          sum,
-                          global_iat,
-                          chunk_nkb,
-                          this->ppcell->deeq_nc.getBound2(),
-                          this->ppcell->deeq_nc.getBound3(),
-                          this->ppcell->deeq_nc.getBound4(),
-                          this->deeq_nc,
-                          this->ps_chunk,
-                          becp_chunk);
-        }
-    }
 
-    char transa = 'N';
-    char transb = 'T';
-    if (m == 1)
-    {
-        int inc = 1;
-        gemv_op()(transa,
-                  this->npw,
-                  chunk_nkb,
-                  &this->one,
-                  this->vkb_chunk,
-                  this->wfcpw->npwk_max,
-                  this->ps_chunk,
-                  inc,
-                  &this->one,
-                  hpsi_in,
-                  inc);
+        atom_begin = atom_end;
+        ikb_begin = ikb_end;
     }
-    else
-    {
-#ifdef __DSP
-        ModuleBase::gemm_op_mt<T, Device>()
-#else
-        gemm_op()
-#endif
-            (transa,
-             transb,
-             this->npw,
-             m,
-             chunk_nkb,
-             &this->one,
-             this->vkb_chunk,
-             this->wfcpw->npwk_max,
-             this->ps_chunk,
-             m,
-             &this->one,
-             hpsi_in,
-             this->max_npw);
-    }
-    ModuleBase::timer::end("Nonlocal", "add_nonlocal_pp_chunk");
 }
 
 template<typename T, typename Device>

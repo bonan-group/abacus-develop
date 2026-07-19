@@ -7,6 +7,8 @@
 #include "source_lcao/module_dftu/dftu.h"
 #include "source_pw/module_pwdft/vsep_pw.h"
 
+#include <type_traits>
+
 template <typename T, typename Device>
 void pw::setup_pot(const int istep,
         UnitCell& ucell, // unitcell
@@ -63,9 +65,16 @@ void pw::setup_pot(const int istep,
     //! D in uspp need vloc, thus behind init_scf()
     //! calculate the effective coefficient matrix
     //! for non-local pseudopotential projectors
-    ModuleBase::matrix veff = pelec->pot->get_eff_v();
-
-    ppcell.cal_effective_D(veff, pw_rhod, ucell);
+    if (ppcell.has_qgm_cache() && std::is_same<Device, base_device::DEVICE_GPU>::value
+        && pelec->pot->get_eff_v_device_data() != nullptr)
+    {
+        ppcell.cal_effective_D_gpu(pelec->pot->get_eff_v_device_data(), pw_rhod, ucell);
+    }
+    else
+    {
+        ModuleBase::matrix veff = pelec->pot->get_eff_v();
+        ppcell.cal_effective_D(veff, pw_rhod, ucell);
+    }
 
     //----------------------------------------------------------
     //! 4) Onsite projectors

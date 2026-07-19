@@ -182,3 +182,797 @@ TEST_F(TestModuleHamiltNonlocal, nonlocal_pw_spin_op_gpu)
   delete_memory_complex_double_op()(becp_dev);
 }
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+
+TEST(TestModuleHamiltUsppOverlap, cpu_variable_projector_count)
+{
+    const int atom_count = 2;
+    const int nbands = 3;
+    const int nh = 2;
+    const int nhm = 3;
+    const int nkb = 5;
+    const int projector_offset = 1;
+    const std::vector<double> qq = {
+        2.0, 0.5, 7.0,
+        0.5, 1.5, 8.0,
+        9.0, 10.0, 11.0
+    };
+    const std::vector<std::complex<double>> becp = {
+        {1.0, 0.5}, {2.0, -1.0}, {3.0, 0.25}, {4.0, -0.5}, {5.0, 1.0},
+        {-1.0, 0.0}, {0.5, 1.0}, {1.5, -0.5}, {2.5, 0.75}, {3.5, -1.25},
+        {0.25, -0.5}, {1.25, 0.25}, {2.25, -0.75}, {3.25, 1.5}, {4.25, -0.25}
+    };
+    std::vector<std::complex<double>> expected(nbands * nkb, {0.0, 0.0});
+    for (int ia = 0; ia < atom_count; ++ia)
+    {
+        const int atom_offset = projector_offset + ia * nh;
+        for (int ib = 0; ib < nbands; ++ib)
+        {
+            for (int ih = 0; ih < nh; ++ih)
+            {
+                for (int jh = 0; jh < nh; ++jh)
+                {
+                    expected[ib * nkb + atom_offset + ih]
+                        += qq[jh * nhm + ih] * becp[ib * nkb + atom_offset + jh];
+                }
+            }
+        }
+    }
+
+    std::vector<std::complex<double>> actual(nbands * nkb, {0.0, 0.0});
+    hamilt::uspp_overlap_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                               atom_count,
+                                                               nbands,
+                                                               nh,
+                                                               nhm,
+                                                               nkb,
+                                                               projector_offset,
+                                                               false,
+                                                               qq.data(),
+                                                               actual.data(),
+                                                               becp.data());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(actual[i] - expected[i]), 0.0, 1.0e-12);
+    }
+}
+
+TEST(TestModuleHamiltUsppOverlap, cpu_projector_major_layout)
+{
+    const int atom_count = 2;
+    const int nbands = 3;
+    const int nh = 2;
+    const int nhm = 3;
+    const int nkb = 5;
+    const int projector_offset = 1;
+    const std::vector<double> qq = {
+        2.0, 0.5, 7.0,
+        0.5, 1.5, 8.0,
+        9.0, 10.0, 11.0
+    };
+    const std::vector<std::complex<double>> becp = {
+        {1.0, 0.5}, {2.0, -1.0}, {3.0, 0.25}, {4.0, -0.5}, {5.0, 1.0},
+        {-1.0, 0.0}, {0.5, 1.0}, {1.5, -0.5}, {2.5, 0.75}, {3.5, -1.25},
+        {0.25, -0.5}, {1.25, 0.25}, {2.25, -0.75}, {3.25, 1.5}, {4.25, -0.25}
+    };
+    std::vector<std::complex<double>> expected(nbands * nkb, {0.0, 0.0});
+    for (int ia = 0; ia < atom_count; ++ia)
+    {
+        const int atom_offset = projector_offset + ia * nh;
+        for (int ib = 0; ib < nbands; ++ib)
+        {
+            for (int ih = 0; ih < nh; ++ih)
+            {
+                for (int jh = 0; jh < nh; ++jh)
+                {
+                    expected[(atom_offset + ih) * nbands + ib]
+                        += qq[jh * nhm + ih] * becp[ib * nkb + atom_offset + jh];
+                }
+            }
+        }
+    }
+
+    std::vector<std::complex<double>> actual(nbands * nkb, {0.0, 0.0});
+    hamilt::uspp_overlap_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                               atom_count,
+                                                               nbands,
+                                                               nh,
+                                                               nhm,
+                                                               nkb,
+                                                               projector_offset,
+                                                               true,
+                                                               qq.data(),
+                                                               actual.data(),
+                                                               becp.data());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(actual[i] - expected[i]), 0.0, 1.0e-12);
+    }
+}
+
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestModuleHamiltUsppOverlap, gpu_matches_cpu_reference)
+{
+    const int atom_count = 2;
+    const int nbands = 3;
+    const int nh = 2;
+    const int nhm = 3;
+    const int nkb = 5;
+    const int projector_offset = 1;
+    const std::vector<double> qq = {
+        2.0, 0.5, 7.0,
+        0.5, 1.5, 8.0,
+        9.0, 10.0, 11.0
+    };
+    const std::vector<std::complex<double>> becp = {
+        {1.0, 0.5}, {2.0, -1.0}, {3.0, 0.25}, {4.0, -0.5}, {5.0, 1.0},
+        {-1.0, 0.0}, {0.5, 1.0}, {1.5, -0.5}, {2.5, 0.75}, {3.5, -1.25},
+        {0.25, -0.5}, {1.25, 0.25}, {2.25, -0.75}, {3.25, 1.5}, {4.25, -0.25}
+    };
+    std::vector<std::complex<double>> expected(nbands * nkb, {0.0, 0.0});
+    hamilt::uspp_overlap_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                               atom_count,
+                                                               nbands,
+                                                               nh,
+                                                               nhm,
+                                                               nkb,
+                                                               projector_offset,
+                                                               false,
+                                                               qq.data(),
+                                                               expected.data(),
+                                                               becp.data());
+
+    double* qq_device = nullptr;
+    std::complex<double>* becp_device = nullptr;
+    std::complex<double>* actual_device = nullptr;
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(qq_device, qq.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(becp_device, becp.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(actual_device,
+                                                                                           expected.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(qq_device, qq.data(), qq.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(becp_device,
+                                                                         becp.data(),
+                                                                         becp.size());
+    base_device::memory::set_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(actual_device,
+                                                                                        0,
+                                                                                        expected.size());
+
+    hamilt::uspp_overlap_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                               atom_count,
+                                                               nbands,
+                                                               nh,
+                                                               nhm,
+                                                               nkb,
+                                                               projector_offset,
+                                                               false,
+                                                               qq_device,
+                                                               actual_device,
+                                                               becp_device);
+    std::vector<std::complex<double>> actual(expected.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(actual.data(),
+                                                                         actual_device,
+                                                                         actual.size());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(actual[i] - expected[i]), 0.0, 1.0e-12);
+    }
+
+    std::vector<std::complex<double>> expected_projector_major(expected.size(), {0.0, 0.0});
+    for (int ib = 0; ib < nbands; ++ib)
+    {
+        for (int ikb = 0; ikb < nkb; ++ikb)
+        {
+            expected_projector_major[ikb * nbands + ib] = expected[ib * nkb + ikb];
+        }
+    }
+    base_device::memory::set_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(actual_device,
+                                                                                        0,
+                                                                                        expected.size());
+    hamilt::uspp_overlap_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                               atom_count,
+                                                               nbands,
+                                                               nh,
+                                                               nhm,
+                                                               nkb,
+                                                               projector_offset,
+                                                               true,
+                                                               qq_device,
+                                                               actual_device,
+                                                               becp_device);
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(actual.data(),
+                                                                         actual_device,
+                                                                         actual.size());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(actual[i] - expected_projector_major[i]), 0.0, 1.0e-12);
+    }
+
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(qq_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(becp_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(actual_device);
+}
+#endif
+
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestModuleHamiltUsppQgm, gpu_matches_independent_reference)
+{
+    const int ntype = 2;
+    const int nh_tot = 3;
+    const int npw = 4;
+    const int lmaxq = 2;
+    const int radial_pair_count = 2;
+    const int nqxq = 8;
+    const int max_terms = 2;
+    const double dq = 0.5;
+    const double tpiba = 1.2;
+    const std::vector<double> gcar = {
+        0.0, 0.0, 0.0,
+        0.25, 0.0, 0.0,
+        0.0, 0.5, 0.0,
+        2.5, 0.0, 0.0
+    };
+    const std::vector<int> pair_term_count = {1, 2, 0, 2, 1, 0};
+    const std::vector<int> pair_radial_index = {0, 1, 0, 1, 0, 0};
+    std::vector<int> pair_l(ntype * nh_tot * max_terms, 0);
+    std::vector<int> pair_lm(ntype * nh_tot * max_terms, 0);
+    std::vector<std::complex<double>> pair_coefficient(ntype * nh_tot * max_terms, {0.0, 0.0});
+    pair_l[0] = 0;
+    pair_lm[0] = 0;
+    pair_coefficient[0] = {1.0, 0.0};
+    pair_l[2] = 0;
+    pair_lm[2] = 0;
+    pair_coefficient[2] = {0.5, 0.25};
+    pair_l[3] = 1;
+    pair_lm[3] = 1;
+    pair_coefficient[3] = {-0.2, 0.4};
+    pair_l[6] = 1;
+    pair_lm[6] = 2;
+    pair_coefficient[6] = {0.75, -0.5};
+    pair_l[7] = 0;
+    pair_lm[7] = 0;
+    pair_coefficient[7] = {-0.3, 0.1};
+    pair_l[8] = 1;
+    pair_lm[8] = 3;
+    pair_coefficient[8] = {0.2, 0.6};
+
+    std::vector<double> qrad(ntype * lmaxq * radial_pair_count * nqxq);
+    for (std::size_t i = 0; i < qrad.size(); ++i)
+    {
+        qrad[i] = 0.025 * static_cast<double>(i + 1);
+    }
+    std::vector<double> ylm(lmaxq * lmaxq * npw);
+    for (std::size_t i = 0; i < ylm.size(); ++i)
+    {
+        ylm[i] = 0.05 * static_cast<double>(i + 1);
+    }
+
+    std::vector<std::complex<double>> expected(ntype * nh_tot * npw, {0.0, 0.0});
+    for (int pair = 0; pair < ntype * nh_tot; ++pair)
+    {
+        const int it = pair / nh_tot;
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            const double gx = gcar[3 * ig];
+            const double gy = gcar[3 * ig + 1];
+            const double gz = gcar[3 * ig + 2];
+            const double qnorm = std::sqrt(gx * gx + gy * gy + gz * gz) * tpiba;
+            const double position = qnorm / dq;
+            const int iq = static_cast<int>(position);
+            if (iq > nqxq - 4)
+            {
+                continue;
+            }
+            const double x0 = position - iq;
+            for (int term = 0; term < pair_term_count[pair]; ++term)
+            {
+                const int term_index = pair * max_terms + term;
+                const int l = pair_l[term_index];
+                const int qrad_offset
+                    = (((it * lmaxq + l) * radial_pair_count + pair_radial_index[pair]) * nqxq + iq);
+                const double work = qrad[qrad_offset] * (1.0 - x0) * (2.0 - x0) * (3.0 - x0) / 6.0
+                                  + qrad[qrad_offset + 1] * x0 * (2.0 - x0) * (3.0 - x0) / 2.0
+                                  - qrad[qrad_offset + 2] * (1.0 - x0) * x0 * (3.0 - x0) / 2.0
+                                  + qrad[qrad_offset + 3] * (1.0 - x0) * (2.0 - x0) * x0 / 6.0;
+                expected[pair * npw + ig]
+                    += pair_coefficient[term_index] * work * ylm[pair_lm[term_index] * npw + ig];
+            }
+        }
+    }
+
+    std::vector<std::complex<double>> cpu_actual(expected.size());
+    hamilt::uspp_qgm_build_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                                 ntype,
+                                                                 nh_tot,
+                                                                 npw,
+                                                                 lmaxq,
+                                                                 radial_pair_count,
+                                                                 nqxq,
+                                                                 max_terms,
+                                                                 dq,
+                                                                 tpiba,
+                                                                 gcar.data(),
+                                                                 pair_term_count.data(),
+                                                                 pair_radial_index.data(),
+                                                                 pair_l.data(),
+                                                                 pair_lm.data(),
+                                                                 pair_coefficient.data(),
+                                                                 qrad.data(),
+                                                                 ylm.data(),
+                                                                 cpu_actual.data());
+    for (std::size_t i = 0; i < cpu_actual.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(cpu_actual[i] - expected[i]), 0.0, 1.0e-12);
+    }
+
+    double* gcar_device = nullptr;
+    int* pair_term_count_device = nullptr;
+    int* pair_radial_index_device = nullptr;
+    int* pair_l_device = nullptr;
+    int* pair_lm_device = nullptr;
+    std::complex<double>* pair_coefficient_device = nullptr;
+    double* qrad_device = nullptr;
+    double* ylm_device = nullptr;
+    std::complex<double>* qgm_device = nullptr;
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(gcar_device, gcar.size());
+    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(pair_term_count_device,
+                                                                         pair_term_count.size());
+    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(pair_radial_index_device,
+                                                                         pair_radial_index.size());
+    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(pair_l_device, pair_l.size());
+    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(pair_lm_device, pair_lm.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+        pair_coefficient_device,
+        pair_coefficient.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(qrad_device, qrad.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(ylm_device, ylm.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(qgm_device,
+                                                                                           expected.size());
+#define COPY_TO_GPU(type, dst, src)                                                                                \
+    base_device::memory::synchronize_memory_op<type, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(          \
+        dst,                                                                                                       \
+        src.data(),                                                                                                \
+        src.size())
+    COPY_TO_GPU(double, gcar_device, gcar);
+    COPY_TO_GPU(int, pair_term_count_device, pair_term_count);
+    COPY_TO_GPU(int, pair_radial_index_device, pair_radial_index);
+    COPY_TO_GPU(int, pair_l_device, pair_l);
+    COPY_TO_GPU(int, pair_lm_device, pair_lm);
+    COPY_TO_GPU(std::complex<double>, pair_coefficient_device, pair_coefficient);
+    COPY_TO_GPU(double, qrad_device, qrad);
+    COPY_TO_GPU(double, ylm_device, ylm);
+#undef COPY_TO_GPU
+
+    hamilt::uspp_qgm_build_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                                 ntype,
+                                                                 nh_tot,
+                                                                 npw,
+                                                                 lmaxq,
+                                                                 radial_pair_count,
+                                                                 nqxq,
+                                                                 max_terms,
+                                                                 dq,
+                                                                 tpiba,
+                                                                 gcar_device,
+                                                                 pair_term_count_device,
+                                                                 pair_radial_index_device,
+                                                                 pair_l_device,
+                                                                 pair_lm_device,
+                                                                 pair_coefficient_device,
+                                                                 qrad_device,
+                                                                 ylm_device,
+                                                                 qgm_device);
+    std::vector<std::complex<double>> actual(expected.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(actual.data(), qgm_device, actual.size());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(std::abs(actual[i] - expected[i]), 0.0, 1.0e-12);
+    }
+
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(gcar_device);
+    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(pair_term_count_device);
+    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(pair_radial_index_device);
+    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(pair_l_device);
+    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(pair_lm_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(pair_coefficient_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(qrad_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(ylm_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(qgm_device);
+}
+#endif
+
+TEST(TestModuleHamiltUsppDeeq, cpu_packs_symmetric_projector_matrix)
+{
+    const int nspin = 2;
+    const int atom_count = 2;
+    const int nh = 2;
+    const int nhm = 3;
+    const int npw = 3;
+    const int atom_offset = 1;
+    const int nat = 4;
+    const double omega = 2.5;
+    const int g0_index = 1;
+    const int nij = nh * (nh + 1) / 2;
+    const std::vector<std::complex<double>> vaux = {
+        {1.0, 0.5}, {-0.5, 0.25}, {0.75, -1.0},
+        {-0.25, 1.25}, {1.5, -0.75}, {0.5, 0.125}
+    };
+    const std::vector<std::complex<double>> qgm = {
+        {0.5, -0.25}, {1.0, 0.5}, {-0.75, 0.25},
+        {1.25, 0.5}, {-0.5, -0.75}, {0.25, 1.0},
+        {-0.25, 0.75}, {0.5, -0.5}, {1.5, 0.25}
+    };
+    const std::vector<std::complex<double>> phase = {
+        {1.0, 0.0}, {0.0, -1.0}, {-1.0, 0.0},
+        {0.0, 1.0}, {1.0, 0.0}, {0.0, -1.0}
+    };
+    const std::vector<double> dvan = {
+        1.0, 0.25, 9.0,
+        0.25, 2.0, 8.0,
+        7.0, 6.0, 5.0
+    };
+    std::vector<double> expected(nspin * nat * nhm * nhm, 0.0);
+    for (int is = 0; is < nspin; ++is)
+    {
+        for (int ia = 0; ia < atom_count; ++ia)
+        {
+            int ij = 0;
+            for (int ih = 0; ih < nh; ++ih)
+            {
+                for (int jh = ih; jh < nh; ++jh, ++ij)
+                {
+                    double integral = 0.0;
+                    for (int ig = 0; ig < npw; ++ig)
+                    {
+                        integral += std::real(vaux[is * npw + ig]
+                                              * std::conj(qgm[ij * npw + ig]
+                                                          * phase[ia * npw + ig]));
+                    }
+                    integral *= 2.0;
+                    integral -= std::real(vaux[is * npw + g0_index]
+                                          * std::conj(qgm[ij * npw + g0_index]
+                                                      * phase[ia * npw + g0_index]));
+                    const double value = omega * integral + dvan[ih * nhm + jh];
+                    const int base = ((is * nat + atom_offset + ia) * nhm + ih) * nhm;
+                    expected[base + jh] = value;
+                    expected[((is * nat + atom_offset + ia) * nhm + jh) * nhm + ih] = value;
+                }
+            }
+        }
+    }
+
+    std::vector<double> actual(expected.size(), 0.0);
+    hamilt::uspp_deeq_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                            nspin,
+                                                            atom_count,
+                                                            nh,
+                                                            nhm,
+                                                            npw,
+                                                            atom_offset,
+                                                            nat,
+                                                            omega,
+                                                            true,
+                                                            g0_index,
+                                                            vaux.data(),
+                                                            qgm.data(),
+                                                            phase.data(),
+                                                            dvan.data(),
+                                                            actual.data());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(actual[i], expected[i], 1.0e-12);
+    }
+}
+
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestModuleHamiltUsppDeeq, gpu_matches_cpu_reference)
+{
+    const int nspin = 2;
+    const int atom_count = 2;
+    const int nh = 2;
+    const int nhm = 3;
+    const int npw = 3;
+    const int atom_offset = 1;
+    const int nat = 4;
+    const int nij = nh * (nh + 1) / 2;
+    const std::vector<std::complex<double>> vaux = {
+        {1.0, 0.5}, {-0.5, 0.25}, {0.75, -1.0},
+        {-0.25, 1.25}, {1.5, -0.75}, {0.5, 0.125}
+    };
+    const std::vector<std::complex<double>> qgm = {
+        {0.5, -0.25}, {1.0, 0.5}, {-0.75, 0.25},
+        {1.25, 0.5}, {-0.5, -0.75}, {0.25, 1.0},
+        {-0.25, 0.75}, {0.5, -0.5}, {1.5, 0.25}
+    };
+    const std::vector<std::complex<double>> phase = {
+        {1.0, 0.0}, {0.0, -1.0}, {-1.0, 0.0},
+        {0.0, 1.0}, {1.0, 0.0}, {0.0, -1.0}
+    };
+    const std::vector<double> dvan = {
+        1.0, 0.25, 9.0,
+        0.25, 2.0, 8.0,
+        7.0, 6.0, 5.0
+    };
+    std::vector<double> expected(nspin * nat * nhm * nhm, 0.0);
+    hamilt::uspp_deeq_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                            nspin,
+                                                            atom_count,
+                                                            nh,
+                                                            nhm,
+                                                            npw,
+                                                            atom_offset,
+                                                            nat,
+                                                            2.5,
+                                                            true,
+                                                            1,
+                                                            vaux.data(),
+                                                            qgm.data(),
+                                                            phase.data(),
+                                                            dvan.data(),
+                                                            expected.data());
+
+    std::complex<double>* vaux_device = nullptr;
+    std::complex<double>* qgm_device = nullptr;
+    std::complex<double>* phase_device = nullptr;
+    double* dvan_device = nullptr;
+    double* actual_device = nullptr;
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vaux_device,
+                                                                                           vaux.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(qgm_device,
+                                                                                           qgm.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phase_device,
+                                                                                           phase.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(dvan_device, dvan.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(actual_device, expected.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(vaux_device, vaux.data(), vaux.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(qgm_device, qgm.data(), qgm.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(phase_device, phase.data(), phase.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(dvan_device, dvan.data(), dvan.size());
+    base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>()(actual_device, 0, expected.size());
+
+    hamilt::uspp_deeq_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                            nspin,
+                                                            atom_count,
+                                                            nh,
+                                                            nhm,
+                                                            npw,
+                                                            atom_offset,
+                                                            nat,
+                                                            2.5,
+                                                            true,
+                                                            1,
+                                                            vaux_device,
+                                                            qgm_device,
+                                                            phase_device,
+                                                            dvan_device,
+                                                            actual_device);
+    std::vector<double> actual(expected.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(actual.data(), actual_device, actual.size());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(actual[i], expected[i], 1.0e-12);
+    }
+
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vaux_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(qgm_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phase_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(dvan_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(actual_device);
+}
+#endif
+
+TEST(TestModuleHamiltUsppStress, cpu_matches_direct_contraction)
+{
+    const int nspin = 2;
+    const int atom_count = 2;
+    const int nij = 2;
+    const int npw = 3;
+    const int atom_offset = 1;
+    const int nat = 4;
+    const int nh_tot = 3;
+    const int ipol = 1;
+    const double tpiba = 1.75;
+    const std::vector<std::complex<double>> vaux = {
+        {1.0, 0.5}, {-0.5, 0.25}, {0.75, -1.0},
+        {-0.25, 1.25}, {1.5, -0.75}, {0.5, 0.125}
+    };
+    const std::vector<std::complex<double>> dqgm = {
+        {0.5, -0.25}, {1.0, 0.5}, {-0.75, 0.25},
+        {1.25, 0.5}, {-0.5, -0.75}, {0.25, 1.0}
+    };
+    const std::vector<std::complex<double>> phase = {
+        {1.0, 0.0}, {0.0, -1.0}, {-1.0, 0.0},
+        {0.0, 1.0}, {1.0, 0.0}, {0.0, -1.0}
+    };
+    const std::vector<double> gcar = {
+        0.5, -1.0, 0.25,
+        1.5, 0.75, -0.5,
+        -0.25, 1.25, 2.0
+    };
+    std::vector<double> becsum(nspin * nat * nh_tot, 0.0);
+    for (std::size_t i = 0; i < becsum.size(); ++i)
+    {
+        becsum[i] = 0.125 * static_cast<double>(i + 1);
+    }
+    std::vector<double> expected(9, 0.0);
+    for (int ia = 0; ia < atom_count; ++ia)
+    {
+        const int iat = atom_offset + ia;
+        for (int jpol = 0; jpol < 3; ++jpol)
+        {
+            for (int is = 0; is < nspin; ++is)
+            {
+                for (int ij = 0; ij < nij; ++ij)
+                {
+                    for (int ig = 0; ig < npw; ++ig)
+                    {
+                        const std::complex<double> product
+                            = vaux[is * npw + ig]
+                              * std::conj(dqgm[ij * npw + ig] * phase[ia * npw + ig]);
+                        expected[jpol * 3 + ipol]
+                            += tpiba * gcar[3 * ig + jpol] * std::real(product)
+                               * becsum[is * nat * nh_tot + iat * nh_tot + ij];
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<double> actual(9, 0.0);
+    hamilt::uspp_stress_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                              nspin,
+                                                              atom_count,
+                                                              nij,
+                                                              npw,
+                                                              atom_offset,
+                                                              nat,
+                                                              nh_tot,
+                                                              ipol,
+                                                              tpiba,
+                                                              vaux.data(),
+                                                              dqgm.data(),
+                                                              phase.data(),
+                                                              gcar.data(),
+                                                              becsum.data(),
+                                                              actual.data());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(actual[i], expected[i], 1.0e-12);
+    }
+}
+
+#if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+TEST(TestModuleHamiltUsppStress, gpu_matches_cpu_reference)
+{
+    const int nspin = 2;
+    const int atom_count = 2;
+    const int nij = 2;
+    const int npw = 3;
+    const int atom_offset = 1;
+    const int nat = 4;
+    const int nh_tot = 3;
+    const int ipol = 2;
+    const double tpiba = 1.75;
+    const std::vector<std::complex<double>> vaux = {
+        {1.0, 0.5}, {-0.5, 0.25}, {0.75, -1.0},
+        {-0.25, 1.25}, {1.5, -0.75}, {0.5, 0.125}
+    };
+    const std::vector<std::complex<double>> dqgm = {
+        {0.5, -0.25}, {1.0, 0.5}, {-0.75, 0.25},
+        {1.25, 0.5}, {-0.5, -0.75}, {0.25, 1.0}
+    };
+    const std::vector<std::complex<double>> phase = {
+        {1.0, 0.0}, {0.0, -1.0}, {-1.0, 0.0},
+        {0.0, 1.0}, {1.0, 0.0}, {0.0, -1.0}
+    };
+    const std::vector<double> gcar = {
+        0.5, -1.0, 0.25,
+        1.5, 0.75, -0.5,
+        -0.25, 1.25, 2.0
+    };
+    std::vector<double> becsum(nspin * nat * nh_tot, 0.0);
+    for (std::size_t i = 0; i < becsum.size(); ++i)
+    {
+        becsum[i] = 0.125 * static_cast<double>(i + 1);
+    }
+    std::vector<double> expected(9, 0.0);
+    hamilt::uspp_stress_op<double, base_device::DEVICE_CPU>()(nullptr,
+                                                              nspin,
+                                                              atom_count,
+                                                              nij,
+                                                              npw,
+                                                              atom_offset,
+                                                              nat,
+                                                              nh_tot,
+                                                              ipol,
+                                                              tpiba,
+                                                              vaux.data(),
+                                                              dqgm.data(),
+                                                              phase.data(),
+                                                              gcar.data(),
+                                                              becsum.data(),
+                                                              expected.data());
+
+    std::complex<double>* vaux_device = nullptr;
+    std::complex<double>* dqgm_device = nullptr;
+    std::complex<double>* phase_device = nullptr;
+    double* gcar_device = nullptr;
+    double* becsum_device = nullptr;
+    double* actual_device = nullptr;
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vaux_device,
+                                                                                           vaux.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(dqgm_device,
+                                                                                           dqgm.size());
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phase_device,
+                                                                                           phase.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(gcar_device, gcar.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(becsum_device, becsum.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(actual_device, expected.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(vaux_device, vaux.data(), vaux.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(dqgm_device, dqgm.data(), dqgm.size());
+    base_device::memory::synchronize_memory_op<std::complex<double>,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(phase_device, phase.data(), phase.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(gcar_device, gcar.data(), gcar.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_GPU,
+                                               base_device::DEVICE_CPU>()(becsum_device, becsum.data(), becsum.size());
+    base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>()(actual_device, 0, expected.size());
+
+    hamilt::uspp_stress_op<double, base_device::DEVICE_GPU>()(nullptr,
+                                                              nspin,
+                                                              atom_count,
+                                                              nij,
+                                                              npw,
+                                                              atom_offset,
+                                                              nat,
+                                                              nh_tot,
+                                                              ipol,
+                                                              tpiba,
+                                                              vaux_device,
+                                                              dqgm_device,
+                                                              phase_device,
+                                                              gcar_device,
+                                                              becsum_device,
+                                                              actual_device);
+    std::vector<double> actual(expected.size());
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(actual.data(), actual_device, actual.size());
+    for (std::size_t i = 0; i < actual.size(); ++i)
+    {
+        EXPECT_NEAR(actual[i], expected[i], 1.0e-12);
+    }
+
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vaux_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(dqgm_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phase_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(gcar_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(becsum_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(actual_device);
+}
+#endif

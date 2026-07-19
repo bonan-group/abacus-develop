@@ -6,9 +6,14 @@ template<typename T, typename Device>
 void ElecStatePW<T, Device>::cal_tau(const psi::Psi<T, Device>& psi)
 {
     ModuleBase::TITLE("ElecStatePW", "cal_tau");
+    this->init_rho_data();
     for(int is=0; is<PARAM.inp.nspin; is++)
 	{
-        setmem_var_op()(this->kin_r[is], 0,  this->charge->nrxx);
+	    setmem_var_op()(this->kin_r[is], 0,  this->charge->nrxx);
+	    if (this->kin_r_smooth != nullptr)
+	    {
+	        setmem_var_op()(this->kin_r_smooth[is], 0, this->rhopw_smooth->nrxx);
+	    }
 	}
 
     for (int ik = 0; ik < psi.get_nk(); ++ik)
@@ -30,7 +35,7 @@ void ElecStatePW<T, Device>::cal_tau(const psi::Psi<T, Device>& psi)
             // kinetic energy density
             for (int j = 0; j < 3; j++)
             {
-                setmem_complex_op()(this->wfcr, 0,  this->charge->nrxx);
+                setmem_complex_op()(this->wfcr, 0, this->basis->nmaxgr);
 
                 meta_op()(this->ctx,
                             ik,
@@ -45,10 +50,14 @@ void ElecStatePW<T, Device>::cal_tau(const psi::Psi<T, Device>& psi)
 
                 this->basis->recip_to_real(this->ctx, this->wfcr, this->wfcr, ik);
 
-                elecstate_pw_op()(this->ctx, current_spin, this->charge->nrxx, w1, this->kin_r, this->wfcr);
+                Real** tau = this->kin_r_smooth != nullptr ? this->kin_r_smooth : this->kin_r;
+                const int tau_nrxx
+                    = this->kin_r_smooth != nullptr ? this->rhopw_smooth->nrxx : this->charge->nrxx;
+                elecstate_pw_op()(this->ctx, current_spin, tau_nrxx, w1, tau, this->wfcr);
             }
         }
     }
+    this->finalize_tau_double_grid();
     if (PARAM.inp.device == "gpu" || PARAM.inp.precision == "single") {
         for (int ii = 0; ii < PARAM.inp.nspin; ii++) {
             castmem_var_d2h_op()(this->charge->kin_r[ii], this->kin_r[ii], this->charge->nrxx);

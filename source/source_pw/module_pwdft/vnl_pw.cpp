@@ -14,8 +14,37 @@
 #include "source_base/module_device/device.h"
 #include "source_base/timer.h"
 #include "source_pw/module_pwdft/kernels/vnl_op.h"
+#include "source_pw/module_pwdft/kernels/nonlocal_op.h"
+#include "source_pw/module_pwdft/nonlocal_maths.hpp"
+#include "source_estate/kernels/elecstate_op.h"
 
 #include "source_base/parallel_comm.h" // use POOL_WORLD
+
+#include <algorithm>
+
+namespace
+{
+double radial_interpolation_derivative(const ModuleBase::realArray& table,
+                                       int dim1,
+                                       int dim2,
+                                       int dim3,
+                                       double table_interval,
+                                       double x)
+{
+    assert(table_interval > 0.0);
+    const double position = x / table_interval;
+    const int iq = static_cast<int>(position);
+    const double x0 = position - static_cast<double>(iq);
+    const double x1 = 1.0 - x0;
+    const double x2 = 2.0 - x0;
+    const double x3 = 3.0 - x0;
+    return (table(dim1, dim2, dim3, iq) * (-x2 * x3 - x1 * x3 - x1 * x2) / 6.0
+            + table(dim1, dim2, dim3, iq + 1) * (x2 * x3 - x0 * x3 - x0 * x2) / 2.0
+            - table(dim1, dim2, dim3, iq + 2) * (x1 * x3 - x0 * x3 - x0 * x1) / 2.0
+            + table(dim1, dim2, dim3, iq + 3) * (x1 * x2 - x0 * x2 - x0 * x1) / 6.0)
+           / table_interval;
+}
+} // namespace
 
 pseudopot_cell_vnl::pseudopot_cell_vnl()
 {
@@ -29,6 +58,7 @@ pseudopot_cell_vnl::~pseudopot_cell_vnl()
 
 void pseudopot_cell_vnl::release_memory()
 {
+    this->qgm_cache_ready = false;
     if (this->nhm <= 0 || memory_released) {
         return;
 }
@@ -43,10 +73,17 @@ void pseudopot_cell_vnl::release_memory()
         delmem_cd_op()(this->c_deeq_nc);
         delmem_cd_op()(this->c_vkb);
         delmem_cd_op()(this->c_qq_so);
+        delmem_cd_op()(this->c_qgm);
+        delmem_cd_op()(this->c_qgm_phase);
         delmem_zd_op()(this->z_deeq_nc);
         delmem_zd_op()(this->z_qq_so);
+        delmem_zd_op()(this->z_qgm);
+        delmem_zd_op()(this->z_dqgm);
+        delmem_zd_op()(this->z_qgm_phase);
+        delmem_dd_op()(this->d_qgm_gcar);
         delmem_sd_op()(this->cached_vkb1_float);
         delmem_dd_op()(this->d_deeq);
+        delmem_dd_op()(this->d_dvan);
         delmem_dd_op()(this->cached_vkb1_double);
         delmem_zd_op()(this->z_vkb);
         delmem_dd_op()(this->d_tab);
@@ -66,6 +103,8 @@ void pseudopot_cell_vnl::release_memory()
         delmem_ch_op()(this->c_deeq_nc);
         delmem_ch_op()(this->c_vkb);
         delmem_ch_op()(this->c_qq_so);
+        delmem_ch_op()(this->c_qgm);
+        delmem_ch_op()(this->c_qgm_phase);
         delmem_sh_op()(this->cached_vkb1_float);
 #ifdef __DSP
         if (this->z_vkb != nullptr)
@@ -175,6 +214,7 @@ void pseudopot_cell_vnl::init(const UnitCell& ucell,
                 resmem_zd_op()(z_qq_so, ntype * 4 * this->nhm * this->nhm);
             }
             resmem_dd_op()(d_deeq, PARAM.inp.nspin * ucell.nat * this->nhm * this->nhm);
+            resmem_dd_op()(d_dvan, ntype * this->nhm * this->nhm);
             resmem_dd_op()(d_indv, ntype * this->nhm);
             resmem_dd_op()(d_nhtol, ntype * this->nhm);
             resmem_dd_op()(d_nhtolm, ntype * this->nhm);
@@ -329,6 +369,135 @@ void pseudopot_cell_vnl::init(const UnitCell& ucell,
 // Calculates beta functions (Kleinman-Bylander projectors),
 // with structure factor, for all atoms, in reciprocal space
 //----------------------------------------------------------
+template <typename FPTYPE, typename Device>
+void pseudopot_cell_vnl::cal_becp_matrix_free(Device* ctx,
+                                               const UnitCell& ucell,
+                                               int ik,
+                                               int npw,
+                                               int npwx,
+                                               int nbands,
+                                               const std::complex<FPTYPE>* psi,
+                                               std::complex<FPTYPE>* becp) const
+{
+    using resmem_int_op = base_device::memory::resize_memory_op<int, Device>;
+    using delmem_int_op = base_device::memory::delete_memory_op<int, Device>;
+    using syncmem_int_op = base_device::memory::synchronize_memory_op<int, Device, base_device::DEVICE_CPU>;
+    using resmem_var_op = base_device::memory::resize_memory_op<FPTYPE, Device>;
+    using delmem_var_op = base_device::memory::delete_memory_op<FPTYPE, Device>;
+    using syncmem_var_op = base_device::memory::synchronize_memory_op<FPTYPE, Device, base_device::DEVICE_CPU>;
+    using castmem_var_op = base_device::memory::cast_memory_op<FPTYPE, double, Device, base_device::DEVICE_CPU>;
+    using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<FPTYPE>, Device>;
+    using delmem_complex_op = base_device::memory::delete_memory_op<std::complex<FPTYPE>, Device>;
+
+    const int x1 = (this->lmaxkb + 1) * (this->lmaxkb + 1);
+    std::vector<int> atom_nb(ucell.ntype);
+    std::vector<int> atom_nh(ucell.ntype);
+    std::vector<int> jkb_to_iat(this->nkb);
+    std::vector<int> jkb_to_it(this->nkb);
+    std::vector<int> jkb_to_ih(this->nkb);
+    std::vector<FPTYPE> jkb_pref_sign(2 * this->nkb);
+    std::vector<ModuleBase::Vector3<double>> gk_host(npw);
+
+    int jkb = 0;
+    for (int it = 0; it < ucell.ntype; ++it)
+    {
+        atom_nb[it] = ucell.atoms[it].ncpp.nbeta;
+        atom_nh[it] = ucell.atoms[it].ncpp.nh;
+    }
+    for (int iat = 0; iat < ucell.nat; ++iat)
+    {
+        const int it = ucell.iat2it[iat];
+        for (int ih = 0; ih < ucell.atoms[it].ncpp.nh; ++ih)
+        {
+            jkb_to_iat[jkb] = iat;
+            jkb_to_it[jkb] = it;
+            jkb_to_ih[jkb] = ih;
+            const int lmod = static_cast<int>(this->nhtol(it, ih)) % 4;
+            const FPTYPE pref_re[4] = {1, 0, -1, 0};
+            const FPTYPE pref_im[4] = {0, -1, 0, 1};
+            jkb_pref_sign[2 * jkb] = pref_re[lmod];
+            jkb_pref_sign[2 * jkb + 1] = pref_im[lmod];
+            ++jkb;
+        }
+    }
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static, 4096 / sizeof(FPTYPE))
+#endif
+    for (int ig = 0; ig < npw; ++ig)
+    {
+        gk_host[ig] = this->wfcpw->getgpluskcar(ik, ig);
+    }
+
+    int *d_atom_nb = nullptr, *d_atom_nh = nullptr, *d_jkb_to_iat = nullptr, *d_jkb_to_it = nullptr,
+        *d_jkb_to_ih = nullptr;
+    FPTYPE *gk = nullptr, *ylm = nullptr, *vkb1 = nullptr, *d_jkb_pref_sign = nullptr;
+    std::complex<FPTYPE>* sk = nullptr;
+    resmem_int_op()(d_atom_nb, atom_nb.size(), "VNL::becp_atom_nb");
+    resmem_int_op()(d_atom_nh, atom_nh.size(), "VNL::becp_atom_nh");
+    resmem_int_op()(d_jkb_to_iat, jkb_to_iat.size(), "VNL::becp_jkb_iat");
+    resmem_int_op()(d_jkb_to_it, jkb_to_it.size(), "VNL::becp_jkb_it");
+    resmem_int_op()(d_jkb_to_ih, jkb_to_ih.size(), "VNL::becp_jkb_ih");
+    syncmem_int_op()(d_atom_nb, atom_nb.data(), atom_nb.size());
+    syncmem_int_op()(d_atom_nh, atom_nh.data(), atom_nh.size());
+    syncmem_int_op()(d_jkb_to_iat, jkb_to_iat.data(), jkb_to_iat.size());
+    syncmem_int_op()(d_jkb_to_it, jkb_to_it.data(), jkb_to_it.size());
+    syncmem_int_op()(d_jkb_to_ih, jkb_to_ih.data(), jkb_to_ih.size());
+
+    resmem_var_op()(gk, static_cast<size_t>(npw) * 3, "VNL::becp_gk");
+    resmem_var_op()(ylm, static_cast<size_t>(x1) * npw, "VNL::becp_ylm");
+    resmem_var_op()(vkb1,
+                    static_cast<size_t>(ucell.ntype) * this->nhm * npw,
+                    "VNL::becp_vkb1");
+    resmem_var_op()(d_jkb_pref_sign, jkb_pref_sign.size(), "VNL::becp_pref");
+    castmem_var_op()(gk, reinterpret_cast<const double*>(gk_host.data()), static_cast<size_t>(npw) * 3);
+    syncmem_var_op()(d_jkb_pref_sign, jkb_pref_sign.data(), jkb_pref_sign.size());
+    ModuleBase::YlmReal::Ylm_Real(ctx, x1, npw, gk, ylm);
+
+    hamilt::cal_vkb1_cache_op<FPTYPE, Device>()(ctx,
+                                                ucell.ntype,
+                                                npw,
+                                                this->nhm,
+                                                this->tab.getBound2(),
+                                                this->tab.getBound3(),
+                                                d_atom_nb,
+                                                d_atom_nh,
+                                                static_cast<FPTYPE>(PARAM.globalv.dq),
+                                                static_cast<FPTYPE>(ucell.tpiba),
+                                                gk,
+                                                ylm,
+                                                this->get_indv_data<FPTYPE>(),
+                                                this->get_nhtolm_data<FPTYPE>(),
+                                                this->get_tab_data<FPTYPE>(),
+                                                vkb1);
+    resmem_complex_op()(sk, static_cast<size_t>(ucell.nat) * npw, "VNL::becp_sk");
+    this->psf->get_sk(ctx, ik, this->wfcpw, sk);
+    hamilt::cal_becp_from_vkb1_cache_op<FPTYPE, Device>()(ctx,
+                                                          npw,
+                                                          npwx,
+                                                          nbands,
+                                                          this->nkb,
+                                                          this->nhm,
+                                                          d_jkb_to_iat,
+                                                          d_jkb_to_it,
+                                                          d_jkb_to_ih,
+                                                          d_jkb_pref_sign,
+                                                          vkb1,
+                                                          sk,
+                                                          psi,
+                                                          becp);
+
+    delmem_int_op()(d_atom_nb);
+    delmem_int_op()(d_atom_nh);
+    delmem_int_op()(d_jkb_to_iat);
+    delmem_int_op()(d_jkb_to_it);
+    delmem_int_op()(d_jkb_to_ih);
+    delmem_var_op()(gk);
+    delmem_var_op()(ylm);
+    delmem_var_op()(vkb1);
+    delmem_var_op()(d_jkb_pref_sign);
+    delmem_complex_op()(sk);
+}
+
 template <typename FPTYPE, typename Device>
 void pseudopot_cell_vnl::getvnl(Device* ctx,
                                 const UnitCell& ucell,
@@ -608,12 +777,20 @@ void pseudopot_cell_vnl::getvnl_atoms_cached(Device* ctx,
     ModuleBase::timer::end("pp_cell_vnl", "getvnl_atoms_cached");
 }
 
-void pseudopot_cell_vnl::init_vnl(UnitCell& cell, const ModulePW::PW_Basis* rho_basis)
+void pseudopot_cell_vnl::init_vnl(UnitCell& cell,
+                                  const ModulePW::PW_Basis* rho_basis,
+                                  bool prepare_uspp_stress)
 {
     ModuleBase::TITLE("pseudopot_cell_vnl", "init_vnl");
     ModuleBase::timer::start("ppcell_vnl", "init_vnl");
+    this->qgm_cache_ready = false;
 
     this->omega_old = cell.omega;
+    bool has_uspp = false;
+    for (int it = 0; it < cell.ntype; ++it)
+    {
+        has_uspp = has_uspp || cell.atoms[it].ncpp.tvanp;
+    }
 
     // from init_us_1
     //    a) For each non vanderbilt pseudopotential it computes the D and
@@ -790,7 +967,7 @@ void pseudopot_cell_vnl::init_vnl(UnitCell& cell, const ModulePW::PW_Basis* rho_
     // g) It computes the qq terms which define the S matrix.
 
     // compute Clebsch-Gordan coefficients
-    if (PARAM.globalv.use_uspp)
+    if (has_uspp)
     {
         ModuleBase::Clebsch_Gordan::clebsch_gordan(lmaxkb + 1, ap, lpx, lpl);
     }
@@ -799,6 +976,278 @@ void pseudopot_cell_vnl::init_vnl(UnitCell& cell, const ModulePW::PW_Basis* rho_
     if (lmaxq > 0)
     {
         this->compute_qrad(cell);
+    }
+
+    if (has_uspp)
+    {
+        const int npw = rho_basis->npw;
+        const int nh_tot = this->nhm * (this->nhm + 1) / 2;
+        if (this->use_gpu_)
+        {
+            const int pair_count = cell.ntype * nh_tot;
+            const int radial_pair_count = this->nbetam * (this->nbetam + 1) / 2;
+            const int max_terms = this->lmaxq * this->lmaxq;
+            const size_t qgm_size = static_cast<size_t>(pair_count) * npw;
+            const size_t phase_size = static_cast<size_t>(cell.nat) * npw;
+
+            std::vector<int> pair_term_count(pair_count, 0);
+            std::vector<int> pair_radial_index(pair_count, 0);
+            std::vector<int> pair_l(pair_count * max_terms, 0);
+            std::vector<int> pair_lm(pair_count * max_terms, 0);
+            std::vector<std::complex<double>> pair_coefficient(pair_count * max_terms, {0.0, 0.0});
+            for (int it = 0; it < cell.ntype; ++it)
+            {
+                const Atom_pseudo& upf = cell.atoms[it].ncpp;
+                if (!upf.tvanp)
+                {
+                    continue;
+                }
+                int ijh = 0;
+                for (int ih = 0; ih < upf.nh; ++ih)
+                {
+                    for (int jh = ih; jh < upf.nh; ++jh, ++ijh)
+                    {
+                        const int pair = it * nh_tot + ijh;
+                        const int nb = static_cast<int>(this->indv(it, ih));
+                        const int mb = static_cast<int>(this->indv(it, jh));
+                        const int larger = std::max(nb, mb);
+                        const int smaller = std::min(nb, mb);
+                        pair_radial_index[pair] = larger * (larger + 1) / 2 + smaller;
+                        const int ivl = static_cast<int>(this->nhtolm(it, ih));
+                        const int jvl = static_cast<int>(this->nhtolm(it, jh));
+                        pair_term_count[pair] = this->lpx(ivl, jvl);
+                        for (int term = 0; term < pair_term_count[pair]; ++term)
+                        {
+                            const int term_index = pair * max_terms + term;
+                            const int lm = this->lpl(ivl, jvl, term);
+                            int l = 0;
+                            while ((l + 1) * (l + 1) <= lm)
+                            {
+                                ++l;
+                            }
+                            pair_l[term_index] = l;
+                            pair_lm[term_index] = lm;
+                            pair_coefficient[term_index]
+                                = std::pow(ModuleBase::NEG_IMAG_UNIT, l) * this->ap(lm, ivl, jvl);
+                        }
+                    }
+                }
+            }
+
+            std::vector<double> tau(cell.nat * 3);
+            for (int it = 0; it < cell.ntype; ++it)
+            {
+                for (int ia = 0; ia < cell.atoms[it].na; ++ia)
+                {
+                    const int iat = cell.itia2iat(it, ia);
+                    for (int ipol = 0; ipol < 3; ++ipol)
+                    {
+                        tau[3 * iat + ipol] = cell.atoms[it].tau[ia][ipol];
+                    }
+                }
+            }
+
+            int* d_pair_term_count = nullptr;
+            int* d_pair_radial_index = nullptr;
+            int* d_pair_l = nullptr;
+            int* d_pair_lm = nullptr;
+            double* d_qrad = nullptr;
+            double* d_ylm = nullptr;
+            double* d_tau = nullptr;
+            std::complex<double>* d_pair_coefficient = nullptr;
+            using resmem_int_op = base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>;
+            using delmem_int_op = base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>;
+            using syncmem_int_op
+                = base_device::memory::synchronize_memory_op<int,
+                                                             base_device::DEVICE_GPU,
+                                                             base_device::DEVICE_CPU>;
+            using castmem_z2c_d2d_op
+                = base_device::memory::cast_memory_op<std::complex<float>,
+                                                      std::complex<double>,
+                                                      base_device::DEVICE_GPU,
+                                                      base_device::DEVICE_GPU>;
+
+            resmem_dd_op()(this->d_qgm_gcar, npw * 3, "VNL::d_qgm_gcar");
+            syncmem_d2d_h2d_op()(this->d_qgm_gcar,
+                                 reinterpret_cast<const double*>(rho_basis->gcar),
+                                 npw * 3);
+            resmem_zd_op()(this->z_qgm, qgm_size, "VNL::z_qgm");
+            resmem_zd_op()(this->z_qgm_phase, phase_size, "VNL::z_qgm_phase");
+            resmem_int_op()(d_pair_term_count, pair_term_count.size(), "VNL::qgm_term_count");
+            resmem_int_op()(d_pair_radial_index, pair_radial_index.size(), "VNL::qgm_radial_index");
+            resmem_int_op()(d_pair_l, pair_l.size(), "VNL::qgm_term_l");
+            resmem_int_op()(d_pair_lm, pair_lm.size(), "VNL::qgm_term_lm");
+            resmem_zd_op()(d_pair_coefficient, pair_coefficient.size(), "VNL::qgm_coefficient");
+            resmem_dd_op()(d_qrad, this->qrad.getSize(), "VNL::qrad_setup");
+            resmem_dd_op()(d_ylm, max_terms * npw, "VNL::ylm_setup");
+            resmem_dd_op()(d_tau, tau.size(), "VNL::tau_setup");
+            syncmem_int_op()(d_pair_term_count, pair_term_count.data(), pair_term_count.size());
+            syncmem_int_op()(d_pair_radial_index, pair_radial_index.data(), pair_radial_index.size());
+            syncmem_int_op()(d_pair_l, pair_l.data(), pair_l.size());
+            syncmem_int_op()(d_pair_lm, pair_lm.data(), pair_lm.size());
+            syncmem_z2z_h2d_op()(d_pair_coefficient, pair_coefficient.data(), pair_coefficient.size());
+            syncmem_d2d_h2d_op()(d_qrad, this->qrad.ptr, this->qrad.getSize());
+            syncmem_d2d_h2d_op()(d_tau, tau.data(), tau.size());
+
+            ModuleBase::YlmReal::Ylm_Real(gpu_ctx,
+                                          max_terms,
+                                          npw,
+                                          this->d_qgm_gcar,
+                                          d_ylm);
+            hamilt::uspp_qgm_build_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                         cell.ntype,
+                                                                         nh_tot,
+                                                                         npw,
+                                                                         this->lmaxq,
+                                                                         radial_pair_count,
+                                                                         PARAM.globalv.nqxq,
+                                                                         max_terms,
+                                                                         PARAM.globalv.dq,
+                                                                         cell.tpiba,
+                                                                         this->d_qgm_gcar,
+                                                                         d_pair_term_count,
+                                                                         d_pair_radial_index,
+                                                                         d_pair_l,
+                                                                         d_pair_lm,
+                                                                         d_pair_coefficient,
+                                                                         d_qrad,
+                                                                         d_ylm,
+                                                                         this->z_qgm);
+            elecstate::uspp_atom_phase_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                             cell.nat,
+                                                                             npw,
+                                                                             this->d_qgm_gcar,
+                                                                             d_tau,
+                                                                             this->z_qgm_phase);
+
+            if (this->s_deeq != nullptr)
+            {
+                resmem_cd_op()(this->c_qgm, qgm_size, "VNL::c_qgm");
+                castmem_z2c_d2d_op()(this->c_qgm, this->z_qgm, qgm_size);
+                resmem_cd_op()(this->c_qgm_phase, phase_size, "VNL::c_qgm_phase");
+                castmem_z2c_d2d_op()(this->c_qgm_phase, this->z_qgm_phase, phase_size);
+            }
+
+            if (prepare_uspp_stress)
+            {
+                this->dqgm.create(3, cell.ntype, nh_tot, npw);
+                ModuleBase::matrix ylmk0(max_terms, npw);
+                ModuleBase::YlmReal::Ylm_Real(max_terms, npw, rho_basis->gcar, ylmk0);
+                std::vector<double> qnorm(npw);
+                for (int ig = 0; ig < npw; ++ig)
+                {
+                    qnorm[ig] = rho_basis->gcar[ig].norm() * cell.tpiba;
+                }
+                ModuleBase::matrix dylmk0(max_terms, npw);
+                for (int ipol = 0; ipol < 3; ++ipol)
+                {
+                    hamilt::Nonlocal_maths<double, base_device::DEVICE_CPU>::dylmr2(
+                        max_terms,
+                        npw,
+                        reinterpret_cast<const double*>(rho_basis->gcar),
+                        dylmk0.c,
+                        ipol);
+                    for (int it = 0; it < cell.ntype; ++it)
+                    {
+                        const Atom_pseudo& upf = cell.atoms[it].ncpp;
+                        if (!upf.tvanp)
+                        {
+                            continue;
+                        }
+                        int ijh = 0;
+                        for (int ih = 0; ih < upf.nh; ++ih)
+                        {
+                            for (int jh = ih; jh < upf.nh; ++jh, ++ijh)
+                            {
+                                this->radial_fft_dq(npw,
+                                                    ih,
+                                                    jh,
+                                                    it,
+                                                    ipol,
+                                                    rho_basis->gcar,
+                                                    qnorm.data(),
+                                                    cell.tpiba,
+                                                    ylmk0,
+                                                    dylmk0,
+                                                    &this->dqgm(ipol, it, ijh, 0));
+                            }
+                        }
+                    }
+                }
+                resmem_zd_op()(this->z_dqgm, this->dqgm.getSize(), "VNL::z_dqgm");
+                syncmem_z2z_h2d_op()(this->z_dqgm, this->dqgm.ptr, this->dqgm.getSize());
+            }
+
+            delmem_int_op()(d_pair_term_count);
+            delmem_int_op()(d_pair_radial_index);
+            delmem_int_op()(d_pair_l);
+            delmem_int_op()(d_pair_lm);
+            delmem_zd_op()(d_pair_coefficient);
+            delmem_dd_op()(d_qrad);
+            delmem_dd_op()(d_ylm);
+            delmem_dd_op()(d_tau);
+        }
+        else
+        {
+            this->qgm.create(cell.ntype, nh_tot, npw);
+            this->qgm.zero_out();
+            this->qgm_phase.create(cell.nat, npw);
+            this->qgm_gcar.create(npw, 3);
+            ModuleBase::matrix ylmk0(lmaxq * lmaxq, npw);
+            ModuleBase::YlmReal::Ylm_Real(lmaxq * lmaxq, npw, rho_basis->gcar, ylmk0);
+            std::vector<double> qnorm(npw);
+            for (int ig = 0; ig < npw; ++ig)
+            {
+                qnorm[ig] = rho_basis->gcar[ig].norm() * cell.tpiba;
+                for (int ipol = 0; ipol < 3; ++ipol)
+                {
+                    this->qgm_gcar(ig, ipol) = rho_basis->gcar[ig][ipol];
+                }
+            }
+            for (int it = 0; it < cell.ntype; ++it)
+            {
+                const Atom_pseudo& upf = cell.atoms[it].ncpp;
+                if (upf.tvanp)
+                {
+                    int ijh = 0;
+                    for (int ih = 0; ih < upf.nh; ++ih)
+                    {
+                        for (int jh = ih; jh < upf.nh; ++jh, ++ijh)
+                        {
+                            this->radial_fft_q(npw,
+                                               ih,
+                                               jh,
+                                               it,
+                                               qnorm.data(),
+                                               ylmk0,
+                                               &this->qgm(it, ijh, 0));
+                        }
+                    }
+                }
+                for (int ia = 0; ia < cell.atoms[it].na; ++ia)
+                {
+                    const int iat = cell.itia2iat(it, ia);
+                    for (int ig = 0; ig < npw; ++ig)
+                    {
+                        const std::complex<double> exponent
+                            = ModuleBase::NEG_IMAG_UNIT * ModuleBase::TWO_PI
+                              * (rho_basis->gcar[ig] * cell.atoms[it].tau[ia]);
+                        this->qgm_phase(iat, ig) = std::exp(exponent);
+                    }
+                }
+            }
+            if (this->s_deeq != nullptr)
+            {
+                resmem_ch_op()(this->c_qgm, this->qgm.getSize(), "VNL::c_qgm");
+                castmem_z2c_h2h_op()(this->c_qgm, this->qgm.ptr, this->qgm.getSize());
+                resmem_ch_op()(this->c_qgm_phase, this->qgm_phase.size, "VNL::c_qgm_phase");
+                castmem_z2c_h2h_op()(this->c_qgm_phase, this->qgm_phase.c, this->qgm_phase.size);
+            }
+            this->z_qgm = this->qgm.ptr;
+            this->z_qgm_phase = this->qgm_phase.c;
+            this->d_qgm_gcar = this->qgm_gcar.c;
+        }
+        this->qgm_cache_ready = true;
     }
 
     // compute the qq coefficients by integrating the Q.
@@ -951,6 +1400,7 @@ void pseudopot_cell_vnl::init_vnl(UnitCell& cell, const ModulePW::PW_Basis* rho_
         syncmem_d2d_h2d_op()(this->d_nhtolm, this->nhtolm.c, this->nhtolm.nr * this->nhtolm.nc);
         syncmem_d2d_h2d_op()(this->d_tab, this->tab.ptr, this->tab.getSize());
         syncmem_d2d_h2d_op()(this->d_qq_nt, this->qq_nt.ptr, this->qq_nt.getSize());
+        syncmem_d2d_h2d_op()(this->d_dvan, this->dvan.ptr, this->dvan.getSize());
     }
     else
     {
@@ -1107,6 +1557,66 @@ void pseudopot_cell_vnl::radial_fft_q(const int ng,
                 qm1 = qnorm[ig];
             }
             qg[ig] += pref * work * ylm(lp, ig);
+        }
+    }
+}
+
+void pseudopot_cell_vnl::radial_fft_dq(const int ng,
+                                       const int ih,
+                                       const int jh,
+                                       const int itype,
+                                       const int ipol,
+                                       const ModuleBase::Vector3<double>* g,
+                                       const double* qnorm,
+                                       const double tpiba,
+                                       const ModuleBase::matrix& ylm,
+                                       const ModuleBase::matrix& dylm,
+                                       std::complex<double>* dqg) const
+{
+    const int nb = indv(itype, ih);
+    const int mb = indv(itype, jh);
+    assert(nb < nbetam);
+    assert(mb < nbetam);
+    const int ijv = (nb >= mb) ? nb * (nb + 1) / 2 + mb : mb * (mb + 1) / 2 + nb;
+    const int ivl = nhtolm(itype, ih);
+    const int jvl = nhtolm(itype, jh);
+
+    std::fill(dqg, dqg + ng, std::complex<double>(0.0, 0.0));
+    for (int lm = 0; lm < this->lpx(ivl, jvl); ++lm)
+    {
+        const int lp = this->lpl(ivl, jvl, lm);
+        assert(lp >= 0 && lp < 49);
+        const int l = static_cast<int>(std::sqrt(static_cast<double>(lp)));
+        const std::complex<double> pref
+            = std::pow(ModuleBase::NEG_IMAG_UNIT, l) * this->ap(lp, ivl, jvl);
+
+        double previous_qnorm = -1.0;
+        double radial_value = 0.0;
+        double radial_derivative = 0.0;
+        for (int ig = 0; ig < ng; ++ig)
+        {
+            if (std::abs(qnorm[ig] - previous_qnorm) > 1.0e-6)
+            {
+                radial_value = ModuleBase::PolyInt::Polynomial_Interpolation(this->qrad,
+                                                                             itype,
+                                                                             l,
+                                                                             ijv,
+                                                                             PARAM.globalv.nqxq,
+                                                                             PARAM.globalv.dq,
+                                                                             qnorm[ig]);
+                radial_derivative = radial_interpolation_derivative(this->qrad,
+                                                                     itype,
+                                                                     l,
+                                                                     ijv,
+                                                                     PARAM.globalv.dq,
+                                                                     qnorm[ig]);
+                previous_qnorm = qnorm[ig];
+            }
+            dqg[ig] += pref * radial_value * dylm(lp, ig) / tpiba;
+            if (qnorm[ig] > 1.0e-9)
+            {
+                dqg[ig] += pref * radial_derivative * ylm(lp, ig) * tpiba * g[ig][ipol] / qnorm[ig];
+            }
         }
     }
 }
@@ -1579,6 +2089,74 @@ void pseudopot_cell_vnl::cal_effective_D(const ModuleBase::matrix& veff,
     }
 }
 
+void pseudopot_cell_vnl::cal_effective_D_gpu(const double* veff,
+                                             const ModulePW::PW_Basis* rho_basis,
+                                             UnitCell& cell)
+{
+#if defined(__CUDA) || defined(__ROCM)
+    ModuleBase::TITLE("pseudopot_cell_vnl", "cal_effective_D_gpu");
+    ModuleBase::timer::start("ppcell_vnl", "cal_effective_D_gpu");
+    GlobalV::ofs_running << " INFO: Using GPU-resident USPP effective-D assembly." << std::endl;
+    const int nspin = this->deeq.getBound1();
+    const int npw = rho_basis->npw;
+    const int nh_tot = this->nhm * (this->nhm + 1) / 2;
+    std::complex<double>* vaux = nullptr;
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+        vaux,
+        nspin * npw,
+        "VNL::effective_d_vaux");
+    base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>()(
+        this->d_deeq,
+        0,
+        nspin * cell.nat * this->nhm * this->nhm);
+    for (int is = 0; is < nspin; ++is)
+    {
+        rho_basis->real2recip_gpu<double>(veff + is * rho_basis->nrxx, vaux + is * npw);
+    }
+    for (int it = 0; it < cell.ntype; ++it)
+    {
+        const Atom_pseudo& upf = cell.atoms[it].ncpp;
+        if (!upf.tvanp)
+        {
+            continue;
+        }
+        const int first_iat = cell.itia2iat(it, 0);
+        hamilt::uspp_deeq_op<double, base_device::DEVICE_GPU>()(
+            nullptr,
+            nspin,
+            cell.atoms[it].na,
+            upf.nh,
+            this->nhm,
+            npw,
+            first_iat,
+            cell.nat,
+            cell.omega,
+            rho_basis->gamma_only,
+            rho_basis->ig_gge0,
+            vaux,
+            this->z_qgm + it * nh_tot * npw,
+            this->z_qgm_phase + first_iat * npw,
+            this->d_dvan + it * this->nhm * this->nhm,
+            this->d_deeq);
+    }
+    if (this->s_deeq != nullptr)
+    {
+        base_device::memory::cast_memory_op<float,
+                                            double,
+                                            base_device::DEVICE_GPU,
+                                            base_device::DEVICE_GPU>()(
+            this->s_deeq,
+            this->d_deeq,
+            nspin * cell.nat * this->nhm * this->nhm);
+    }
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vaux);
+    ModuleBase::timer::end("ppcell_vnl", "cal_effective_D_gpu");
+#else
+    ModuleBase::WARNING_QUIT("pseudopot_cell_vnl::cal_effective_D_gpu",
+                             "GPU effective-D assembly requires a CUDA or ROCm build");
+#endif
+}
+
 void pseudopot_cell_vnl::newq(const ModuleBase::matrix& veff, const ModulePW::PW_Basis* rho_basis, UnitCell& cell)
 {
     ModuleBase::TITLE("pseudopot_cell_vnl", "newq");
@@ -1880,6 +2458,30 @@ std::complex<double>* pseudopot_cell_vnl::get_vkb_data() const
 }
 
 template <>
+std::complex<float>* pseudopot_cell_vnl::get_qgm_data() const
+{
+    return this->c_qgm;
+}
+
+template <>
+std::complex<double>* pseudopot_cell_vnl::get_qgm_data() const
+{
+    return this->z_qgm;
+}
+
+template <>
+std::complex<float>* pseudopot_cell_vnl::get_qgm_phase_data() const
+{
+    return this->c_qgm_phase;
+}
+
+template <>
+std::complex<double>* pseudopot_cell_vnl::get_qgm_phase_data() const
+{
+    return this->z_qgm_phase;
+}
+
+template <>
 std::complex<float>* pseudopot_cell_vnl::get_deeq_nc_data() const
 {
     return this->c_deeq_nc;
@@ -1909,6 +2511,24 @@ template void pseudopot_cell_vnl::getvnl<double, base_device::DEVICE_CPU>(base_d
                                                                           const UnitCell&,
                                                                           int const&,
                                                                           std::complex<double>*) const;
+template void pseudopot_cell_vnl::cal_becp_matrix_free<float, base_device::DEVICE_CPU>(
+    base_device::DEVICE_CPU*,
+    const UnitCell&,
+    int,
+    int,
+    int,
+    int,
+    const std::complex<float>*,
+    std::complex<float>*) const;
+template void pseudopot_cell_vnl::cal_becp_matrix_free<double, base_device::DEVICE_CPU>(
+    base_device::DEVICE_CPU*,
+    const UnitCell&,
+    int,
+    int,
+    int,
+    int,
+    const std::complex<double>*,
+    std::complex<double>*) const;
 template void pseudopot_cell_vnl::getvnl_atoms_cached<float, base_device::DEVICE_CPU>(base_device::DEVICE_CPU*,
                                                                                       const UnitCell&,
                                                                                       int const&,
@@ -1936,6 +2556,24 @@ template void pseudopot_cell_vnl::getvnl<double, base_device::DEVICE_GPU>(base_d
                                                                           const UnitCell&,
                                                                           int const&,
                                                                           std::complex<double>*) const;
+template void pseudopot_cell_vnl::cal_becp_matrix_free<float, base_device::DEVICE_GPU>(
+    base_device::DEVICE_GPU*,
+    const UnitCell&,
+    int,
+    int,
+    int,
+    int,
+    const std::complex<float>*,
+    std::complex<float>*) const;
+template void pseudopot_cell_vnl::cal_becp_matrix_free<double, base_device::DEVICE_GPU>(
+    base_device::DEVICE_GPU*,
+    const UnitCell&,
+    int,
+    int,
+    int,
+    int,
+    const std::complex<double>*,
+    std::complex<double>*) const;
 #if defined(__CUDA)
 template void pseudopot_cell_vnl::getvnl_atoms_cached<float, base_device::DEVICE_GPU>(base_device::DEVICE_GPU*,
                                                                                       const UnitCell&,

@@ -8,7 +8,6 @@
 #include "op_pw_veff.h"
 #include "source_base/global_function.h"
 #include "source_base/global_variable.h"
-#include "source_base/parallel_reduce.h"
 #include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 #include "source_io/module_parameter/parameter.h"
 
@@ -22,13 +21,9 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
                               pseudopot_cell_vnl* nlpp,
                               Plus_U* p_dftu, // mohan add 2025-11-06
                               const UnitCell* ucell)
-    : ucell(ucell)
 {
     this->classname = "HamiltPW";
     this->ppcell = nlpp;
-    this->qq_nt = this->ppcell->template get_qq_nt_data<Real>();
-    this->qq_so = this->ppcell->template get_qq_so_data<Real>();
-    this->vkb = this->ppcell->template get_vkb_data<Real>();
     const auto tpiba2 = static_cast<Real>(ucell->tpiba2);
     const auto tpiba = static_cast<Real>(ucell->tpiba);
     const int* isk = pkv->isk.data();
@@ -112,6 +107,8 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
     if (PARAM.inp.vnl_in_h)
     {
         Operator<T, Device>* nonlocal = new Nonlocal<OperatorPW<T, Device>>(isk, this->ppcell, ucell, wfc_basis);
+        this->nonlocal_op = nonlocal;
+        this->nonlocal_op_in_chain = true;
         if (this->ops == nullptr)
         {
             this->ops = nonlocal;
@@ -120,6 +117,10 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
         {
             this->ops->add(nonlocal);
         }
+    }
+    else if (PARAM.globalv.use_uspp)
+    {
+        this->nonlocal_op = new Nonlocal<OperatorPW<T, Device>>(isk, this->ppcell, ucell, wfc_basis);
     }
     if (PARAM.inp.sc_mag_switch || PARAM.inp.dft_plus_u)
     {
@@ -152,6 +153,10 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
 template <typename T, typename Device>
 HamiltPW<T, Device>::~HamiltPW()
 {
+    if (!this->nonlocal_op_in_chain)
+    {
+        delete this->nonlocal_op;
+    }
     if (this->ops != nullptr)
     {
         delete this->ops;
@@ -163,6 +168,10 @@ void HamiltPW<T, Device>::updateHk(const int ik)
 {
     ModuleBase::TITLE("HamiltPW", "updateHk");
     this->ops->init(ik);
+    if (!this->nonlocal_op_in_chain && this->nonlocal_op != nullptr)
+    {
+        this->nonlocal_op->init(ik);
+    }
     ModuleBase::TITLE("HamiltPW", "updateHk");
 }
 
@@ -179,143 +188,11 @@ void HamiltPW<T, Device>::sPsi(const T* psi_in, // psi
 ) const
 {
     ModuleBase::TITLE("HamiltPW", "sPsi");
-
-    const T one{1, 0};
-    const T zero{0, 0};
-
     syncmem_op()(spsi, psi_in, static_cast<size_t>(nbands * nrow));
-    if (PARAM.globalv.use_uspp)
+    if (this->nonlocal_op != nullptr)
     {
-        T* becp = nullptr;
-        T* ps = nullptr;
-        // psi updated, thus update <beta|psi>
-        if (this->ppcell->nkb > 0)
-        {
-            resmem_complex_op()(becp, nbands * this->ppcell->nkb, "Hamilt<PW>::becp");
-            char transa = 'C';
-            char transb = 'N';
-            if (nbands == 1)
-            {
-                int inc = 1;
-                gemv_op()(transa,
-                          npw,
-                          this->ppcell->nkb,
-                          &one,
-                          this->vkb,
-                          this->ppcell->vkbnc,
-                          psi_in,
-                          inc,
-                          &zero,
-                          becp,
-                          inc);
-            }
-            else
-            {
-                gemm_op()(transa,
-                          transb,
-                          this->ppcell->nkb,
-                          nbands,
-                          npw,
-                          &one,
-                          this->vkb,
-                          this->ppcell->vkbnc,
-                          psi_in,
-                          nrow,
-                          &zero,
-                          becp,
-                          this->ppcell->nkb);
-            }
-
-            Parallel_Reduce::reduce_pool(becp, this->ppcell->nkb * nbands);
-        }
-
-        resmem_complex_op()(ps, this->ppcell->nkb * nbands, "Hamilt<PW>::ps");
-        setmem_complex_op()(ps, 0, this->ppcell->nkb * nbands);
-
-        // spsi = psi + sum qq <beta|psi> |beta>
-        if (PARAM.inp.noncolin)
-        {
-            // spsi_nc
-            std::cout << " noncolinear in uspp is not implemented yet " << std::endl;
-            exit(0);
-        }
-        else
-        {
-            // qq <beta|psi>
-            char transa = 'N';
-            char transb = 'N';
-            for (int it = 0; it < ucell->ntype; it++)
-            {
-                Atom* atoms = &ucell->atoms[it];
-                if (atoms->ncpp.tvanp)
-                {
-                    const int nh = atoms->ncpp.nh;
-                    T* qqc = nullptr;
-                    resmem_complex_op()(qqc, nh * nh, "Hamilt<PW>::qqc");
-                    Real* qq_now = &qq_nt[it * this->ppcell->nhm * this->ppcell->nhm];
-                    for (int i = 0; i < nh; i++)
-                    {
-                        for (int j = 0; j < nh; j++)
-                        {
-                            int index = i * this->ppcell->nhm + j;
-                            qqc[i * nh + j] = qq_now[index] * one;
-                        }
-                    }
-                    for (int ia = 0; ia < atoms->na; ia++)
-                    {
-                        const int iat = ucell->itia2iat(it, ia);
-                        gemm_op()(transa,
-                                  transb,
-                                  nh,
-                                  nbands,
-                                  nh,
-                                  &one,
-                                  qqc,
-                                  nh,
-                                  &becp[this->ppcell->indv_ijkb0[iat]],
-                                  this->ppcell->nkb,
-                                  &zero,
-                                  &ps[this->ppcell->indv_ijkb0[iat]],
-                                  this->ppcell->nkb);
-                    }
-                    delmem_complex_op()(qqc);
-                }
-            }
-
-            if (nbands == 1)
-            {
-                const int inc = 1;
-                gemv_op()(transa,
-                          npw,
-                          this->ppcell->nkb,
-                          &one,
-                          this->vkb,
-                          this->ppcell->vkbnc,
-                          ps,
-                          inc,
-                          &one,
-                          spsi,
-                          inc);
-            }
-            else
-            {
-                gemm_op()(transa,
-                          transb,
-                          npw,
-                          nbands,
-                          this->ppcell->nkb,
-                          &one,
-                          this->vkb,
-                          this->ppcell->vkbnc,
-                          ps,
-                          this->ppcell->nkb,
-                          &one,
-                          spsi,
-                          nrow);
-            }
-        }
-        delmem_complex_op()(ps);
-        delmem_complex_op()(becp);
+        static_cast<Nonlocal<OperatorPW<T, Device>>*>(this->nonlocal_op)
+            ->apply_uspp_overlap(psi_in, spsi, nrow, npw, nbands);
     }
 }
 

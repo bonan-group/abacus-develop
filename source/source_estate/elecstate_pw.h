@@ -46,6 +46,7 @@ class ElecStatePW : public ElecState
     Real** rho = nullptr;   // [Device] [spin][nrxx] rho
     T** rhog = nullptr;     // [Device] [spin][nrxx] rhog
     Real** kin_r = nullptr; // [Device] [spin][nrxx] kin_r
+    Real** kin_r_smooth = nullptr; // [Device] smooth-grid tau for double-grid runs
 
     ModulePW::PW_Basis_K* basis = nullptr;
 
@@ -74,6 +75,8 @@ class ElecStatePW : public ElecState
     //! \sum_lm Q_lm(r) \sum_i <psi_i|beta_l><beta_m|psi_i> w_i
     void addusdens_g(const Real* becsum, T** rhog);
 
+    void finalize_tau_double_grid();
+
     Device * ctx = {};
 
     bool init_rho = false;
@@ -83,8 +86,12 @@ class ElecStatePW : public ElecState
     Real* rho_data = nullptr;
     T* rhog_data = nullptr;
     Real* kin_r_data = nullptr;
+    Real* kin_r_smooth_data = nullptr;
+    T* tau_g_data = nullptr;
     T* wfcr = nullptr; 
     T* wfcr_another_spin = nullptr;
+    T* uspp_aux = nullptr;
+    T* uspp_packed_becsum = nullptr;
 
   private:
     using meta_op = hamilt::meta_pw_op<Real, Device>;
@@ -94,6 +101,8 @@ class ElecStatePW : public ElecState
     using resmem_var_op = base_device::memory::resize_memory_op<Real, Device>;
     using delmem_var_op = base_device::memory::delete_memory_op<Real, Device>;
     using castmem_var_d2h_op = base_device::memory::cast_memory_op<double, Real, base_device::DEVICE_CPU, Device>;
+    using syncmem_var_h2d_op
+        = base_device::memory::synchronize_memory_op<Real, Device, base_device::DEVICE_CPU>;
 
     using setmem_complex_op = base_device::memory::set_memory_op<T, Device>;
     using resmem_complex_op = base_device::memory::resize_memory_op<T, Device>;

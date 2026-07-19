@@ -1,12 +1,15 @@
 #include "source_base/libm/libm.h"
 #include "source_base/parallel_reduce.h"
 #include "source_io/module_parameter/parameter.h"
-#include "source_base/math_polyint.h"
 #include "source_base/math_ylmreal.h"
 #include "source_base/timer.h"
 #include "source_estate/elecstate_pw.h"
 #include "source_pw/module_pwdft/nonlocal_maths.hpp"
+#include "source_pw/module_pwdft/kernels/nonlocal_op.h"
 #include "stress_pw.h"
+#include "source_base/module_device/memory_op.h"
+
+#include <type_traits>
 
 // computes the part of the crystal stress which is due
 // to the dependence of the Q function on the atomic position in PW base
@@ -21,11 +24,101 @@ void Stress_PW<FPTYPE, Device>::stress_us(ModuleBase::matrix& sigma,
 
     const int npw = rho_basis->npw;
     const int nh_tot = nlpp.nhm * (nlpp.nhm + 1) / 2;
-    const std::complex<double> fac = ModuleBase::NEG_IMAG_UNIT * ucell.tpiba;
     const std::complex<double> ci_tpi = ModuleBase::IMAG_UNIT * ModuleBase::TWO_PI;
     double* becsum = static_cast<const elecstate::ElecStatePW<std::complex<FPTYPE>, Device>*>(this->pelec)->becsum;
-
     ModuleBase::matrix stressus(3, 3);
+
+#if defined(__CUDA) || defined(__ROCM)
+    if (std::is_same<Device, base_device::DEVICE_GPU>::value
+        && this->pelec->pot->get_eff_v_device_data() != nullptr
+        && nlpp.get_dqgm_data() != nullptr)
+    {
+        const int nspin = this->pelec->pot->get_nspin();
+        std::complex<double>* vg_device = nullptr;
+        double* stress_device = nullptr;
+        base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            vg_device,
+            nspin * npw,
+            "Stress::uspp_vg");
+        base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(
+            stress_device,
+            9,
+            "Stress::uspp_stress");
+        base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>()(stress_device, 0, 9);
+        const double* veff_device = this->pelec->pot->get_eff_v_device_data();
+        for (int is = 0; is < nspin; ++is)
+        {
+            rho_basis->real2recip_gpu<double>(veff_device + is * rho_basis->nrxx,
+                                              vg_device + is * npw);
+        }
+        const std::complex<double>* phase = nlpp.get_qgm_phase_data<double>();
+        const std::complex<double>* dqgm = nlpp.get_dqgm_data();
+        for (int ipol = 0; ipol < 3; ++ipol)
+        {
+            for (int it = 0; it < ucell.ntype; ++it)
+            {
+                const Atom* atom = &ucell.atoms[it];
+                if (!atom->ncpp.tvanp)
+                {
+                    continue;
+                }
+                const int nij = atom->ncpp.nh * (atom->ncpp.nh + 1) / 2;
+                const int first_iat = ucell.itia2iat(it, 0);
+                hamilt::uspp_stress_op<double, base_device::DEVICE_GPU>()(
+                    nullptr,
+                    nspin,
+                    atom->na,
+                    nij,
+                    npw,
+                    first_iat,
+                    ucell.nat,
+                    nh_tot,
+                    ipol,
+                    ucell.tpiba,
+                    vg_device,
+                    dqgm + (ipol * ucell.ntype + it) * nh_tot * npw,
+                    phase + first_iat * npw,
+                    nlpp.get_qgm_gcar_data(),
+                    becsum,
+                    stress_device);
+            }
+        }
+        base_device::memory::synchronize_memory_op<double,
+                                                   base_device::DEVICE_CPU,
+                                                   base_device::DEVICE_GPU>()(
+            stressus.c,
+            stress_device,
+            9);
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(vg_device);
+        base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(stress_device);
+        Parallel_Reduce::reduce_all(stressus.c, stressus.nr * stressus.nc);
+        for (int l = 0; l < 3; ++l)
+        {
+            for (int m = l; m < 3; ++m)
+            {
+                stressus(m, l) = stressus(l, m);
+            }
+        }
+        sigma += stressus;
+        ModuleBase::timer::end("Stress", "stress_us");
+        return;
+    }
+#endif
+
+    std::vector<double> becsum_host;
+#if defined(__CUDA) || defined(__ROCM)
+    if (std::is_same<Device, base_device::DEVICE_GPU>::value)
+    {
+        becsum_host.resize(this->pelec->pot->get_nspin() * ucell.nat * nh_tot);
+        base_device::memory::synchronize_memory_op<double,
+                                                   base_device::DEVICE_CPU,
+                                                   base_device::DEVICE_GPU>()(
+            becsum_host.data(),
+            becsum,
+            becsum_host.size());
+        becsum = becsum_host.data();
+    }
+#endif
 
     ModuleBase::matrix veff = this->pelec->pot->get_eff_v();
     ModuleBase::ComplexMatrix vg(PARAM.inp.nspin, npw);
@@ -53,11 +146,11 @@ void Stress_PW<FPTYPE, Device>::stress_us(ModuleBase::matrix& sigma,
     for (int ipol = 0; ipol < 3; ipol++)
     {
         double* gcar_ptr = reinterpret_cast<double*>(rho_basis->gcar);
-        hamilt::Nonlocal_maths<FPTYPE, Device>::dylmr2(nlpp.lmaxq * nlpp.lmaxq,
-                                                       npw,
-                                                       gcar_ptr,
-                                                       dylmk0.c,
-                                                       ipol);
+        hamilt::Nonlocal_maths<FPTYPE, base_device::DEVICE_CPU>::dylmr2(nlpp.lmaxq * nlpp.lmaxq,
+                                                                        npw,
+                                                                        gcar_ptr,
+                                                                        dylmk0.c,
+                                                                        ipol);
         for (int it = 0; it < ucell.ntype; it++)
         {
             Atom* atom = &ucell.atoms[it];
@@ -76,18 +169,17 @@ void Stress_PW<FPTYPE, Device>::stress_us(ModuleBase::matrix& sigma,
                 {
                     for (int jh = ih; jh < atom->ncpp.nh; jh++)
                     {
-                        this->dqvan2(nlpp,
-                                     ih,
-                                     jh,
-                                     it,
-                                     ipol,
-                                     npw,
-                                     rho_basis->gcar,
-                                     qnorm,
-                                     ucell.tpiba,
-                                     ylmk0,
-                                     dylmk0,
-                                     &qgm(ijh, 0));
+                        nlpp.radial_fft_dq(npw,
+                                          ih,
+                                          jh,
+                                          it,
+                                          ipol,
+                                          rho_basis->gcar,
+                                          qnorm,
+                                          ucell.tpiba,
+                                          ylmk0,
+                                          dylmk0,
+                                          &qgm(ijh, 0));
                         ijh++;
                     }
                 }
@@ -187,110 +279,6 @@ void Stress_PW<FPTYPE, Device>::stress_us(ModuleBase::matrix& sigma,
 
     ModuleBase::timer::end("Stress", "stress_us");
     return;
-}
-
-template <typename FPTYPE, typename Device>
-void Stress_Func<FPTYPE, Device>::dqvan2(const pseudopot_cell_vnl& nlpp,
-                                         const int ih,
-                                         const int jh,
-                                         const int itype,
-                                         const int ipol,
-                                         const int ng,
-                                         const ModuleBase::Vector3<FPTYPE>* g,
-                                         const FPTYPE* qnorm,
-                                         const FPTYPE& tpiba,
-                                         const ModuleBase::matrix& ylmk0,
-                                         const ModuleBase::matrix& dylmk0,
-                                         std::complex<FPTYPE>* dqg)
-{
-	if (PARAM.inp.test_pp) 
-	{
-		ModuleBase::TITLE("Stress", "dqvan2");
-	}
-
-    // computes the indices which correspond to ih,jh
-    const int nb = nlpp.indv(itype, ih);
-    const int mb = nlpp.indv(itype, jh);
-    assert(nb < nlpp.nbetam);
-    assert(mb < nlpp.nbetam);
-    int ijv = 0;
-    if (nb >= mb)
-    {
-        ijv = nb * (nb + 1) / 2 + mb;
-    }
-    else
-    {
-        ijv = mb * (mb + 1) / 2 + nb;
-    }
-    const int ivl = nlpp.nhtolm(itype, ih);
-    const int jvl = nlpp.nhtolm(itype, jh);
-
-    for (int ig = 0; ig < ng; ig++)
-    {
-        dqg[ig] = {0, 0};
-    }
-
-    // make the sum over the non zero LM
-    int l = -1;
-    std::complex<double> pref(0.0, 0.0);
-    for (int lm = 0; lm < nlpp.lpx(ivl, jvl); lm++)
-    {
-        int lp = nlpp.lpl(ivl, jvl, lm);
-        assert(lp >= 0);
-        assert(lp < 49);
-        if (lp == 0)
-        {
-            l = 0;
-        }
-        else if (lp < 4)
-        {
-            l = 1;
-        }
-        else if (lp < 9)
-        {
-            l = 2;
-        }
-        else if (lp < 16)
-        {
-            l = 3;
-        }
-        else if (lp < 25)
-        {
-            l = 4;
-        }
-        else if (lp < 36)
-        {
-            l = 5;
-        }
-        else
-        {
-            l = 6;
-        }
-        pref = pow(ModuleBase::NEG_IMAG_UNIT, l) * nlpp.ap(lp, ivl, jvl);
-
-        double qm1 = -1.0; // any number smaller than qnorm
-        double work = 0.0, work1 = 0.0;
-        for (int ig = 0; ig < ng; ig++)
-        {
-            if (std::abs(qnorm[ig] - qm1) > 1e-6)
-            {
-                work = ModuleBase::PolyInt::Polynomial_Interpolation(nlpp.qrad,
-                                                                     itype,
-                                                                     l,
-                                                                     ijv,
-                                                                     PARAM.globalv.nqxq,
-                                                                     PARAM.globalv.dq,
-                                                                     qnorm[ig]);
-                work1 = this->Polynomial_Interpolation_nl(nlpp.qrad, itype, l, ijv, PARAM.globalv.dq, qnorm[ig]);
-                qm1 = qnorm[ig];
-            }
-            dqg[ig] += pref * work * dylmk0(lp, ig) / tpiba;
-            if (qnorm[ig] > 1e-9)
-            {
-                dqg[ig] += pref * work1 * ylmk0(lp, ig) * tpiba * g[ig][ipol] / qnorm[ig];
-            }
-        }
-    }
 }
 
 template class Stress_PW<double, base_device::DEVICE_CPU>;

@@ -7,6 +7,60 @@
 
 namespace elecstate{
 
+template <typename FPTYPE, typename Device>
+struct uspp_atom_phase_op
+{
+    void operator()(const Device* ctx,
+                    int atom_count,
+                    int npw,
+                    const FPTYPE* gcar,
+                    const FPTYPE* tau,
+                    std::complex<FPTYPE>* phase);
+};
+
+template <typename FPTYPE, typename Device>
+struct uspp_pack_becsum_op
+{
+    void operator()(const Device* ctx,
+                    int atom_count,
+                    int nij,
+                    int nat,
+                    int nh_tot,
+                    int spin,
+                    int atom_offset,
+                    const FPTYPE* becsum,
+                    std::complex<FPTYPE>* packed);
+};
+
+template <typename FPTYPE, typename Device>
+struct uspp_accumulate_rhog_op
+{
+    void operator()(const Device* ctx,
+                    int npw,
+                    int nij,
+                    const std::complex<FPTYPE>* qgm,
+                    const std::complex<FPTYPE>* aux,
+                    std::complex<FPTYPE>* rhog);
+};
+
+template <typename FPTYPE, typename Device>
+struct uspp_becsum_op
+{
+    void operator()(const Device* ctx,
+                    int atom_count,
+                    int nbands,
+                    int nh,
+                    int nkb,
+                    int projector_offset,
+                    int atom_offset,
+                    int nat,
+                    int nh_tot,
+                    int spin,
+                    const FPTYPE* weights,
+                    const std::complex<FPTYPE>* becp,
+                    FPTYPE* becsum);
+};
+
 template <typename FPTYPE, typename Device> 
 struct elecstate_pw_op {
   /// @brief Calculate psiToRho output within the band-by-band loop, NSPIN != 4
@@ -53,6 +107,60 @@ struct elecstate_pw_op {
 };
 
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
+template <typename FPTYPE>
+struct uspp_atom_phase_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int atom_count,
+                    int npw,
+                    const FPTYPE* gcar,
+                    const FPTYPE* tau,
+                    std::complex<FPTYPE>* phase);
+};
+
+template <typename FPTYPE>
+struct uspp_pack_becsum_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int atom_count,
+                    int nij,
+                    int nat,
+                    int nh_tot,
+                    int spin,
+                    int atom_offset,
+                    const FPTYPE* becsum,
+                    std::complex<FPTYPE>* packed);
+};
+
+template <typename FPTYPE>
+struct uspp_accumulate_rhog_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int npw,
+                    int nij,
+                    const std::complex<FPTYPE>* qgm,
+                    const std::complex<FPTYPE>* aux,
+                    std::complex<FPTYPE>* rhog);
+};
+
+template <typename FPTYPE>
+struct uspp_becsum_op<FPTYPE, base_device::DEVICE_GPU>
+{
+    void operator()(const base_device::DEVICE_GPU* ctx,
+                    int atom_count,
+                    int nbands,
+                    int nh,
+                    int nkb,
+                    int projector_offset,
+                    int atom_offset,
+                    int nat,
+                    int nh_tot,
+                    int spin,
+                    const FPTYPE* weights,
+                    const std::complex<FPTYPE>* becp,
+                    FPTYPE* becsum);
+};
+
 template <typename FPTYPE>
 struct elecstate_pw_op<FPTYPE, base_device::DEVICE_GPU>
 {

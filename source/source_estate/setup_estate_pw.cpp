@@ -110,7 +110,7 @@ void setup_estate_pw_impl(
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "LOCAL POTENTIAL");
 
     ppcell.init(ucell, &sf, pw_wfc);
-    ppcell.init_vnl(ucell, pw_rhod);
+    ppcell.init_vnl(ucell, pw_rhod, inp.cal_stress);
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "NON-LOCAL POTENTIAL");
 
     if (inp.ocp)

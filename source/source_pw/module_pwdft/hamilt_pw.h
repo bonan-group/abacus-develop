@@ -1,7 +1,6 @@
 #ifndef HAMILTPW_H
 #define HAMILTPW_H
 
-#include "source_base/kernels/math_kernel_op.h"
 #include "source_base/macros.h"
 #include "source_cell/klist.h"
 #include "source_estate/module_pot/potential_new.h"
@@ -47,17 +46,10 @@ class HamiltPW : public Hamilt<T, Device>
   protected:
     // used in sPhi, which are calculated in hPsi or sPhi
     const pseudopot_cell_vnl* ppcell = nullptr;
-    const UnitCell* const ucell = nullptr;
-    mutable T* vkb = nullptr;
-    Real* qq_nt = nullptr;
-    T* qq_so = nullptr;
+    Operator<T, Device>* nonlocal_op = nullptr;
+    bool nonlocal_op_in_chain = false;
 
     Device* ctx = {};
-    using gemv_op = ModuleBase::gemv_op<T, Device>;
-    using gemm_op = ModuleBase::gemm_op<T, Device>;
-    using setmem_complex_op = base_device::memory::set_memory_op<T, Device>;
-    using resmem_complex_op = base_device::memory::resize_memory_op<T, Device>;
-    using delmem_complex_op = base_device::memory::delete_memory_op<T, Device>;
     using syncmem_op = base_device::memory::synchronize_memory_op<T, Device, Device>;
 };
 
