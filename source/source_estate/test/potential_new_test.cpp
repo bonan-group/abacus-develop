@@ -237,6 +237,15 @@ TEST_F(PotentialNewTest, ConstructorGPUSingle)
     EXPECT_EQ(pot->v_eff.nc, 100);
 }
 
+TEST_F(PotentialNewTest, SmoothPotentialSizeUsesSmoothGrid)
+{
+    rhodpw->nrxx = 100;
+    rhopw->nrxx = 40;
+    pot = new elecstate::Potential(rhodpw, rhopw, ucell, vloc, structure_factors, solvent, etxc, vtxc);
+
+    EXPECT_EQ(pot->smooth_potential_size(), 40U);
+}
+
 TEST_F(PotentialNewTest, Getters)
 {
     pot = new elecstate::Potential;

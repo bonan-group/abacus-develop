@@ -1150,5 +1150,64 @@ TEST(TestSrcPWStressMultiDevice, cal_stress_ewa_op_gpu)
     delmem_dd_op()(d_latvec);
     delmem_dd_op()(d_stress);
 }
+
+TEST(TestSrcPWStressMultiDevice, cal_stress_ewa_op_gpu_non_g0_rank_has_no_diagonal_constant)
+{
+    const base_device::DEVICE_GPU* gpu_ctx = {};
+    const std::vector<double> tau = {0.0, 0.0, 0.0};
+    const std::vector<double> atom_z = {2.0};
+    const std::vector<double> gcar = {1.0, 0.0, 0.0};
+    const std::vector<double> gg = {1.0};
+
+    double* d_tau = nullptr;
+    double* d_atom_z = nullptr;
+    double* d_gcar = nullptr;
+    double* d_gg = nullptr;
+    double* d_stress = nullptr;
+    resmem_dd_op()(d_tau, tau.size());
+    resmem_dd_op()(d_atom_z, atom_z.size());
+    resmem_dd_op()(d_gcar, gcar.size());
+    resmem_dd_op()(d_gg, gg.size());
+    resmem_dd_op()(d_stress, 7);
+    syncmem_d2d_h2d_op()(d_tau, tau.data(), tau.size());
+    syncmem_d2d_h2d_op()(d_atom_z, atom_z.data(), atom_z.size());
+    syncmem_d2d_h2d_op()(d_gcar, gcar.data(), gcar.size());
+    syncmem_d2d_h2d_op()(d_gg, gg.data(), gg.size());
+
+    hamilt::cal_stress_ewa_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
+                                                                 1,
+                                                                 1,
+                                                                 -1,
+                                                                 0,
+                                                                 0,
+                                                                 0,
+                                                                 0,
+                                                                 1.0,
+                                                                 10.0,
+                                                                 1.0,
+                                                                 1.0,
+                                                                 0.0,
+                                                                 0.0,
+                                                                 2.0,
+                                                                 d_tau,
+                                                                 d_atom_z,
+                                                                 d_gcar,
+                                                                 d_gg,
+                                                                 nullptr,
+                                                                 d_stress);
+
+    std::vector<double> stress(7, 0.0);
+    syncmem_d2d_d2h_op()(stress.data(), d_stress, stress.size());
+    for (double value : stress)
+    {
+        EXPECT_DOUBLE_EQ(value, 0.0);
+    }
+
+    delmem_dd_op()(d_tau);
+    delmem_dd_op()(d_atom_z);
+    delmem_dd_op()(d_gcar);
+    delmem_dd_op()(d_gg);
+    delmem_dd_op()(d_stress);
+}
 #endif
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM

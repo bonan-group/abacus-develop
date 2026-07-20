@@ -1173,10 +1173,14 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
     for (int it = 0; it < this->ucell_->ntype; ++it)
     {
         const int nh = this->ucell_->atoms[it].ncpp.nh;
+        if (nh == 0)
+        {
+            continue;
+        }
         const int atom_type_start = this->ucell_->itia2iat(it, 0);
         for (int ia_begin = 0; ia_begin < h_atom_na[it];)
         {
-            const int atom_count = std::max(1, std::min(h_atom_na[it] - ia_begin, target_chunk / nh));
+            const int atom_count = projector_atom_chunk_size(h_atom_na[it] - ia_begin, target_chunk, nh);
             const int chunk_nkb = atom_count * nh;
             this->ensure_chunk_memory(chunk_nkb, npm_npol, true);
             if (max_zero_count > 0 && chunk_nkb * max_zero_count > this->chunk_vkb_save_capacity)
@@ -1392,10 +1396,14 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
     for (int it = 0; it < this->ucell_->ntype; ++it)
     {
         const int nh = this->ucell_->atoms[it].ncpp.nh;
+        if (nh == 0)
+        {
+            continue;
+        }
         const int atom_type_start = this->ucell_->itia2iat(it, 0);
         for (int ia_begin = 0; ia_begin < h_atom_na[it];)
         {
-            const int atom_count = std::max(1, std::min(h_atom_na[it] - ia_begin, target_chunk / nh));
+            const int atom_count = projector_atom_chunk_size(h_atom_na[it] - ia_begin, target_chunk, nh);
             const int chunk_nkb = atom_count * nh;
             this->ensure_chunk_memory(chunk_nkb, npm_npol, false);
             this->cal_vkb_type_chunk(ik, it, atom_type_start + ia_begin, atom_type_start + ia_begin + atom_count,

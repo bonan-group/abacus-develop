@@ -2312,7 +2312,11 @@ void cal_stress_ewa_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const base_d
         return;
     }
 
-    set_stress_ewa_diag_kernel<FPTYPE><<<1, 1>>>(charge, alpha, omega, stress);
+    CHECK_CUDA(cudaMemset(stress, 0, 7 * sizeof(FPTYPE)));
+    if (ig0 >= 0)
+    {
+        set_stress_ewa_diag_kernel<FPTYPE><<<1, 1>>>(charge, alpha, omega, stress);
+    }
 
     const int g_blocks = std::min(1024, std::max(1, (npw + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK));
     FPTYPE* partial = nullptr;

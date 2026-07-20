@@ -1047,6 +1047,21 @@ TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
         }
     }
 
+    const auto explicit_cpu_result
+        = XC_Functional::v_xc(nrxx, &chr, &ucell, "cpu", 1, false, false, 0.0, 0.0);
+    const auto explicit_gpu_result
+        = XC_Functional::v_xc(nrxx, &chr, &ucell, "gpu", 1, false, false, 0.0, 0.0);
+    const ModuleBase::matrix& explicit_cpu_v = std::get<2>(explicit_cpu_result);
+    const ModuleBase::matrix& explicit_gpu_v = std::get<2>(explicit_gpu_result);
+    EXPECT_EQ(explicit_gpu_v.nr, 1);
+    EXPECT_EQ(explicit_gpu_v.nc, nrxx);
+    EXPECT_NEAR(std::get<0>(explicit_gpu_result), std::get<0>(explicit_cpu_result), 1.0e-12);
+    EXPECT_NEAR(std::get<1>(explicit_gpu_result), std::get<1>(explicit_cpu_result), 1.0e-12);
+    for (int ir = 0; ir < nrxx; ++ir)
+    {
+        EXPECT_NEAR(explicit_gpu_v(0, ir), explicit_cpu_v(0, ir), 1.0e-12);
+    }
+
     PARAM.input.nspin = old_nspin;
     if (had_xc_gpu_env)
     {

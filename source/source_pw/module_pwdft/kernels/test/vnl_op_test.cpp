@@ -16,6 +16,19 @@ TEST(TestSrcPWVnlPolicy, forceStressUsesChunkedWhenFullVkbIsMissing)
     EXPECT_FALSE(force_stress_should_use_chunked_vnl(true, false, true, 0));
 }
 
+TEST(TestSrcPWVnlPolicy, gpuPwFftRequiresOneRankPerPool)
+{
+    EXPECT_TRUE(gpu_pw_fft_pool_supported(1));
+    EXPECT_FALSE(gpu_pw_fft_pool_supported(2));
+}
+
+TEST(TestSrcPWVnlPolicy, zeroProjectorTypeHasNoChunk)
+{
+    EXPECT_EQ(projector_atom_chunk_size(3, 64, 0), 0);
+    EXPECT_EQ(projector_atom_chunk_size(3, 64, 4), 3);
+    EXPECT_EQ(projector_atom_chunk_size(20, 32, 4), 8);
+}
+
 class TestSrcPWVnlMultiDevice : public ::testing::Test
 {
   protected:

@@ -261,6 +261,11 @@ bool Potential::supports_resident_gpu_update() const
     return has_xc;
 }
 
+std::size_t Potential::smooth_potential_size() const
+{
+    return static_cast<std::size_t>(this->veff_smooth.nr) * this->veff_smooth.nc;
+}
+
 bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const UnitCell*const ucell)
 {
 #if __CUDA || __UT_USE_CUDA
@@ -336,7 +341,7 @@ bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const Un
     {
         using castmem_d2s_d2d_op
             = base_device::memory::cast_memory_op<float, double, base_device::DEVICE_GPU, base_device::DEVICE_GPU>;
-        castmem_d2s_d2d_op()(this->s_veff_smooth, this->d_veff_smooth, nspin * nrxx);
+        castmem_d2s_d2d_op()(this->s_veff_smooth, this->d_veff_smooth, this->smooth_potential_size());
     }
     ModuleBase::timer::end("Potential", "update_resident_gpu");
     return true;

@@ -3,7 +3,7 @@ suffix             autotest
 calculation        scf
 basis_type         pw
 device             gpu
-precision          double
+precision          single
 pseudo_dir         ../../PP_ORB
 symmetry           0
 init_wfc           random

@@ -32,7 +32,7 @@ jobs:
 
           - tag: cuda
             external_toolchain_args: ""
-            build_args: "-DUSE_CUDA=ON"
+            build_args: "-DUSE_CUDA=ON -DENABLE_FLOAT_FFTW=ON"
             name: "Build with CUDA support"
           - tag: gnu
             external_toolchain_args: ""

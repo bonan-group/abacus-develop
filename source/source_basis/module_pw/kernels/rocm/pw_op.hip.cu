@@ -25,6 +25,41 @@ __global__ void set_3d_fft_box(
 }
 
 template<class FPTYPE>
+__global__ void set_3d_fft_box_gamma(
+    const int npwk,
+    const int nx,
+    const int ny,
+    const int nz,
+    const bool xprime,
+    const int* box_index,
+    const thrust::complex<FPTYPE>* in,
+    thrust::complex<FPTYPE>* out)
+{
+    const int ig = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ig >= npwk) {return;}
+
+    const int idx = box_index[ig];
+    const int iz = idx % nz;
+    const int ixy = idx / nz;
+    const int iy = ixy % ny;
+    const int ix = ixy / ny;
+    const int cix = (nx - ix) % nx;
+    const int ciy = (ny - iy) % ny;
+    const int ciz = (nz - iz) % nz;
+    const int conj_idx = ciz + ciy * nz + cix * ny * nz;
+    const int reduced_coord = xprime ? ix : iy;
+    const int reduced_dim = xprime ? nx : ny;
+    const bool reduced_boundary
+        = reduced_coord == 0 || (reduced_dim % 2 == 0 && reduced_coord == reduced_dim / 2);
+
+    out[idx] = in[ig];
+    if (!reduced_boundary && conj_idx != idx)
+    {
+        out[conj_idx] = thrust::conj(in[ig]);
+    }
+}
+
+template<class FPTYPE>
 __global__ void set_recip_to_real_output(
     const int nrxx,
     const bool add,
@@ -117,6 +152,34 @@ void set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const int np
 }
 
 template <typename FPTYPE>
+void set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const int npwk,
+                                                                          const int nx,
+                                                                          const int ny,
+                                                                          const int nz,
+                                                                          const bool xprime,
+                                                                          const int* box_index,
+                                                                          const std::complex<FPTYPE>* in,
+                                                                          std::complex<FPTYPE>* out)
+{
+    const int block = (npwk + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(set_3d_fft_box_gamma<FPTYPE>),
+                       dim3(block),
+                       dim3(THREADS_PER_BLOCK),
+                       0,
+                       0,
+                       npwk,
+                       nx,
+                       ny,
+                       nz,
+                       xprime,
+                       box_index,
+                       reinterpret_cast<const thrust::complex<FPTYPE>*>(in),
+                       reinterpret_cast<thrust::complex<FPTYPE>*>(out));
+
+    hipCheckOnDebug();
+}
+
+template <typename FPTYPE>
 void set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_GPU>::operator()(const int nrxx,
                                                                               const bool add,
                                                                               const FPTYPE factor,
@@ -197,10 +260,12 @@ void set_real_to_recip_output_op<FPTYPE, base_device::DEVICE_GPU>::operator()(co
 }
 
 template struct set_3d_fft_box_op<float, base_device::DEVICE_GPU>;
+template struct set_3d_fft_box_gamma_op<float, base_device::DEVICE_GPU>;
 template struct set_recip_to_real_output_op<float, base_device::DEVICE_GPU>;
 template struct set_real_to_recip_output_op<float, base_device::DEVICE_GPU>;
 
 template struct set_3d_fft_box_op<double, base_device::DEVICE_GPU>;
+template struct set_3d_fft_box_gamma_op<double, base_device::DEVICE_GPU>;
 template struct set_recip_to_real_output_op<double, base_device::DEVICE_GPU>;
 template struct set_real_to_recip_output_op<double, base_device::DEVICE_GPU>;
 

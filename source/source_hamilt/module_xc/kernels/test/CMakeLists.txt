@@ -24,3 +24,7 @@ AddTest(
       ../../../../source_estate/module_charge/charge_device.cpp
       ../../../../source_cell/test/support/mock_unitcell.cpp
 )
+
+if(ENABLE_LIBXC)
+  target_link_libraries(MODULE_HAMILT_XC_Functional_UTs PRIVATE Libxc::xc)
+endif()

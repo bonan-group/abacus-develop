@@ -2096,6 +2096,16 @@ void pseudopot_cell_vnl::cal_effective_D_gpu(const double* veff,
 #if defined(__CUDA) || defined(__ROCM)
     ModuleBase::TITLE("pseudopot_cell_vnl", "cal_effective_D_gpu");
     ModuleBase::timer::start("ppcell_vnl", "cal_effective_D_gpu");
+    if (rho_basis == nullptr)
+    {
+        ModuleBase::WARNING_QUIT("pseudopot_cell_vnl::cal_effective_D_gpu", "rho_basis must not be null");
+    }
+    if (!gpu_pw_fft_pool_supported(rho_basis->poolnproc))
+    {
+        ModuleBase::WARNING_QUIT("pseudopot_cell_vnl::cal_effective_D_gpu",
+                                 "GPU FFT with poolnproc > 1 is not supported. "
+                                 "Use one MPI rank per pool for GPU PW runs.");
+    }
     GlobalV::ofs_running << " INFO: Using GPU-resident USPP effective-D assembly." << std::endl;
     const int nspin = this->deeq.getBound1();
     const int npw = rho_basis->npw;

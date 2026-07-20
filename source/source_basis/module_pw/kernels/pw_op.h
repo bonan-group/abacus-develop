@@ -112,7 +112,6 @@ struct set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>
                     std::complex<FPTYPE>* out);
 };
 
-#if __CUDA || __UT_USE_CUDA
 template <typename FPTYPE>
 struct set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>
 {
@@ -125,7 +124,6 @@ struct set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>
                     const std::complex<FPTYPE>* in,
                     std::complex<FPTYPE>* out);
 };
-#endif
 
 template <typename FPTYPE>
 struct set_recip_to_real_output_op<FPTYPE, base_device::DEVICE_GPU>

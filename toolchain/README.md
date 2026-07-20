@@ -282,6 +282,7 @@ Add to your build script:
 ```bash
 cmake -B $BUILD_DIR \
     -DUSE_CUDA=ON \
+    -DENABLE_FLOAT_FFTW=ON \
     -DCMAKE_CUDA_COMPILER=/path/to/cuda/bin/nvcc \
     # ... other options
 ```
@@ -298,6 +299,7 @@ export CUDA_PATH=/path/to/CUDA
 ```bash
 cmake -B $BUILD_DIR \
     -DUSE_CUDA=ON \
+    -DENABLE_FLOAT_FFTW=ON \
     -DENABLE_ELPA=ON \
     # ... other options
 ```
@@ -324,6 +326,7 @@ cuSolverMP requires NVIDIA HPC SDK. Follow these steps to build with cuSolverMP:
 ```bash
 cmake -B $BUILD_DIR \
     -DUSE_CUDA=ON \
+    -DENABLE_FLOAT_FFTW=ON \
     -DENABLE_CUSOLVERMP=ON \
     # ... other options
 ```

@@ -1,6 +1,6 @@
 #include "source_cell/atom_spec.h"
 #include "source_cell/setup_nonlocal.h"
-#include "source_estate/magnetism.h"
+#include "source_cell/magnetism.h"
 
 pseudo::pseudo() = default;
 pseudo::~pseudo() = default;

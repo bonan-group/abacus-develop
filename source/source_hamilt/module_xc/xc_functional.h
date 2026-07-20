@@ -249,15 +249,6 @@ class XC_Functional
         ModulePW::PW_Basis* rhopw,
         const UnitCell* ucell,
         std::vector<double>& stress_gga,
-        const bool is_stress = false);
-    static void gradcorr(
-        double& etxc,
-        double& vtxc,
-        ModuleBase::matrix& v,
-        const Charge* const chr,
-        ModulePW::PW_Basis* rhopw,
-        const UnitCell* ucell,
-        std::vector<double>& stress_gga,
         const bool is_stress,
         const int nspin,
         const bool domag,

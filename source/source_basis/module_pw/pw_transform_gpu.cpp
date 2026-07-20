@@ -81,12 +81,6 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in, FPTYPE* out, const
         this->nxyz);
     if (this->gamma_only)
     {
-#if defined(__ROCM)
-        set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
-                                                             this->ig2ixyz_gpu,
-                                                             in,
-                                                             this->fft_bundle.get_auxr_3d_data<FPTYPE>());
-#else
         set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
                                                                    this->nx,
                                                                    this->ny,
@@ -95,7 +89,6 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in, FPTYPE* out, const
                                                                    this->ig2ixyz_gpu,
                                                                    in,
                                                                    this->fft_bundle.get_auxr_3d_data<FPTYPE>());
-#endif
     }
     else
     {
@@ -131,12 +124,6 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in,
 
     if (this->gamma_only)
     {
-#if defined(__ROCM)
-        set_3d_fft_box_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
-                                                             this->ig2ixyz_gpu,
-                                                             in,
-                                                             this->fft_bundle.get_auxr_3d_data<FPTYPE>());
-#else
         set_3d_fft_box_gamma_op<FPTYPE, base_device::DEVICE_GPU>()(npw,
                                                                    this->nx,
                                                                    this->ny,
@@ -145,7 +132,6 @@ void PW_Basis::recip2real_gpu(const std::complex<FPTYPE>* in,
                                                                    this->ig2ixyz_gpu,
                                                                    in,
                                                                    this->fft_bundle.get_auxr_3d_data<FPTYPE>());
-#endif
     }
     else
     {

@@ -27,6 +27,13 @@ option(ENABLE_ABACUS_LIBM "Build libmath from source to speed up" OFF)
 option(ENABLE_LIBXC "Enable using the LibXC package" OFF)
 option(ENABLE_FLOAT_FFTW "Enable using single-precision FFTW library." OFF)
 
+if((USE_CUDA OR USE_ROCM) AND NOT ENABLE_FLOAT_FFTW)
+  message(WARNING
+    "GPU double precision remains available, but precision=single and "
+    "precision=mixing require single-precision FFTW. Reconfigure with "
+    "-DENABLE_FLOAT_FFTW=ON to enable those precision modes.")
+endif()
+
 option(ENABLE_MLALGO "Enable the machine learning algorithms" OFF)
 
 option(ENABLE_LCAO "Enable LCAO algorithm" ON)

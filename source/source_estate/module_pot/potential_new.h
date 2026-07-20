@@ -7,6 +7,7 @@
 #include "source_pw/module_pwdft/structure_factor.h"
 #include "pot_base.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -235,6 +236,7 @@ class Potential : public PotBase
     void cal_v_eff(const Charge*const chg, const UnitCell*const ucell, ModuleBase::matrix& v_eff) override;
     bool update_from_charge_resident_gpu(const Charge*const chg, const UnitCell*const ucell);
     bool supports_resident_gpu_update() const;
+    std::size_t smooth_potential_size() const;
     void materialize_eff_v_host() const;
     void cal_fixed_v(double* vl_pseudo) override;
     // interpolate potential on the smooth mesh if necessary

@@ -93,6 +93,22 @@ inline bool force_stress_should_use_chunked_vnl(const bool is_gpu,
     return is_gpu && nkb > 0 && (chunked_vnl_enabled || !has_full_vkb);
 }
 
+inline bool gpu_pw_fft_pool_supported(const int poolnproc)
+{
+    return poolnproc == 1;
+}
+
+inline int projector_atom_chunk_size(const int remaining_atoms,
+                                     const int target_chunk,
+                                     const int nh)
+{
+    if (remaining_atoms <= 0 || nh <= 0)
+    {
+        return 0;
+    }
+    return std::max(1, std::min(remaining_atoms, target_chunk / nh));
+}
+
 //==========================================================
 // Calculate the non-local pseudopotential in reciprocal
 // space using plane wave as basis set.

@@ -61,6 +61,7 @@ bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
                                     const Charge* const chr,
                                     const UnitCell* const ucell,
                                     const std::string& device,
+                                    const int nspin,
                                     const std::vector<int>& func_id,
                                     ModuleBase::matrix& v,
                                     double& etxc,
@@ -71,7 +72,7 @@ bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
     const bool is_pz = func_id.size() == 2 && func_id[0] == XC_LDA_X && func_id[1] == XC_LDA_C_PZ;
     const bool is_pw = func_id.size() == 2 && func_id[0] == XC_LDA_X && func_id[1] == XC_LDA_C_PW;
     ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (xc_gpu_disabled || device != "gpu" || PARAM.inp.nspin != 2 || !(is_pz || is_pw) || chr == nullptr
+    if (xc_gpu_disabled || device != "gpu" || nspin != 2 || !(is_pz || is_pw) || chr == nullptr
         || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
         || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr || chr->get_rho_d(1) == nullptr)
     {
@@ -147,6 +148,7 @@ bool try_v_xc_pbe_resident_gpu(const int nrxx,
                                const Charge* const chr,
                                const UnitCell* const ucell,
                                const std::string& device,
+                               const int nspin,
                                const std::vector<int>& func_id,
                                ModuleBase::matrix& v,
                                double& etxc,
@@ -157,7 +159,7 @@ bool try_v_xc_pbe_resident_gpu(const int nrxx,
     const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
     const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
     ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (xc_gpu_disabled || device != "gpu" || PARAM.inp.nspin != 1 || !(is_pbe || is_pbesol) || chr == nullptr
+    if (xc_gpu_disabled || device != "gpu" || nspin != 1 || !(is_pbe || is_pbesol) || chr == nullptr
         || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
         || rhopw->poolnproc != 1 || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr)
     {
@@ -327,6 +329,7 @@ bool try_v_xc_pbe_spin_resident_gpu(const int nrxx,
                                     const Charge* const chr,
                                     const UnitCell* const ucell,
                                     const std::string& device,
+                                    const int nspin,
                                     const std::vector<int>& func_id,
                                     ModuleBase::matrix& v,
                                     double& etxc,
@@ -337,7 +340,7 @@ bool try_v_xc_pbe_spin_resident_gpu(const int nrxx,
     const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
     const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
     ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (xc_gpu_disabled || device != "gpu" || PARAM.inp.nspin != 2 || !(is_pbe || is_pbesol) || chr == nullptr
+    if (xc_gpu_disabled || device != "gpu" || nspin != 2 || !(is_pbe || is_pbesol) || chr == nullptr
         || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
         || rhopw->poolnproc != 1 || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr
         || chr->get_rho_d(1) == nullptr)
@@ -628,7 +631,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     double vanishing_charge = 1.0e-10;
 
 #if __CUDA || __UT_USE_CUDA
-    if (try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc, nullptr))
+    if (try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, v, etxc, vtxc, nullptr))
     {
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
@@ -641,7 +644,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
         return std::make_tuple(etxc, vtxc, std::move(v));
     }
 
-    if (try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc, nullptr))
+    if (try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, v, etxc, vtxc, nullptr))
     {
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
@@ -654,7 +657,7 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
         return std::make_tuple(etxc, vtxc, std::move(v));
     }
 
-    if (try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, func_id, v, etxc, vtxc, nullptr))
+    if (try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, v, etxc, vtxc, nullptr))
     {
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
@@ -848,14 +851,18 @@ bool XC_Functional::add_v_xc_to_device(const int& nrxx,
 #if __CUDA || __UT_USE_CUDA
     ModuleBase::timer::start("XC_Functional", "v_xc_device_add");
     ModuleBase::matrix unused_v;
-    bool used_resident = try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, func_id, unused_v, etxc, vtxc, d_v_eff);
+    const int nspin = PARAM.inp.nspin;
+    bool used_resident
+        = try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, unused_v, etxc, vtxc, d_v_eff);
     if (!used_resident)
     {
-        used_resident = try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, func_id, unused_v, etxc, vtxc, d_v_eff);
+        used_resident
+            = try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, unused_v, etxc, vtxc, d_v_eff);
     }
     if (!used_resident)
     {
-        used_resident = try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, func_id, unused_v, etxc, vtxc, d_v_eff);
+        used_resident
+            = try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, unused_v, etxc, vtxc, d_v_eff);
     }
     if (used_resident)
     {
