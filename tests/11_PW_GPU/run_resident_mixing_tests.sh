@@ -6,16 +6,20 @@ if (( $# < 2 || $# > 3 )); then
     exit 2
 fi
 
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-cd "$script_dir"
-
 case_list=$1
 tau_case=$2
 required_marker=${3:-}
 
+if [[ "$case_list" != /* && -f "$case_list" ]]; then
+    case_list="$(cd -- "$(dirname -- "$case_list")" && pwd)/$(basename -- "$case_list")"
+fi
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+cd "$script_dir"
+
 bash ../integrate/Autotest.sh -n 1 -t 1e-3 -f "$case_list"
 
-while IFS= read -r case_name; do
+while read -r case_name; do
     running_log="${case_name}/OUT.autotest/running_scf.log"
     case_log="${case_name}/log.txt"
 
