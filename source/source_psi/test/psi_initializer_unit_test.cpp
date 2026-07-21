@@ -89,6 +89,20 @@ std::complex<double>* Structure_Factor::get_sk(int ik, int it, int ia, ModulePW:
 }
     return sk;
 }
+template <>
+void Structure_Factor::get_sk<float, base_device::DEVICE_GPU>(base_device::DEVICE_GPU*,
+                                                               int,
+                                                               const ModulePW::PW_Basis_K*,
+                                                               std::complex<float>*) const
+{
+}
+template <>
+void Structure_Factor::get_sk<double, base_device::DEVICE_GPU>(base_device::DEVICE_GPU*,
+                                                                int,
+                                                                const ModulePW::PW_Basis_K*,
+                                                                std::complex<double>*) const
+{
+}
 
 class PsiIntializerUnitTest : public ::testing::Test {
     public:

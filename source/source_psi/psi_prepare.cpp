@@ -55,7 +55,7 @@ struct RandomDeviceInitializer
     static void init(const ModulePW::PW_Basis_K& pw_wfc,
                      psi::Psi<T, Device>* psi_device,
                      const int nbands_start,
-                     const int nbasis,
+                     const int npol,
                      const int ik,
                      const int ik_tot,
                      const int random_seed)
@@ -70,13 +70,12 @@ struct RandomDeviceInitializer<T, base_device::DEVICE_GPU>
     static void init(const ModulePW::PW_Basis_K& pw_wfc,
                      psi::Psi<T, base_device::DEVICE_GPU>* psi_device,
                      const int nbands_start,
-                     const int nbasis,
+                     const int npol,
                      const int ik,
                      const int ik_tot,
                      const int random_seed)
     {
         using Real = typename GetTypeReal<T>::type;
-        const int npol = PARAM.globalv.npol;
         psi::init_random_op<T, base_device::DEVICE_GPU>()(psi_device->get_device(),
                                                           psi_device->get_pointer(),
                                                           nbands_start,
@@ -284,7 +283,7 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
                     RandomDeviceInitializer<T, Device>::init(this->pw_wfc,
                                                              psi_device,
                                                              nbands_start,
-                                                             nbasis,
+                                                             npol,
                                                              ik,
                                                              ik_tot,
                                                              random_seed);
