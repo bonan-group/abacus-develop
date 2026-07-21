@@ -34,12 +34,10 @@ class GpuMixingData
     void reset();
     void push(const T* data);
 
-    int capacity() const;
     int size() const;
     std::size_t length() const;
     int current_slot() const;
     int index_move(int offset) const;
-    T* device_slot(int slot) const;
 
   private:
     GpuMixingData(const GpuMixingData&) = delete;
@@ -79,7 +77,6 @@ class GpuMixing
     void mix_data(const GpuMixingData<T>& data, T* result) const;
 
     int history_capacity() const;
-    const std::vector<double>& coefficients() const;
 
   private:
     GpuMixing(const GpuMixing&) = delete;

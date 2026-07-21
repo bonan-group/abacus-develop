@@ -1,10 +1,9 @@
 #include "gpu_mixing.h"
 
-#include "kernels/mixing_op.h"
 #include "mixing_coefficients.h"
+#include "source_base/kernels/math_kernel_op.h"
 #include "source_base/matrix.h"
 #include "source_base/module_device/memory_op.h"
-#include "source_base/module_device/types.h"
 #include "source_base/tool_quit.h"
 
 #include <algorithm>
@@ -71,13 +70,7 @@ void GpuMixingData<T>::push(const T* data)
     base_device::memory::synchronize_memory_op<T,
                                                base_device::DEVICE_GPU,
                                                base_device::DEVICE_GPU>()(
-        this->device_slot(this->current_slot_), data, this->length_);
-}
-
-template <typename T>
-int GpuMixingData<T>::capacity() const
-{
-    return this->capacity_;
+        this->data_ + this->current_slot_ * this->length_, data, this->length_);
 }
 
 template <typename T>
@@ -102,12 +95,6 @@ template <typename T>
 int GpuMixingData<T>::index_move(const int offset) const
 {
     return (offset + this->current_slot_ + this->capacity_) % this->capacity_;
-}
-
-template <typename T>
-T* GpuMixingData<T>::device_slot(const int slot) const
-{
-    return this->data_ + slot * this->length_;
 }
 
 template <typename T>
@@ -258,10 +245,9 @@ void GpuMixing<T>::push_data(GpuMixingData<T>& data,
                              const bool update_coefficients)
 {
     Impl& impl = *this->impl_;
-    const base_device::DEVICE_GPU* context = nullptr;
     const int length = static_cast<int>(data.length_);
-    mixing::vector_subtract_op<T, base_device::DEVICE_GPU>()(
-        context, impl.temporary, output, input, length);
+    ModuleBase::vector_add_vector_op<T, base_device::DEVICE_GPU>()(
+        length, impl.temporary, output, 1.0, input, -1.0);
     if (screen)
     {
         screen(impl.temporary);
@@ -272,8 +258,8 @@ void GpuMixing<T>::push_data(GpuMixingData<T>& data,
     }
     else
     {
-        mixing::vector_axpy_op<T, base_device::DEVICE_GPU>()(
-            context, impl.temporary, input, static_cast<T>(impl.beta), impl.temporary, length);
+        ModuleBase::vector_add_vector_op<T, base_device::DEVICE_GPU>()(
+            length, impl.temporary, input, 1.0, impl.temporary, impl.beta);
     }
     data.push(impl.temporary);
 
@@ -283,8 +269,8 @@ void GpuMixing<T>::push_data(GpuMixingData<T>& data,
     }
 
     impl.check_binding(data);
-    mixing::vector_subtract_op<T, base_device::DEVICE_GPU>()(
-        context, impl.temporary, output, input, length);
+    ModuleBase::vector_add_vector_op<T, base_device::DEVICE_GPU>()(
+        length, impl.temporary, output, 1.0, input, -1.0);
     if (screen)
     {
         screen(impl.temporary);
@@ -295,18 +281,22 @@ void GpuMixing<T>::push_data(GpuMixingData<T>& data,
         if (data.size_ == 1)
         {
             impl.bound_data = &data;
-            mixing::vector_copy_op<T, base_device::DEVICE_GPU>()(
-                context, impl.residual, impl.temporary, length);
+            base_device::memory::synchronize_memory_op<T,
+                                                       base_device::DEVICE_GPU,
+                                                       base_device::DEVICE_GPU>()(
+                impl.residual, impl.temporary, length);
         }
         else
         {
             impl.residual_count = std::min(impl.residual_count + 1, impl.history_depth);
             impl.residual_slot = (impl.residual_slot + 1) % impl.history_depth;
             T* difference = impl.residual_history + impl.residual_slot * data.length_;
-            mixing::vector_subtract_op<T, base_device::DEVICE_GPU>()(
-                context, difference, impl.residual, impl.temporary, length);
-            mixing::vector_copy_op<T, base_device::DEVICE_GPU>()(
-                context, impl.residual, impl.temporary, length);
+            ModuleBase::vector_add_vector_op<T, base_device::DEVICE_GPU>()(
+                length, difference, impl.residual, 1.0, impl.temporary, -1.0);
+            base_device::memory::synchronize_memory_op<T,
+                                                       base_device::DEVICE_GPU,
+                                                       base_device::DEVICE_GPU>()(
+                impl.residual, impl.temporary, length);
         }
     }
     else
@@ -321,8 +311,9 @@ void GpuMixing<T>::push_data(GpuMixingData<T>& data,
             impl.residual_count = std::min(impl.residual_count + 1, impl.history_depth);
         }
         impl.residual_slot = data.current_slot_;
-        mixing::vector_copy_op<T, base_device::DEVICE_GPU>()(
-            context,
+        base_device::memory::synchronize_memory_op<T,
+                                                   base_device::DEVICE_GPU,
+                                                   base_device::DEVICE_GPU>()(
             impl.residual_history + impl.residual_slot * data.length_,
             impl.temporary,
             length);
@@ -383,9 +374,9 @@ void GpuMixing<T>::update_coefficients(const GpuMixingData<T>& data,
             impl.use_latest_coefficients(data);
         }
 
-        const base_device::DEVICE_GPU* context = nullptr;
-        mixing::vector_copy_op<T, base_device::DEVICE_GPU>()(
-            context,
+        base_device::memory::synchronize_memory_op<T,
+                                                   base_device::DEVICE_GPU,
+                                                   base_device::DEVICE_GPU>()(
             impl.residual_history + impl.residual_index_move(1) * data.length_,
             impl.residual,
             static_cast<int>(data.length_));
@@ -438,24 +429,28 @@ void GpuMixing<T>::mix_data(const GpuMixingData<T>& data, T* result) const
     {
         return;
     }
-    const base_device::DEVICE_GPU* context = nullptr;
     if (data.size_ == 1)
     {
-        mixing::vector_copy_op<T, base_device::DEVICE_GPU>()(
-            context, result, data.device_slot(data.current_slot_), static_cast<int>(data.length_));
+        base_device::memory::synchronize_memory_op<T,
+                                                   base_device::DEVICE_GPU,
+                                                   base_device::DEVICE_GPU>()(
+            result,
+            data.data_ + data.current_slot_ * data.length_,
+            data.length_);
         return;
     }
-    mixing::gemv_op<T, base_device::DEVICE_GPU>()(
-        context,
+    const T one = static_cast<T>(1.0);
+    const T zero = static_cast<T>(0.0);
+    ModuleBase::gemv_op<T, base_device::DEVICE_GPU>()(
         'N',
         static_cast<int>(data.length_),
         data.capacity_,
-        static_cast<T>(1.0),
+        &one,
         data.data_,
         static_cast<int>(data.length_),
         this->impl_->device_coefficients,
         1,
-        static_cast<T>(0.0),
+        &zero,
         result,
         1);
 }
@@ -464,12 +459,6 @@ template <typename T>
 int GpuMixing<T>::history_capacity() const
 {
     return this->impl_->history_capacity;
-}
-
-template <typename T>
-const std::vector<double>& GpuMixing<T>::coefficients() const
-{
-    return this->impl_->coefficients;
 }
 
 template class GpuMixingData<double>;

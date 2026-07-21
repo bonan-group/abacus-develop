@@ -1,8 +1,6 @@
 #include "source_estate/module_charge/kernels/charge_mixing_op.h"
 #include <cuda_runtime.h>
 #include <thrust/complex.h>
-#include <thrust/device_ptr.h>
-#include <thrust/reduce.h>
 #include <base/macros/macros.h>
 #include "source_base/tool_quit.h"
 
@@ -115,49 +113,6 @@ __global__ void kerker_screen_kernel(
     for (int is = 0; is < nspin; ++is)
     {
         drhog[is * npw + ig] *= filter_g;
-    }
-}
-
-// CUDA kernel for inner product with 1/G^2 weight
-template <typename FPTYPE>
-__global__ void inner_product_hartree_kernel(
-    const thrust::complex<FPTYPE>* rhog1,
-    const thrust::complex<FPTYPE>* rhog2,
-    const FPTYPE* gg,
-    FPTYPE* partial_sums,
-    const int npw,
-    const int ig_gge0,
-    const FPTYPE tpiba2)
-{
-    extern __shared__ unsigned char shared_raw[];
-    FPTYPE* sdata = reinterpret_cast<FPTYPE*>(shared_raw);
-    int tid = threadIdx.x;
-    int ig = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Compute local contribution, skipping G=0
-    FPTYPE local_sum = 0.0;
-    if (ig < npw && ig != ig_gge0)
-    {
-        thrust::complex<FPTYPE> prod = thrust::conj(rhog1[ig]) * rhog2[ig];
-        local_sum = prod.real() / gg[ig] * tpiba2;
-    }
-    sdata[tid] = local_sum;
-    __syncthreads();
-
-    // Block reduction in shared memory
-    for (int s = blockDim.x / 2; s > 0; s >>= 1)
-    {
-        if (tid < s)
-        {
-            sdata[tid] += sdata[tid + s];
-        }
-        __syncthreads();
-    }
-
-    // Write block result
-    if (tid == 0)
-    {
-        partial_sums[blockIdx.x] = sdata[0];
     }
 }
 
@@ -489,38 +444,6 @@ void kerker_screen_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
     CHECK_CUDA_SYNC();
 }
 
-// Inner product operator implementation
-template <typename FPTYPE>
-FPTYPE inner_product_recip_hartree_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
-    const base_device::DEVICE_GPU* ctx,
-    const std::complex<FPTYPE>* rhog1,
-    const std::complex<FPTYPE>* rhog2,
-    const FPTYPE* gg,
-    const int npw,
-    const int ig_gge0,
-    const FPTYPE tpiba2,
-    FPTYPE* workspace)
-{
-    const cudaDeviceProp prop = current_device_properties();
-    const int threads = choose_reduction_threads(npw, 1, prop);
-    validate_reduction_launch(npw, 1, threads, prop, "inner_product_recip_hartree_op");
-    const int num_blocks = ceil_div(npw, threads);
-    const std::size_t shared_bytes = static_cast<std::size_t>(threads) * sizeof(FPTYPE);
-
-    // Launch kernel for partial sums
-    inner_product_hartree_kernel<<<num_blocks, threads, shared_bytes>>>(
-        reinterpret_cast<const thrust::complex<FPTYPE>*>(rhog1),
-        reinterpret_cast<const thrust::complex<FPTYPE>*>(rhog2),
-        gg, workspace, npw, ig_gge0, tpiba2);
-
-    CHECK_LAST_CUDA_ERROR("inner_product_hartree_kernel launch");
-    CHECK_CUDA_SYNC();
-
-    // Final reduction using thrust
-    thrust::device_ptr<FPTYPE> dev_ptr(workspace);
-    return thrust::reduce(dev_ptr, dev_ptr + num_blocks);
-}
-
 template <typename FPTYPE>
 void pack_spin_recip_op<FPTYPE, base_device::DEVICE_GPU>::operator()(
     const base_device::DEVICE_GPU* ctx,
@@ -740,8 +663,6 @@ void inner_product_recip_hartree_spin_batch_op<FPTYPE, base_device::DEVICE_GPU>:
 // Explicit template instantiations
 template struct kerker_screen_recip_op<float, base_device::DEVICE_GPU>;
 template struct kerker_screen_recip_op<double, base_device::DEVICE_GPU>;
-template struct inner_product_recip_hartree_op<float, base_device::DEVICE_GPU>;
-template struct inner_product_recip_hartree_op<double, base_device::DEVICE_GPU>;
 template struct pack_spin_recip_op<float, base_device::DEVICE_GPU>;
 template struct pack_spin_recip_op<double, base_device::DEVICE_GPU>;
 template struct unpack_spin_recip_op<float, base_device::DEVICE_GPU>;

@@ -486,7 +486,6 @@ list(APPEND device_srcs
   source_hsolver/kernels/bpcg_kernel_op.cpp
   source_estate/kernels/elecstate_op.cpp
   source_estate/module_charge/kernels/charge_mixing_op.cpp
-  source_base/module_mixing/kernels/mixing_op.cpp
 
   source_base/module_device/device.cpp
   source_base/module_device/device_helpers.cpp
@@ -523,7 +522,6 @@ if(USE_CUDA)
     source_hsolver/kernels/cuda/bpcg_kernel_op.cu
     source_estate/kernels/cuda/elecstate_op.cu
     source_estate/module_charge/kernels/cuda/charge_mixing_op.cu
-    source_base/module_mixing/kernels/cuda/mixing_op.cu
 
     source_base/module_device/cuda/memory_op.cu
     source_pw/module_pwdft/kernels/cuda/force_op.cu

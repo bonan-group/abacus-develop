@@ -2,10 +2,10 @@
 
 #if __CUDA
 
+#include "source_base/kernels/math_kernel_op.h"
 #include "source_base/timer.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_base/module_mixing/gpu_mixing.h"
-#include "source_base/module_mixing/kernels/mixing_op.h"
 #include "source_base/parallel_reduce.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "kernels/charge_mixing_op.h"
@@ -396,60 +396,63 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr, const bool include_magnetism)
                                 const int components,
                                 const bool use_magnetic_beta,
                                 std::function<void(std::complex<double>*)> screen) {
-        const base_device::DEVICE_GPU* ctx = nullptr;
         const int length = npw_in * components;
-        mixing::vector_subtract_op<std::complex<double>, base_device::DEVICE_GPU>()(
-            ctx, this->gpu_workspace_->plain_residual, data_out_d, data_in_d, length);
+        ModuleBase::vector_add_vector_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            length,
+            this->gpu_workspace_->plain_residual,
+            data_out_d,
+            1.0,
+            data_in_d,
+            -1.0);
         if (screen != nullptr)
         {
             screen(this->gpu_workspace_->plain_residual);
         }
         if (!use_magnetic_beta || components == 1)
         {
-            mixing::vector_axpy_op<std::complex<double>, base_device::DEVICE_GPU>()(
-                ctx,
+            ModuleBase::vector_add_vector_op<std::complex<double>, base_device::DEVICE_GPU>()(
+                length,
                 data_out_d,
                 data_in_d,
-                std::complex<double>(this->mixing_beta, 0.0),
+                1.0,
                 this->gpu_workspace_->plain_residual,
-                length);
+                this->mixing_beta);
             return;
         }
-        mixing::vector_axpy_op<std::complex<double>, base_device::DEVICE_GPU>()(
-            ctx,
+        ModuleBase::vector_add_vector_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            npw_in,
             data_out_d,
             data_in_d,
-            std::complex<double>(this->mixing_beta, 0.0),
+            1.0,
             this->gpu_workspace_->plain_residual,
-            npw_in);
-        mixing::vector_axpy_op<std::complex<double>, base_device::DEVICE_GPU>()(
-            ctx,
+            this->mixing_beta);
+        ModuleBase::vector_add_vector_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            (components - 1) * npw_in,
             data_out_d + npw_in,
             data_in_d + npw_in,
-            std::complex<double>(this->mixing_beta_mag, 0.0),
+            1.0,
             this->gpu_workspace_->plain_residual + npw_in,
-            (components - 1) * npw_in);
+            this->mixing_beta_mag);
     };
     auto rho_history_mix_gpu = [this, npw, rho_components](std::complex<double>* data_out_d,
                                                            const std::complex<double>* data_in_d,
                                                            const std::complex<double>* residual_d) {
-        const base_device::DEVICE_GPU* ctx = nullptr;
-        mixing::vector_axpy_op<std::complex<double>, base_device::DEVICE_GPU>()(
-            ctx,
+        ModuleBase::vector_add_vector_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            npw,
             data_out_d,
             data_in_d,
-            std::complex<double>(this->mixing_beta, 0.0),
+            1.0,
             residual_d,
-            npw);
+            this->mixing_beta);
         if (rho_components > 1)
         {
-            mixing::vector_axpy_op<std::complex<double>, base_device::DEVICE_GPU>()(
-                ctx,
+            ModuleBase::vector_add_vector_op<std::complex<double>, base_device::DEVICE_GPU>()(
+                (rho_components - 1) * npw,
                 data_out_d + npw,
                 data_in_d + npw,
-                std::complex<double>(this->mixing_beta_mag, 0.0),
+                1.0,
                 residual_d + npw,
-                (rho_components - 1) * npw);
+                this->mixing_beta_mag);
         }
     };
 

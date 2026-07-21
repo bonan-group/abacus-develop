@@ -32,36 +32,6 @@ void kerker_screen_recip_op<FPTYPE, base_device::DEVICE_CPU>::operator()(
 }
 
 template <typename FPTYPE>
-FPTYPE inner_product_recip_hartree_op<FPTYPE, base_device::DEVICE_CPU>::operator()(
-    const base_device::DEVICE_CPU* ctx,
-    const std::complex<FPTYPE>* rhog1,
-    const std::complex<FPTYPE>* rhog2,
-    const FPTYPE* gg,
-    const int npw,
-    const int ig_gge0,
-    const FPTYPE tpiba2,
-    FPTYPE* workspace)
-{
-    // Compute inner product with 1/G^2 weight:
-    // sum_G conj(rhog1[G]) * rhog2[G] / gg[G]
-    // This is the Hartree-like energy functional used in mixing algorithms
-    FPTYPE result = 0.0;
-#ifdef _OPENMP
-#pragma omp parallel for reduction(+:result)
-#endif
-    for (int ig = 0; ig < npw; ++ig)
-    {
-        // Skip G=0 (divergent term)
-        if (ig == ig_gge0) continue;
-
-        // Compute conj(rhog1) * rhog2 / gg
-        std::complex<FPTYPE> prod = std::conj(rhog1[ig]) * rhog2[ig];
-        result += prod.real() / gg[ig];
-    }
-    return result * tpiba2;
-}
-
-template <typename FPTYPE>
 void pack_spin_recip_op<FPTYPE, base_device::DEVICE_CPU>::operator()(
     const base_device::DEVICE_CPU* ctx,
     std::complex<FPTYPE>* packed,
@@ -126,8 +96,6 @@ void unpack_spin_recip_op<FPTYPE, base_device::DEVICE_CPU>::operator()(
 // Explicit template instantiations
 template struct kerker_screen_recip_op<float, base_device::DEVICE_CPU>;
 template struct kerker_screen_recip_op<double, base_device::DEVICE_CPU>;
-template struct inner_product_recip_hartree_op<float, base_device::DEVICE_CPU>;
-template struct inner_product_recip_hartree_op<double, base_device::DEVICE_CPU>;
 template struct pack_spin_recip_op<float, base_device::DEVICE_CPU>;
 template struct pack_spin_recip_op<double, base_device::DEVICE_CPU>;
 template struct unpack_spin_recip_op<float, base_device::DEVICE_CPU>;

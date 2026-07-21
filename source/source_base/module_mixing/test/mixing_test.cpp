@@ -8,7 +8,7 @@
 #include "../pulay_mixing.h"
 #if __UT_USE_CUDA
 #include "../gpu_mixing.h"
-#include "../kernels/mixing_op.h"
+#include "source_base/kernels/math_kernel_op.h"
 #include "source_base/module_device/device.h"
 #include "source_base/module_device/memory_op.h"
 #endif
@@ -395,21 +395,24 @@ TEST_F(Mixing_Test, OtherCover)
 #if __UT_USE_CUDA
 namespace
 {
-template <typename FPTYPE>
-double gpu_inner_product(const FPTYPE* a, const FPTYPE* b, const int length, FPTYPE* workspace)
+class ScopedGpuBlasHandle
 {
-    return mixing::inner_product_op<FPTYPE, base_device::DEVICE_GPU>()(
-        nullptr, a, b, length, workspace);
-}
+  public:
+    ScopedGpuBlasHandle()
+    {
+        ModuleBase::createGpuBlasHandle();
+    }
 
-template <>
-double gpu_inner_product<std::complex<double>>(const std::complex<double>* a,
-                                               const std::complex<double>* b,
-                                               const int length,
-                                               std::complex<double>* workspace)
+    ~ScopedGpuBlasHandle()
+    {
+        ModuleBase::destoryBLAShandle();
+    }
+};
+
+template <typename FPTYPE>
+double gpu_inner_product(const FPTYPE* a, const FPTYPE* b, const int length)
 {
-    return mixing::inner_product_op<std::complex<double>, base_device::DEVICE_GPU>()(
-        nullptr, a, b, length, workspace).real();
+    return ModuleBase::dot_real_op<FPTYPE, base_device::DEVICE_GPU>()(length, a, b, false);
 }
 
 template <typename FPTYPE>
@@ -454,6 +457,7 @@ void expect_near_value<std::complex<double>>(const std::complex<double>& actual,
 template <typename MixerCpu, typename FPTYPE>
 void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm)
 {
+    ScopedGpuBlasHandle blas_handle;
     constexpr int length = 4;
     constexpr int split = 2;
     constexpr int mixing_ndim = 3;
@@ -478,30 +482,33 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
 
     MixerCpu cpu_mixer(mixing_ndim, mixing_beta);
     Base_Mixing::Mixing_Data cpu_data;
+    Base_Mixing::Mixing_Data cpu_tau_data;
     cpu_mixer.init_mixing_data(cpu_data, length, sizeof(FPTYPE));
+    cpu_mixer.init_mixing_data(cpu_tau_data, length, sizeof(FPTYPE));
 
     Base_Mixing::GpuMixing<FPTYPE> gpu_mixer(algorithm, mixing_ndim, mixing_beta);
-    Base_Mixing::GpuMixingData<FPTYPE> gpu_data(gpu_mixer.history_capacity(), length);
-    Base_Mixing::GpuMixingData<FPTYPE> tau_data(gpu_mixer.history_capacity(), length);
+    const int history_capacity = algorithm == Base_Mixing::MixingAlgorithm::Broyden
+                                     ? mixing_ndim + 1
+                                     : mixing_ndim;
+    Base_Mixing::GpuMixingData<FPTYPE> gpu_data(history_capacity, length);
+    Base_Mixing::GpuMixingData<FPTYPE> tau_data(history_capacity, length);
     gpu_mixer.reset(length);
 
     FPTYPE* input_d = nullptr;
     FPTYPE* output_d = nullptr;
     FPTYPE* mixed_d = nullptr;
-    const int max_blocks = (length + 255) / 256;
-    FPTYPE* workspace_d = nullptr;
     base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(input_d, length, "mixing_test_in");
     base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(output_d, length, "mixing_test_out");
     base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(mixed_d, length, "mixing_test_mix");
-    base_device::memory::resize_memory_op<FPTYPE, base_device::DEVICE_GPU>()(
-        workspace_d, 2 * max_blocks, "mixing_test_workspace");
 
     std::vector<FPTYPE> cpu_mixed(length);
+    std::vector<FPTYPE> cpu_tau_mixed(length);
     std::vector<FPTYPE> gpu_mixed(length);
     std::vector<FPTYPE> reference_mixed(length);
-    std::vector<FPTYPE> raw_slot(length);
-    std::vector<FPTYPE> raw_expected(length);
+    std::vector<FPTYPE> tau_reference(length);
     std::vector<std::vector<FPTYPE>> legacy_pulay_history(
+        mixing_ndim, std::vector<FPTYPE>(length));
+    std::vector<std::vector<FPTYPE>> legacy_pulay_tau_history(
         mixing_ndim, std::vector<FPTYPE>(length));
     std::vector<std::vector<FPTYPE>> legacy_pulay_residuals(
         mixing_ndim, std::vector<FPTYPE>(length));
@@ -519,17 +526,22 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
             out[i] = in[i] + static_cast<FPTYPE>(mixing_beta_secondary) * residual[i];
         }
     };
-    auto gpu_mix = [](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
-        const base_device::DEVICE_GPU* ctx = nullptr;
-        mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx, out, in, static_cast<FPTYPE>(mixing_beta), residual, split);
-        mixing::vector_axpy_op<FPTYPE, base_device::DEVICE_GPU>()(
-            ctx,
+    auto gpu_mix = [=](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
+        ModuleBase::vector_add_vector_op<FPTYPE, base_device::DEVICE_GPU>()(
+            split, out, in, 1.0, residual, mixing_beta);
+        ModuleBase::vector_add_vector_op<FPTYPE, base_device::DEVICE_GPU>()(
+            length - split,
             out + split,
             in + split,
-            static_cast<FPTYPE>(mixing_beta_secondary),
+            1.0,
             residual + split,
-            length - split);
+            mixing_beta_secondary);
+    };
+    auto cpu_tau_mix = [=](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
+        for (int i = 0; i < length; ++i)
+        {
+            out[i] = in[i] + static_cast<FPTYPE>(mixing_beta) * residual[i];
+        }
     };
     for (std::size_t step = 0; step < inputs.size(); ++step)
     {
@@ -545,6 +557,9 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
             for (int i = 0; i < length; ++i)
             {
                 legacy_pulay_residuals[legacy_pulay_slot][i] = outputs[step][i] - inputs[step][i];
+                legacy_pulay_tau_history[legacy_pulay_slot][i]
+                    = outputs[step][i]
+                      + static_cast<FPTYPE>(mixing_beta) * (inputs[step][i] - outputs[step][i]);
                 if (i < split)
                 {
                     legacy_pulay_history[legacy_pulay_slot][i]
@@ -625,28 +640,28 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
         int rhs_callback_count = 0;
         gpu_mixer.update_coefficients(
             gpu_data,
-            [workspace_d, &gram_callback_count](const FPTYPE* vectors,
-                                                const int nvec,
-                                                const int row,
-                                                ModuleBase::matrix& gram) {
+            [&gram_callback_count](const FPTYPE* vectors,
+                                   const int nvec,
+                                   const int row,
+                                   ModuleBase::matrix& gram) {
                 ++gram_callback_count;
                 for (int i = 0; i < nvec; ++i)
                 {
                     const double value = gpu_inner_product(
-                        vectors + row * length, vectors + i * length, length, workspace_d);
+                        vectors + row * length, vectors + i * length, length);
                     gram(row, i) = value;
                     gram(i, row) = value;
                 }
             },
-            [workspace_d, &rhs_callback_count](const FPTYPE* vectors,
-                                               const FPTYPE* rhs,
-                                               const int nvec,
-                                               std::vector<double>& values) {
+            [&rhs_callback_count](const FPTYPE* vectors,
+                                  const FPTYPE* rhs,
+                                  const int nvec,
+                                  std::vector<double>& values) {
                 ++rhs_callback_count;
                 values.resize(nvec);
                 for (int i = 0; i < nvec; ++i)
                 {
-                    values[i] = gpu_inner_product(vectors + i * length, rhs, length, workspace_d);
+                    values[i] = gpu_inner_product(vectors + i * length, rhs, length);
                 }
             });
         gpu_mixer.mix_data(gpu_data, mixed_d);
@@ -661,55 +676,47 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
         EXPECT_EQ(gram_callback_count, step == 0 ? 0 : 1);
         EXPECT_EQ(rhs_callback_count, algorithm == Base_Mixing::MixingAlgorithm::Broyden && step > 0 ? 1 : 0);
 
-        std::fill(raw_expected.begin(), raw_expected.end(), FPTYPE(0));
-        const std::vector<double>& coefficients = gpu_mixer.coefficients();
-        ASSERT_EQ(coefficients.size(), static_cast<std::size_t>(gpu_data.capacity()));
-        for (int slot = 0; slot < gpu_data.capacity(); ++slot)
-        {
-            base_device::memory::synchronize_memory_op<FPTYPE,
-                                                       base_device::DEVICE_CPU,
-                                                       base_device::DEVICE_GPU>()(
-                raw_slot.data(), gpu_data.device_slot(slot), length);
-            for (int i = 0; i < length; ++i)
-            {
-                raw_expected[i] += static_cast<FPTYPE>(coefficients[slot]) * raw_slot[i];
-            }
-        }
-        for (int i = 0; i < length; ++i)
-        {
-            expect_near_value(gpu_mixed[i], raw_expected[i], 1e-8);
-        }
-
-        const std::vector<double> rho_coefficients = coefficients;
         gpu_mixer.push_data(tau_data, output_d, input_d, nullptr, nullptr, false);
         gpu_mixer.mix_data(tau_data, mixed_d);
-        EXPECT_EQ(gpu_mixer.coefficients(), rho_coefficients);
         base_device::memory::synchronize_memory_op<FPTYPE,
                                                    base_device::DEVICE_CPU,
                                                    base_device::DEVICE_GPU>()(
             gpu_mixed.data(), mixed_d, length);
-        std::fill(raw_expected.begin(), raw_expected.end(), FPTYPE(0));
-        for (int slot = 0; slot < tau_data.capacity(); ++slot)
+
+        if (algorithm == Base_Mixing::MixingAlgorithm::Pulay)
         {
-            base_device::memory::synchronize_memory_op<FPTYPE,
-                                                       base_device::DEVICE_CPU,
-                                                       base_device::DEVICE_GPU>()(
-                raw_slot.data(), tau_data.device_slot(slot), length);
-            for (int i = 0; i < length; ++i)
+            std::fill(tau_reference.begin(), tau_reference.end(), FPTYPE(0));
+            for (int slot = 0; slot < mixing_ndim; ++slot)
             {
-                raw_expected[i] += static_cast<FPTYPE>(rho_coefficients[slot]) * raw_slot[i];
+                for (int i = 0; i < length; ++i)
+                {
+                    tau_reference[i]
+                        += static_cast<FPTYPE>(legacy_pulay_coefficients[slot])
+                           * legacy_pulay_tau_history[slot][i];
+                }
             }
+        }
+        else
+        {
+            cpu_mixer.push_data(
+                cpu_tau_data,
+                outputs[step].data(),
+                inputs[step].data(),
+                nullptr,
+                cpu_tau_mix,
+                false);
+            cpu_mixer.mix_data(cpu_tau_data, cpu_tau_mixed.data());
+            tau_reference = cpu_tau_mixed;
         }
         for (int i = 0; i < length; ++i)
         {
-            expect_near_value(gpu_mixed[i], raw_expected[i], 1e-8);
+            expect_near_value(gpu_mixed[i], tau_reference[i], 1e-8);
         }
     }
 
     base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(input_d);
     base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(output_d);
     base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(mixed_d);
-    base_device::memory::delete_memory_op<FPTYPE, base_device::DEVICE_GPU>()(workspace_d);
 }
 } // namespace
 
