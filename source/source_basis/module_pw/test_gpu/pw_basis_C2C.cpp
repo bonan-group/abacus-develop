@@ -200,7 +200,6 @@ TYPED_TEST(PW_BASIS_K_GPU_TEST, Mixing)
     ModulePW::PW_Basis pwtest;
     pwtest.set_device("gpu");
     pwtest.set_precision("mixing");
-    pwtest.fft_bundle.setfft("gpu", "mixing");
     this->init(pwtest);
     int startiz = pwtest.startz_current;
     const int nx = pwtest.nx;
@@ -230,14 +229,13 @@ TYPED_TEST(PW_BASIS_K_GPU_TEST, FloatDouble)
     using Device = typename TestFixture::Device;
     ModulePW::PW_Basis pwtest;
     pwtest.set_device("gpu");
-    pwtest.set_precision("mixing");
     if (typeid(T) == typeid(float))
     {
-        pwtest.fft_bundle.setfft("gpu", "single");
+        pwtest.set_precision("single");
     }
     else if (typeid(T) == typeid(double))
     {
-        pwtest.fft_bundle.setfft("gpu", "double");
+        pwtest.set_precision("double");
     }
     else
     {
