@@ -34,6 +34,13 @@ AddTest(
 )
 if(USE_CUDA)
   target_link_libraries(MODULE_PW_vnl_chunk_policy PRIVATE CUDA::cudart)
+  AddTest(
+    TARGET MODULE_PW_vnl_qgm_cache
+    LIBS parameter base device planewave
+    SOURCES vnl_qgm_cache_test.cpp ../vnl_chunk_policy.cpp ../vnl_pw.cpp ../vnl_qgm_cache.cpp
+            ../soc.cpp ../structure_factor.cpp ../structure_factor_k.cpp ../parallel_grid.cpp
+  )
+  target_link_libraries(MODULE_PW_vnl_qgm_cache PRIVATE CUDA::cudart)
 endif()
 
 AddTest(

@@ -181,7 +181,6 @@ class pseudopot_cell_vnl
                       const double* qnorm,
                       const ModuleBase::matrix ylm,
                       std::complex<double>* qg) const;
-
     /**
      * @brief Compute one Cartesian derivative of a packed USPP Q function.
      *
@@ -283,6 +282,43 @@ class pseudopot_cell_vnl
     double omega_old = 0;
     bool use_gpu_ = false;
     VnlChunkPolicy chunk_policy_ = {false, 0, 64};
+
+    void prepare_qgm_cache(UnitCell& cell,
+                           const ModulePW::PW_Basis* rho_basis,
+                           bool prepare_stress,
+                           int nqxq,
+                           double dq);
+    void prepare_qgm_cache_cpu(UnitCell& cell,
+                               const ModulePW::PW_Basis* rho_basis,
+                               int nqxq,
+                               double dq);
+    void prepare_qgm_cache_gpu(UnitCell& cell,
+                               const ModulePW::PW_Basis* rho_basis,
+                               bool prepare_stress,
+                               int nqxq,
+                               double dq);
+    void radial_fft_q_explicit(const int ng,
+                               const int ih,
+                               const int jh,
+                               const int itype,
+                               const double* qnorm,
+                               const ModuleBase::matrix ylm,
+                               int nqxq,
+                               double dq,
+                               std::complex<double>* qg) const;
+    void radial_fft_dq_explicit(const int ng,
+                                const int ih,
+                                const int jh,
+                                const int itype,
+                                const int ipol,
+                                const ModuleBase::Vector3<double>* g,
+                                const double* qnorm,
+                                double tpiba,
+                                const ModuleBase::matrix& ylm,
+                                const ModuleBase::matrix& dylm,
+                                int nqxq,
+                                double dq,
+                                std::complex<double>* dqg) const;
 
     /**
      * @brief Compute interpolation table qrad

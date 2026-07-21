@@ -39,6 +39,7 @@ list(APPEND objects
     vl_pw.cpp
     vnl_chunk_policy.cpp
     vnl_pw.cpp
+    vnl_qgm_cache.cpp
     vnl_pw_grad.cpp
     structure_factor.cpp
     structure_factor_k.cpp

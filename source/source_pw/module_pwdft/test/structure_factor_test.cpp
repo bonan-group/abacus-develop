@@ -3,6 +3,7 @@
 #include <string>
 #include <cmath>
 #include <complex>
+#include "source_cell/setup_nonlocal.h"
 #include "source_cell/unitcell.h"
 #include "source_estate/module_dm/test/prepare_unitcell.h"
 #define private public
@@ -36,6 +37,38 @@ Magnetism::Magnetism()
 Magnetism::~Magnetism()
 {
 }
+
+namespace
+{
+
+Parameter& mutable_test_parameter()
+{
+    return PARAM;
+}
+
+class ScopedStructureFactorParameterState
+{
+  public:
+    ScopedStructureFactorParameterState()
+        : parameter(mutable_test_parameter()),
+          device(this->parameter.input.device),
+          has_float_data(this->parameter.sys.has_float_data)
+    {
+    }
+
+    ~ScopedStructureFactorParameterState()
+    {
+        this->parameter.input.device = this->device;
+        this->parameter.sys.has_float_data = this->has_float_data;
+    }
+
+  private:
+    Parameter& parameter;
+    std::string device;
+    bool has_float_data;
+};
+
+} // namespace
 
 class StructureFactorTest : public testing::Test
 {
@@ -98,6 +131,7 @@ TEST_F(StructureFactorTest, setup_structure_factor_double)
 
 TEST_F(StructureFactorTest, setup_structure_factor_float)
 {
+    ScopedStructureFactorParameterState parameter_state;
     PARAM.sys.has_float_data = true;
     rho_basis->npw = 10;
     SF.setup(ucell,*pgrid,rho_basis);  
@@ -120,6 +154,28 @@ TEST_F(StructureFactorTest, setup_structure_factor_float)
        EXPECT_EQ(SF.c_eigts3[i].imag(),0);
     }
 }
+
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+TEST_F(StructureFactorTest, setup_keeps_typed_device_eigts_alive_until_destruction)
+{
+    ScopedStructureFactorParameterState parameter_state;
+    Parameter& parameter = mutable_test_parameter();
+    parameter.input.device = "gpu";
+    parameter.sys.has_float_data = true;
+
+    {
+        Structure_Factor gpu_sf;
+        gpu_sf.setup(ucell, *pgrid, rho_basis);
+
+        EXPECT_NE(gpu_sf.get_eigts1_data<double>(), nullptr);
+        EXPECT_NE(gpu_sf.get_eigts2_data<double>(), nullptr);
+        EXPECT_NE(gpu_sf.get_eigts3_data<double>(), nullptr);
+        EXPECT_NE(gpu_sf.get_eigts1_data<float>(), nullptr);
+        EXPECT_NE(gpu_sf.get_eigts2_data<float>(), nullptr);
+        EXPECT_NE(gpu_sf.get_eigts3_data<float>(), nullptr);
+    }
+}
+#endif
 
 int main()
 {
