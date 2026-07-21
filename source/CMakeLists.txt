@@ -524,7 +524,6 @@ if(USE_CUDA)
     source_estate/module_charge/kernels/cuda/charge_mixing_op.cu
     source_base/module_mixing/kernels/cuda/mixing_op.cu
 
-    # source_psi/kernels/cuda/memory_op.cu
     source_base/module_device/cuda/memory_op.cu
     source_pw/module_pwdft/kernels/cuda/force_op.cu
     source_pw/module_pwdft/kernels/cuda/stress_op.cu
