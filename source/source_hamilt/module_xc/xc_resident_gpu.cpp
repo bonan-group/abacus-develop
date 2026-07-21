@@ -13,22 +13,6 @@
 namespace XC_Functional_GPU
 {
 
-XcGpuRequest::XcGpuRequest()
-    : device("cpu"),
-      nrxx(0),
-      nspin(0),
-      use_libxc(false),
-      has_kinetic_energy_density(false),
-      functional_ids(nullptr),
-      charge(nullptr),
-      rho_basis(nullptr),
-      unit_cell(nullptr),
-      host_potential(nullptr),
-      device_potential(nullptr),
-      potential_size(0)
-{
-}
-
 namespace
 {
 

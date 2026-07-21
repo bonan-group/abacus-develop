@@ -25,20 +25,18 @@ namespace XC_Functional_GPU
 
 struct XcGpuRequest
 {
-    XcGpuRequest();
-
-    std::string device;
-    int nrxx;
-    int nspin;
-    bool use_libxc;
-    bool has_kinetic_energy_density;
-    const std::vector<int>* functional_ids;
-    const Charge* charge;
-    ModulePW::PW_Basis* rho_basis;
-    const UnitCell* unit_cell;
-    ModuleBase::matrix* host_potential;
-    double* device_potential;
-    std::size_t potential_size;
+    std::string device = "cpu";
+    int nrxx = 0;
+    int nspin = 0;
+    bool use_libxc = false;
+    bool has_kinetic_energy_density = false;
+    const std::vector<int>* functional_ids = nullptr;
+    const Charge* charge = nullptr;
+    ModulePW::PW_Basis* rho_basis = nullptr;
+    const UnitCell* unit_cell = nullptr;
+    ModuleBase::matrix* host_potential = nullptr;
+    double* device_potential = nullptr;
+    std::size_t potential_size = 0;
 };
 
 struct XcGpuResult
