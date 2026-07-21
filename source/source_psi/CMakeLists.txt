@@ -19,6 +19,7 @@ add_library(
   psi_init_random.cpp
   psi_init_file.cpp
   psi_init_atomic.cpp
+  psi_init_atomic_device.cpp
   psi_init_atomic_random.cpp
   psi_init_nao.cpp
   psi_init_nao_random.cpp

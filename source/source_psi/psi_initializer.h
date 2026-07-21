@@ -87,11 +87,6 @@ class psi_initializer
     {
         return this->nbands_complem_;
     }
-    double mixing_coef() const
-    {
-        return this->mixing_coef_;
-    }
-
     template <typename U>
     typename std::enable_if<std::is_same<U, float>::value, U>::type cast_to_T(const std::complex<double> in)
     {

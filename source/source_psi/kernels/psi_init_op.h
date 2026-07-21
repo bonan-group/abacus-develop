@@ -9,6 +9,22 @@
 namespace psi
 {
 
+template <typename Real>
+struct AtomicInitTableView
+{
+    int total_lm;
+    int nchi_max;
+    int nqx;
+    Real dq;
+    Real tpiba;
+    const Real* table;
+    const int* iw2iat;
+    const int* iw2it;
+    const int* iw2ic;
+    const int* iw2lm;
+    const int* iw2l;
+};
+
 template <typename T, typename Device>
 struct init_random_op
 {
@@ -50,20 +66,10 @@ struct init_atomic_op
                     const int natomwfc,
                     const int npwk,
                     const int npwk_max,
-                    const int total_lm,
-                    const int nchi_max,
-                    const int nqx,
-                    const Real dq,
-                    const Real tpiba,
                     const Real* gk,
                     const Real* ylm,
                     const T* sk,
-                    const Real* table,
-                    const int* iw2iat,
-                    const int* iw2it,
-                    const int* iw2ic,
-                    const int* iw2lm,
-                    const int* iw2l);
+                    AtomicInitTableView<Real> table_view);
 };
 
 template <typename T, typename Device>
@@ -129,20 +135,10 @@ struct init_atomic_op<T, base_device::DEVICE_GPU>
                     const int natomwfc,
                     const int npwk,
                     const int npwk_max,
-                    const int total_lm,
-                    const int nchi_max,
-                    const int nqx,
-                    const Real dq,
-                    const Real tpiba,
                     const Real* gk,
                     const Real* ylm,
                     const T* sk,
-                    const Real* table,
-                    const int* iw2iat,
-                    const int* iw2it,
-                    const int* iw2ic,
-                    const int* iw2lm,
-                    const int* iw2l);
+                    AtomicInitTableView<Real> table_view);
 };
 
 template <typename T>

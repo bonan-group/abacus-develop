@@ -3,12 +3,21 @@
 #include "source_base/realarray.h"
 #include "psi_initializer.h"
 
+namespace psi
+{
+template <typename T>
+class AtomicGpuInitializer;
+}
+
 /*
 Psi (planewave based wavefunction) initializer: atomic
 */
 template <typename T>
 class psi_init_atomic : public psi_initializer<T>
 {
+    template <typename U>
+    friend class psi::AtomicGpuInitializer;
+
   private:
     using Real = typename GetTypeReal<T>::type;
 
@@ -29,15 +38,6 @@ class psi_init_atomic : public psi_initializer<T>
                             const int& = 0) override;            //< MPI rank
     virtual void tabulate() override;
     virtual void init_psig(T* psig, const int& ik) override;
-
-    const ModuleBase::realArray& overlap_table() const
-    {
-        return this->ovlp_pswfcjlq_;
-    }
-    double table_interval() const
-    {
-        return this->table_interval_;
-    }
 
   protected:
     // allocate memory for overlap table

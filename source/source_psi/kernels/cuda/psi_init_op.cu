@@ -170,20 +170,10 @@ __global__ void init_atomic_kernel(thrust::complex<Real>* psi,
                                    const int natomwfc,
                                    const int npwk,
                                    const int npwk_max,
-                                   const int total_lm,
-                                   const int nchi_max,
-                                   const int nqx,
-                                   const Real dq,
-                                   const Real tpiba,
                                    const Real* gk,
                                    const Real* ylm,
                                    const thrust::complex<Real>* sk,
-                                   const Real* table,
-                                   const int* iw2iat,
-                                   const int* iw2it,
-                                   const int* iw2ic,
-                                   const int* iw2lm,
-                                   const int* iw2l)
+                                   const AtomicInitTableView<Real> table_view)
 {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int total = natomwfc * npwk_max;
@@ -199,8 +189,8 @@ __global__ void init_atomic_kernel(thrust::complex<Real>* psi,
         return;
     }
 
-    const int lm = iw2lm[iw];
-    if (lm < 0 || lm >= total_lm)
+    const int lm = table_view.iw2lm[iw];
+    if (lm < 0 || lm >= table_view.total_lm)
     {
         psi[idx] = thrust::complex<Real>(0.0, 0.0);
         return;
@@ -208,11 +198,13 @@ __global__ void init_atomic_kernel(thrust::complex<Real>* psi,
     const Real gx = gk[ig * 3];
     const Real gy = gk[ig * 3 + 1];
     const Real gz = gk[ig * 3 + 2];
-    const Real q = sqrt(gx * gx + gy * gy + gz * gz) * tpiba;
-    const int table_offset = (iw2it[iw] * nchi_max + iw2ic[iw]) * nqx;
-    const Real radial = interpolate(table + table_offset, nqx, dq, q);
+    const Real q = sqrt(gx * gx + gy * gy + gz * gz) * table_view.tpiba;
+    const int table_offset
+        = (table_view.iw2it[iw] * table_view.nchi_max + table_view.iw2ic[iw]) * table_view.nqx;
+    const Real radial = interpolate(table_view.table + table_offset, table_view.nqx, table_view.dq, q);
     const Real angular = ylm[lm * npwk + ig];
-    psi[idx] = minus_i_to_l<Real>(iw2l[iw]) * sk[iw2iat[iw] * npwk + ig] * (angular * radial);
+    psi[idx] = minus_i_to_l<Real>(table_view.iw2l[iw]) * sk[table_view.iw2iat[iw] * npwk + ig]
+               * (angular * radial);
 }
 
 template <typename Real>
@@ -310,20 +302,10 @@ void launch_init_atomic(std::complex<Real>* psi,
                         const int natomwfc,
                         const int npwk,
                         const int npwk_max,
-                        const int total_lm,
-                        const int nchi_max,
-                        const int nqx,
-                        const Real dq,
-                        const Real tpiba,
                         const Real* gk,
                         const Real* ylm,
                         const std::complex<Real>* sk,
-                        const Real* table,
-                        const int* iw2iat,
-                        const int* iw2it,
-                        const int* iw2ic,
-                        const int* iw2lm,
-                        const int* iw2l)
+                        const AtomicInitTableView<Real> table_view)
 {
     const int total = natomwfc * npwk_max;
     const int blocks = (total + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
@@ -331,20 +313,10 @@ void launch_init_atomic(std::complex<Real>* psi,
                                                             natomwfc,
                                                             npwk,
                                                             npwk_max,
-                                                            total_lm,
-                                                            nchi_max,
-                                                            nqx,
-                                                            dq,
-                                                            tpiba,
                                                             gk,
                                                             ylm,
                                                             reinterpret_cast<const thrust::complex<Real>*>(sk),
-                                                            table,
-                                                            iw2iat,
-                                                            iw2it,
-                                                            iw2ic,
-                                                            iw2lm,
-                                                            iw2l);
+                                                            table_view);
     CHECK_CUDA_SYNC();
 }
 
@@ -423,39 +395,12 @@ void init_atomic_op<T, base_device::DEVICE_GPU>::operator()(const base_device::D
                                                             const int natomwfc,
                                                             const int npwk,
                                                             const int npwk_max,
-                                                            const int total_lm,
-                                                            const int nchi_max,
-                                                            const int nqx,
-                                                            const Real dq,
-                                                            const Real tpiba,
                                                             const Real* gk,
                                                             const Real* ylm,
                                                             const T* sk,
-                                                            const Real* table,
-                                                            const int* iw2iat,
-                                                            const int* iw2it,
-                                                            const int* iw2ic,
-                                                            const int* iw2lm,
-                                                            const int* iw2l)
+                                                            const AtomicInitTableView<Real> table_view)
 {
-    launch_init_atomic(psi,
-                       natomwfc,
-                       npwk,
-                       npwk_max,
-                       total_lm,
-                       nchi_max,
-                       nqx,
-                       dq,
-                       tpiba,
-                       gk,
-                       ylm,
-                       sk,
-                       table,
-                       iw2iat,
-                       iw2it,
-                       iw2ic,
-                       iw2lm,
-                       iw2l);
+    launch_init_atomic(psi, natomwfc, npwk, npwk_max, gk, ylm, sk, table_view);
 }
 
 template <typename T>
