@@ -15,6 +15,7 @@
 #include "source_io/module_parameter/parameter.h"
 // mock functions for testing
 int XC_Functional::func_type = 1;
+bool XC_Functional::ked_flag = false;
 namespace elecstate
 {
 void Potential::init_pot(Charge const*)
@@ -111,6 +112,26 @@ std::complex<double>* pseudopot_cell_vnl::get_vkb_data<double>() const
     return nullptr;
 }
 template <>
+std::complex<float>* pseudopot_cell_vnl::get_qgm_data<float>() const
+{
+    return nullptr;
+}
+template <>
+std::complex<double>* pseudopot_cell_vnl::get_qgm_data<double>() const
+{
+    return nullptr;
+}
+template <>
+std::complex<float>* pseudopot_cell_vnl::get_qgm_phase_data<float>() const
+{
+    return nullptr;
+}
+template <>
+std::complex<double>* pseudopot_cell_vnl::get_qgm_phase_data<double>() const
+{
+    return nullptr;
+}
+template <>
 void pseudopot_cell_vnl::getvnl<float, base_device::DEVICE_CPU>(base_device::DEVICE_CPU*,
                                                                 const UnitCell&,
                                                                 int const&,
@@ -143,13 +164,24 @@ void Charge::init_rho(const UnitCell&,
                       const void*)
 {
 }
-void Charge::set_rhopw(ModulePW::PW_Basis*)
+void Charge::set_rhopw(ModulePW::PW_Basis* rhopw_in)
 {
+    rhopw = rhopw_in;
 }
 void Charge::renormalize_rho()
 {
 }
 void Charge::check_rho()
+{
+}
+bool Charge::kin_density() const
+{
+    return XC_Functional::get_ked_flag();
+}
+void Charge::sync_rho_to_device() const
+{
+}
+void Charge::sync_kin_r_to_device() const
 {
 }
 
@@ -172,6 +204,7 @@ void Set_GlobalV_Default()
     GlobalV::KPAR = 1;
     GlobalV::NPROC_IN_POOL = 1;
     PARAM.sys.use_uspp = false;
+    XC_Functional::ked_flag = false;
 }
 
 /************************************************
@@ -199,7 +232,6 @@ class ElecStatePWTest : public ::testing::Test
     K_Vectors* klist = nullptr;
     UnitCell* ucell = nullptr;
     pseudopot_cell_vnl* ppcell = nullptr;
-    ModulePW::PW_Basis* rhodpw = nullptr;
     ModulePW::PW_Basis* rhopw = nullptr;
     ModulePW::PW_Basis_Big* bigpw = nullptr;
     void SetUp() override
@@ -213,8 +245,8 @@ class ElecStatePWTest : public ::testing::Test
         ucell->omega = 500.0;
         ucell->tpiba = 2.0;
         ppcell = new pseudopot_cell_vnl;
-        rhodpw = new ModulePW::PW_Basis;
         rhopw = new ModulePW::PW_Basis;
+        chg->set_rhopw(rhopw);
         bigpw = new ModulePW::PW_Basis_Big;
     }
 
@@ -225,7 +257,6 @@ class ElecStatePWTest : public ::testing::Test
         delete klist;
         delete ucell;
         delete ppcell;
-        delete rhodpw;
         delete rhopw;
         if (elecstate_pw_d != nullptr)
         {
@@ -270,7 +301,7 @@ TEST_F(ElecStatePWTest, ConstructorSingle)
 
 TEST_F(ElecStatePWTest, InitRhoDataDouble)
 {
-    XC_Functional::func_type = 3;
+    XC_Functional::ked_flag = true;
     chg->nrxx = 1000;
     elecstate_pw_d = new elecstate::ElecStatePW<std::complex<double>, base_device::DEVICE_CPU>(wfcpw,
                                                                                                chg,
@@ -288,7 +319,7 @@ TEST_F(ElecStatePWTest, InitRhoDataDouble)
 TEST_F(ElecStatePWTest, InitRhoDataSingle)
 {
     PARAM.input.precision = "single";
-    XC_Functional::func_type = 3;
+    XC_Functional::ked_flag = true;
     chg->nspin = PARAM.input.nspin;
     chg->nrxx = 1000;
     elecstate_pw_s = new elecstate::ElecStatePW<std::complex<float>, base_device::DEVICE_CPU>(wfcpw,
