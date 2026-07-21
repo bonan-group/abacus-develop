@@ -22,16 +22,6 @@ template<class T> class Nonlocal : public T {};
 
 #endif
 
-template<typename Device>
-inline bool use_chunked_vnl(const int nkb, const int npwx, const size_t element_size)
-{
-    if (!std::is_same<Device, base_device::DEVICE_GPU>::value)
-    {
-        return false;
-    }
-    return vnl_chunking_enabled(nkb, npwx, element_size);
-}
-
 template<typename T, typename Device>
 class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
 {
@@ -84,7 +74,7 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
                      const int ngk_ik,
                      const bool is_first_node) const;
 
-    int calculate_optimal_chunk_size(int npw, int nkb, int nbands) const;
+    int calculate_optimal_chunk_size(int nkb) const;
 
     void ensure_chunk_buffer(int chunk_nkb, int npw) const;
     void materialize_atom_chunk(int npw, int atom_start, int atom_end, int chunk_nkb) const;

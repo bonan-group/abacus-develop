@@ -8,105 +8,15 @@
 #include "source_cell/unitcell.h"
 #include "source_pw/module_pwdft/soc.h"
 #include "source_pw/module_pwdft/structure_factor.h"
+#include "source_pw/module_pwdft/vnl_chunk_policy.h"
 #include "source_psi/psi.h"
-#include <algorithm>
-#include <cstdlib>
-#include <string>
-#if defined(__CUDA) || defined(__UT_USE_CUDA)
-#include <cuda_runtime.h>
-#endif
 #ifdef __LCAO
 #include "source_basis/module_ao/ORB_gaunt_table.h"
 #endif
 
-inline int get_chunked_vnl_override()
-{
-    const char* env = std::getenv("ABACUS_VNL_CHUNKED");
-    if (env == nullptr)
-    {
-        return -1;
-    }
-    return std::string(env) == "1" ? 1 : 0;
-}
-
-inline int get_vnl_chunk_size_override()
-{
-    const char* env = std::getenv("ABACUS_VNL_CHUNK_SIZE");
-    return env == nullptr ? 0 : std::max(0, std::atoi(env));
-}
-
-inline size_t get_vnl_chunk_memory_budget_override()
-{
-    const char* env = std::getenv("ABACUS_VNL_CHUNK_BUDGET_MB");
-    if (env == nullptr)
-    {
-        return 0;
-    }
-    const long budget_mb = std::atol(env);
-    return budget_mb > 0 ? static_cast<size_t>(budget_mb) * 1024ULL * 1024ULL : 0;
-}
-
-inline size_t vnl_chunking_memory_budget_bytes()
-{
-    const size_t override_budget = get_vnl_chunk_memory_budget_override();
-    if (override_budget > 0)
-    {
-        return override_budget;
-    }
-
-    const size_t gib = 1024ULL * 1024ULL * 1024ULL;
-#if defined(__CUDA) || defined(__UT_USE_CUDA)
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && free_bytes > 0)
-    {
-        return std::max<size_t>(gib, free_bytes / 2);
-    }
-#endif
-    return 4ULL * gib;
-}
-
-inline bool vnl_chunking_enabled(const int nkb, const int npwx, const size_t element_size)
-{
-#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
-    return false;
-#else
-    const int override_val = get_chunked_vnl_override();
-    if (override_val == 1)
-    {
-        return true;
-    }
-    if (override_val == 0)
-    {
-        return false;
-    }
-    const size_t vkb_size = static_cast<size_t>(nkb) * static_cast<size_t>(npwx) * element_size;
-    return vkb_size > vnl_chunking_memory_budget_bytes();
-#endif
-}
-
-inline bool force_stress_should_use_chunked_vnl(const bool is_gpu,
-                                                const bool has_full_vkb,
-                                                const bool chunked_vnl_enabled,
-                                                const int nkb)
-{
-    return is_gpu && nkb > 0 && (chunked_vnl_enabled || !has_full_vkb);
-}
-
 inline bool gpu_pw_fft_pool_supported(const int poolnproc)
 {
     return poolnproc == 1;
-}
-
-inline int projector_atom_chunk_size(const int remaining_atoms,
-                                     const int target_chunk,
-                                     const int nh)
-{
-    if (remaining_atoms <= 0 || nh <= 0)
-    {
-        return 0;
-    }
-    return std::max(1, std::min(remaining_atoms, target_chunk / nh));
 }
 
 //==========================================================
@@ -121,8 +31,14 @@ class pseudopot_cell_vnl
     ~pseudopot_cell_vnl();
     void init(const UnitCell& cell,
               Structure_Factor* psf_in,
-              const ModulePW::PW_Basis_K* wfc_basis = nullptr,
-              const bool allocate_vkb = true);
+              const ModulePW::PW_Basis_K* wfc_basis,
+              const VnlChunkPolicy& chunk_policy,
+              const bool allocate_vkb);
+
+    const VnlChunkPolicy& vnl_chunk_policy() const
+    {
+        return this->chunk_policy_;
+    }
 
     double cell_factor = 0.0; // LiuXh add 20180619
 
@@ -148,17 +64,6 @@ class pseudopot_cell_vnl
                               int nbands,
                               const std::complex<FPTYPE>* psi,
                               std::complex<FPTYPE>* becp) const;
-
-    template <typename FPTYPE, typename Device>
-    void getvnl_atoms_cached(Device* ctx,
-                             const UnitCell& ucell,
-                             const int& ik,
-                             int atom_start,
-                             int atom_end,
-                             const FPTYPE* gk,
-                             const FPTYPE* ylm,
-                             const std::complex<FPTYPE>* sk_all,
-                             std::complex<FPTYPE>* vkb_out) const;
 
     // void getvnl_alpha(const int &ik);
 
@@ -243,13 +148,6 @@ class pseudopot_cell_vnl
     int vkbnc = 0;
     bool has_full_float_vkb = false;
     bool has_full_double_vkb = false;
-
-    mutable double* cached_vkb1_double = nullptr;
-    mutable float* cached_vkb1_float = nullptr;
-    mutable int cached_vkb1_double_nhm = 0;
-    mutable int cached_vkb1_double_npw = 0;
-    mutable int cached_vkb1_float_nhm = 0;
-    mutable int cached_vkb1_float_npw = 0;
 
     // other variables
     std::complex<double> Cal_C(int alpha, int lu, int mu, int L, int M);
@@ -383,6 +281,7 @@ class pseudopot_cell_vnl
 
     double omega_old = 0;
     bool use_gpu_ = false;
+    VnlChunkPolicy chunk_policy_ = {false, 0, 64};
 
     /**
      * @brief Compute interpolation table qrad

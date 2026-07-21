@@ -179,17 +179,11 @@ void FS_Nonlocal_tools<FPTYPE, Device>::delete_memory()
 template <typename FPTYPE, typename Device>
 bool FS_Nonlocal_tools<FPTYPE, Device>::use_chunked_vnl() const
 {
-#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
-    return false;
-#else
-    const bool is_gpu = this->device == base_device::GpuDevice;
+    const VnlChunkPolicy& policy = this->nlpp_->vnl_chunk_policy();
     const bool has_full_vkb = this->ppcell_vkb != nullptr;
-    const bool chunked_enabled = get_chunked_vnl_override() != 0
-                                 && vnl_chunking_enabled(this->nkb,
-                                                         this->max_npw,
-                                                         sizeof(std::complex<FPTYPE>));
-    return force_stress_should_use_chunked_vnl(is_gpu, has_full_vkb, chunked_enabled, this->nkb);
-#endif
+    return detail::VnlChunkKernelSupport<Device>::value && policy.supported && this->nkb > 0
+           && (policy.should_chunk(this->nkb, this->max_npw, sizeof(std::complex<FPTYPE>))
+               || !has_full_vkb);
 }
 
 template <typename FPTYPE, typename Device>
@@ -203,14 +197,6 @@ void FS_Nonlocal_tools<FPTYPE, Device>::ensure_full_vkb_scratch()
                         static_cast<std::size_t>(this->nkb) * this->max_npw,
                         "FS_Nonlocal_tools::vkb");
     this->owns_ppcell_vkb = true;
-}
-
-template <typename FPTYPE, typename Device>
-int FS_Nonlocal_tools<FPTYPE, Device>::calculate_chunk_size() const
-{
-    const int env_chunk = get_vnl_chunk_size_override();
-    const int target_chunk = env_chunk > 0 ? env_chunk : 64;
-    return std::max(1, std::min(target_chunk, this->nkb));
 }
 
 template <typename FPTYPE, typename Device>
@@ -1104,10 +1090,32 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
                                                           FPTYPE* force,
                                                           const std::complex<FPTYPE>* ppsi)
 {
-#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
+    typedef typename detail::VnlChunkKernelSupport<Device>::type support_tag;
+    return this->template cal_force_chunked_impl<Device>(ik, npm, occ, force, ppsi, support_tag());
+}
+
+template <typename FPTYPE, typename Device>
+template <typename ChunkDevice>
+bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked_impl(const int& ik,
+                                                               const int& npm,
+                                                               const bool& occ,
+                                                               FPTYPE* force,
+                                                               const std::complex<FPTYPE>* ppsi,
+                                                               std::false_type)
+{
     this->ensure_full_vkb_scratch();
     return false;
-#else
+}
+
+template <typename FPTYPE, typename Device>
+template <typename ChunkDevice>
+bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked_impl(const int& ik,
+                                                               const int& npm,
+                                                               const bool& occ,
+                                                               FPTYPE* force,
+                                                               const std::complex<FPTYPE>* ppsi,
+                                                               std::true_type)
+{
     if (!this->use_chunked_vnl())
     {
         return false;
@@ -1127,8 +1135,6 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
     Nonlocal_maths<FPTYPE, Device> maths(this->nlpp_, this->ucell_);
     const int npw = this->wfc_basis_->npwk[ik];
     const int npm_npol = npm * npol;
-    const int target_chunk = this->calculate_chunk_size();
-
     this->g_plus_k = maths.cal_gk(ik, this->wfc_basis_);
     this->prepared_vq_ik = -1;
     this->prepared_vq_it = -1;
@@ -1180,7 +1186,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
         const int atom_type_start = this->ucell_->itia2iat(it, 0);
         for (int ia_begin = 0; ia_begin < h_atom_na[it];)
         {
-            const int atom_count = projector_atom_chunk_size(h_atom_na[it] - ia_begin, target_chunk, nh);
+            const int atom_count = this->nlpp_->vnl_chunk_policy().atoms_in_chunk(h_atom_na[it] - ia_begin, nh);
             const int chunk_nkb = atom_count * nh;
             this->ensure_chunk_memory(chunk_nkb, npm_npol, true);
             if (max_zero_count > 0 && chunk_nkb * max_zero_count > this->chunk_vkb_save_capacity)
@@ -1273,7 +1279,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
             if (npol == 1)
             {
                 const int current_spin = this->kv_->isk[ik];
-                cal_force_nl_op<FPTYPE, Device>().chunk(this->ctx,
+                cal_force_nl_op<FPTYPE, ChunkDevice>().chunk(this->ctx,
                                                         nondiagonal,
                                                         npm,
                                                         current_spin,
@@ -1299,7 +1305,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
             }
             else
             {
-                cal_force_nl_op<FPTYPE, Device>().chunk(this->ctx,
+                cal_force_nl_op<FPTYPE, ChunkDevice>().chunk(this->ctx,
                                                         npm,
                                                         this->nlpp_->deeq_nc.getBound2(),
                                                         this->nlpp_->deeq_nc.getBound3(),
@@ -1329,7 +1335,6 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_force_chunked(const int& ik,
     delmem_complex_op()(hd_sk);
     hd_sk = nullptr;
     return true;
-#endif
 }
 
 template <typename FPTYPE, typename Device>
@@ -1339,10 +1344,32 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
                                                            FPTYPE* stress,
                                                            const std::complex<FPTYPE>* ppsi)
 {
-#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
+    typedef typename detail::VnlChunkKernelSupport<Device>::type support_tag;
+    return this->template cal_stress_chunked_impl<Device>(ik, npm, occ, stress, ppsi, support_tag());
+}
+
+template <typename FPTYPE, typename Device>
+template <typename ChunkDevice>
+bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked_impl(const int& ik,
+                                                                const int& npm,
+                                                                const bool& occ,
+                                                                FPTYPE* stress,
+                                                                const std::complex<FPTYPE>* ppsi,
+                                                                std::false_type)
+{
     this->ensure_full_vkb_scratch();
     return false;
-#else
+}
+
+template <typename FPTYPE, typename Device>
+template <typename ChunkDevice>
+bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked_impl(const int& ik,
+                                                                const int& npm,
+                                                                const bool& occ,
+                                                                FPTYPE* stress,
+                                                                const std::complex<FPTYPE>* ppsi,
+                                                                std::true_type)
+{
     if (!this->use_chunked_vnl())
     {
         return false;
@@ -1362,8 +1389,6 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
     Nonlocal_maths<FPTYPE, Device> maths(this->nlpp_, this->ucell_);
     const int npw = this->wfc_basis_->npwk[ik];
     const int npm_npol = npm * npol;
-    const int target_chunk = this->calculate_chunk_size();
-
     this->g_plus_k = maths.cal_gk(ik, this->wfc_basis_);
     this->prepared_vq_ik = -1;
     this->prepared_vq_it = -1;
@@ -1403,7 +1428,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
         const int atom_type_start = this->ucell_->itia2iat(it, 0);
         for (int ia_begin = 0; ia_begin < h_atom_na[it];)
         {
-            const int atom_count = projector_atom_chunk_size(h_atom_na[it] - ia_begin, target_chunk, nh);
+            const int atom_count = this->nlpp_->vnl_chunk_policy().atoms_in_chunk(h_atom_na[it] - ia_begin, nh);
             const int chunk_nkb = atom_count * nh;
             this->ensure_chunk_memory(chunk_nkb, npm_npol, false);
             this->cal_vkb_type_chunk(ik, it, atom_type_start + ia_begin, atom_type_start + ia_begin + atom_count,
@@ -1431,7 +1456,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
             if (npol == 1)
             {
                 const int current_spin = this->kv_->isk[ik];
-                hamilt::build_stress_nl_reordered_r_op<FPTYPE, Device>().chunk(this->ctx,
+                hamilt::build_stress_nl_reordered_r_op<FPTYPE, ChunkDevice>().chunk(this->ctx,
                                                                                nondiagonal,
                                                                                chunk_nkb,
                                                                                npm,
@@ -1466,7 +1491,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
             }
             else
             {
-                hamilt::build_stress_nl_reordered_r_op<FPTYPE, Device>().chunk(
+                hamilt::build_stress_nl_reordered_r_op<FPTYPE, ChunkDevice>().chunk(
                     this->ctx,
                     chunk_nkb,
                     npm,
@@ -1511,7 +1536,7 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
                                                   ipol,
                                                   jpol,
                                                   this->vkb_chunk);
-                    hamilt::cal_stress_nl_reordered_op<FPTYPE, Device>().chunk(this->ctx,
+                    hamilt::cal_stress_nl_reordered_op<FPTYPE, ChunkDevice>().chunk(this->ctx,
                                                                                ipol,
                                                                                jpol,
                                                                                npw,
@@ -1528,7 +1553,6 @@ bool FS_Nonlocal_tools<FPTYPE, Device>::cal_stress_chunked(const int& ik,
     delmem_complex_op()(hd_sk);
     hd_sk = nullptr;
     return true;
-#endif
 }
 
 // template instantiation

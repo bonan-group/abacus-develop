@@ -11,9 +11,27 @@
 #include "source_psi/psi.h"
 
 #include <complex>
+#include <type_traits>
 
 namespace hamilt
 {
+
+namespace detail
+{
+
+template <typename Device>
+struct VnlChunkKernelSupport : std::false_type
+{
+};
+
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+template <>
+struct VnlChunkKernelSupport<base_device::DEVICE_GPU> : std::true_type
+{
+};
+#endif
+
+} // namespace detail
 
 /**
  * @brief Nonlocal pseudopotential tools in plane wave basis set.
@@ -154,7 +172,34 @@ class FS_Nonlocal_tools
      */
     void delete_memory();
     void ensure_full_vkb_scratch();
-    int calculate_chunk_size() const;
+    template <typename ChunkDevice>
+    bool cal_force_chunked_impl(const int& ik,
+                                const int& npm,
+                                const bool& occ,
+                                FPTYPE* force,
+                                const std::complex<FPTYPE>* ppsi,
+                                std::false_type);
+    template <typename ChunkDevice>
+    bool cal_force_chunked_impl(const int& ik,
+                                const int& npm,
+                                const bool& occ,
+                                FPTYPE* force,
+                                const std::complex<FPTYPE>* ppsi,
+                                std::true_type);
+    template <typename ChunkDevice>
+    bool cal_stress_chunked_impl(const int& ik,
+                                 const int& npm,
+                                 const bool& occ,
+                                 FPTYPE* stress,
+                                 const std::complex<FPTYPE>* ppsi,
+                                 std::false_type);
+    template <typename ChunkDevice>
+    bool cal_stress_chunked_impl(const int& ik,
+                                 const int& npm,
+                                 const bool& occ,
+                                 FPTYPE* stress,
+                                 const std::complex<FPTYPE>* ppsi,
+                                 std::true_type);
     void ensure_chunk_memory(const int chunk_nkb, const int nbands_npol, const bool force_mode);
     void cal_vkb_type_chunk(const int ik,
                             const int it,

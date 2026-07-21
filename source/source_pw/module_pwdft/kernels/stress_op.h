@@ -153,110 +153,13 @@ struct cal_stress_nl_op
                      const std::complex<FPTYPE>* becp,
                      const std::complex<FPTYPE>* dbecp,
                      FPTYPE* stress);
-    void chunk(const base_device::DEVICE_CPU* ctx,
-               const bool& nondiagonal,
-               const int& ipol,
-               const int& jpol,
-               const int& chunk_nkb,
-               const int& nbands_occ,
-               const int& spin,
-               const int& deeq_2,
-               const int& deeq_3,
-               const int& deeq_4,
-               const int& it,
-               const int& atom_start,
-               const int& atom_count,
-               const int& nproj,
-               const FPTYPE* d_wg,
-               const bool& occ,
-               const FPTYPE* d_ekb,
-               const FPTYPE* qq_nt,
-               const FPTYPE* deeq,
-               const std::complex<FPTYPE>* becp,
-               const std::complex<FPTYPE>* dbecp,
-               FPTYPE* stress)
-    {}
-    void chunk(const base_device::DEVICE_CPU* ctx,
-               const int& ipol,
-               const int& jpol,
-               const int& chunk_nkb,
-               const int& nbands_occ,
-               const int& deeq_2,
-               const int& deeq_3,
-               const int& deeq_4,
-               const int& it,
-               const int& atom_start,
-               const int& atom_offset_in_type,
-               const int& atom_count,
-               const int& nproj,
-               const FPTYPE* d_wg,
-               const bool& occ,
-               const FPTYPE* d_ekb,
-               const FPTYPE* qq_nt,
-               const std::complex<FPTYPE>* deeq_nc,
-               const std::complex<FPTYPE>* becp,
-               const std::complex<FPTYPE>* dbecp,
-               FPTYPE* stress)
-    {}
 };
 
 template <typename FPTYPE, typename Device>
-struct build_stress_nl_reordered_r_op
-{
-    void chunk(const Device* ctx,
-               const bool& nondiagonal,
-               const int& chunk_nkb,
-               const int& nbands_occ,
-               const int& spin,
-               const int& deeq_2,
-               const int& deeq_3,
-               const int& deeq_4,
-               const int& it,
-               const int& atom_start,
-               const int& atom_count,
-               const int& nproj,
-               const FPTYPE* d_wg,
-               const bool& occ,
-               const FPTYPE* d_ekb,
-               const FPTYPE* qq_nt,
-               const FPTYPE* deeq,
-               const std::complex<FPTYPE>* becp,
-               std::complex<FPTYPE>* r_chunk)
-    {}
-    void chunk(const Device* ctx,
-               const int& chunk_nkb,
-               const int& nbands_occ,
-               const int& deeq_2,
-               const int& deeq_3,
-               const int& deeq_4,
-               const int& it,
-               const int& atom_start,
-               const int& atom_offset_in_type,
-               const int& atom_count,
-               const int& nproj,
-               const FPTYPE* d_wg,
-               const bool& occ,
-               const FPTYPE* d_ekb,
-               const FPTYPE* qq_nt,
-               const std::complex<FPTYPE>* deeq_nc,
-               const std::complex<FPTYPE>* becp,
-               std::complex<FPTYPE>* r_chunk)
-    {}
-};
+struct build_stress_nl_reordered_r_op;
 
 template <typename FPTYPE, typename Device>
-struct cal_stress_nl_reordered_op
-{
-    void chunk(const Device* ctx,
-               const int& ipol,
-               const int& jpol,
-               const int& npw,
-               const int& chunk_nkb,
-               const std::complex<FPTYPE>* y_chunk,
-               const std::complex<FPTYPE>* vkb_deri_chunk,
-               FPTYPE* stress)
-    {}
-};
+struct cal_stress_nl_reordered_op;
 
 template <typename T, typename Device>
 struct cal_stress_mgga_op

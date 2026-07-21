@@ -37,6 +37,7 @@ list(APPEND objects
     stress_exx.cpp
     stress_pw.cpp
     vl_pw.cpp
+    vnl_chunk_policy.cpp
     vnl_pw.cpp
     vnl_pw_grad.cpp
     structure_factor.cpp

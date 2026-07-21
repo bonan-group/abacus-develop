@@ -15,6 +15,41 @@
 
 namespace hamilt {
 
+namespace
+{
+
+struct ProjectorRange
+{
+    int atom_begin;
+    int atom_end;
+    int projector_begin;
+    int projector_end;
+};
+
+ProjectorRange next_projector_range(const UnitCell& ucell,
+                                    const int atom_begin,
+                                    const int projector_begin,
+                                    const int projector_limit)
+{
+    ProjectorRange range = {atom_begin, atom_begin, projector_begin, projector_begin};
+    const int effective_limit = std::max(1, projector_limit);
+    while (range.atom_end < ucell.nat)
+    {
+        const int it = ucell.iat2it[range.atom_end];
+        const int projectors_per_atom = ucell.atoms[it].ncpp.nh;
+        if (range.projector_end > range.projector_begin
+            && range.projector_end + projectors_per_atom > range.projector_begin + effective_limit)
+        {
+            break;
+        }
+        range.projector_end += projectors_per_atom;
+        ++range.atom_end;
+    }
+    return range;
+}
+
+} // namespace
+
 template<typename T, typename Device>
 Nonlocal<OperatorPW<T, Device>>::Nonlocal(const int* isk_in,
                                                const pseudopot_cell_vnl* ppcell_in,
@@ -62,7 +97,9 @@ void Nonlocal<OperatorPW<T, Device>>::init(const int ik_in)
 	if(this->ppcell->nkb > 0) //xiaohui add 2013-09-02. Attention...
 	{
 #if defined(__CUDA) || defined(__UT_USE_CUDA)
-        if (!use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T)))
+        if (!this->ppcell->vnl_chunk_policy().should_chunk(this->ppcell->nkb,
+                                                           this->wfcpw->npwk_max,
+                                                           sizeof(T)))
 #endif
         {
             this->ppcell->getvnl(this->ctx, *this->ucell, this->ik, this->vkb);
@@ -207,7 +244,10 @@ void Nonlocal<OperatorPW<T, Device>>::act(
                                                                              : this->ppcell->has_full_double_vkb;
     const bool full_vkb_ready = full_vkb_available && this->full_vkb_ready && this->full_vkb_ready_ik == this->ik;
     if (this->ppcell->nkb > 0
-        && (!full_vkb_ready || use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T))))
+        && (!full_vkb_ready
+            || this->ppcell->vnl_chunk_policy().should_chunk(this->ppcell->nkb,
+                                                             this->wfcpw->npwk_max,
+                                                             sizeof(T))))
     {
         this->act_chunked(nbands, nbasis, npol, tmpsi_in, tmhpsi, ngk_ik, is_first_node);
         return;
@@ -402,7 +442,9 @@ void Nonlocal<OperatorPW<T, Device>>::compute_overlap_becp(const T* psi,
                                                            std::true_type) const
 {
     const bool matrix_free = !this->full_vkb_ready
-                             || use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T));
+                             || this->ppcell->vnl_chunk_policy().should_chunk(this->ppcell->nkb,
+                                                                              this->wfcpw->npwk_max,
+                                                                              sizeof(T));
     if (!matrix_free)
     {
         this->compute_overlap_becp(psi, nrow, nbands, std::false_type());
@@ -507,7 +549,9 @@ void Nonlocal<OperatorPW<T, Device>>::add_overlap_from_projectors(T* spsi,
                                                                   std::true_type) const
 {
     const bool matrix_free = !this->full_vkb_ready
-                             || use_chunked_vnl<Device>(this->ppcell->nkb, this->wfcpw->npwk_max, sizeof(T));
+                             || this->ppcell->vnl_chunk_policy().should_chunk(this->ppcell->nkb,
+                                                                              this->wfcpw->npwk_max,
+                                                                              sizeof(T));
     if (!matrix_free)
     {
         this->add_overlap_from_projectors(spsi, nrow, nbands, std::false_type());
@@ -563,15 +607,9 @@ void Nonlocal<OperatorPW<T, Device>>::apply_uspp_overlap(const T* psi,
 
 #if defined(__CUDA) || defined(__UT_USE_CUDA)
 template<typename T, typename Device>
-int Nonlocal<OperatorPW<T, Device>>::calculate_optimal_chunk_size(int npw, int nkb, int nbands) const
+int Nonlocal<OperatorPW<T, Device>>::calculate_optimal_chunk_size(const int nkb) const
 {
-    int target_chunk = 64;
-    const int env_chunk = get_vnl_chunk_size_override();
-    if (env_chunk > 0)
-    {
-        target_chunk = env_chunk;
-    }
-    return std::max(1, std::min(target_chunk, nkb));
+    return std::max(1, std::min(this->ppcell->vnl_chunk_policy().projector_limit, nkb));
 }
 
 template<typename T, typename Device>
@@ -650,28 +688,15 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
         ModuleBase::WARNING_QUIT("NonlocalPW", "nkb * nbands exceeds the reduction size limit.");
     }
     this->ensure_becp_capacity(nbands);
-    const int target_chunk = calculate_optimal_chunk_size(ngk_ik, nkb, nbands);
+    const int target_chunk = calculate_optimal_chunk_size(nkb);
 
     int atom_begin = 0;
     int ikb_begin = 0;
     while (ikb_begin < nkb)
     {
-        int atom_end = atom_begin;
-        int ikb_end = ikb_begin;
-        while (atom_end < this->ucell->nat)
-        {
-            const int it = this->ucell->iat2it[atom_end];
-            const int nh = this->ucell->atoms[it].ncpp.nh;
-            if (ikb_end > ikb_begin && ikb_end + nh > ikb_begin + target_chunk)
-            {
-                break;
-            }
-            ikb_end += nh;
-            ++atom_end;
-        }
-
-        const int chunk_nkb = ikb_end - ikb_begin;
-        this->materialize_atom_chunk(ngk_ik, atom_begin, atom_end, chunk_nkb);
+        const ProjectorRange range = next_projector_range(*this->ucell, atom_begin, ikb_begin, target_chunk);
+        const int chunk_nkb = range.projector_end - range.projector_begin;
+        this->materialize_atom_chunk(ngk_ik, range.atom_begin, range.atom_end, chunk_nkb);
         if (nbands == 1)
         {
             const int inc = 1;
@@ -704,8 +729,8 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
                       nkb);
         }
 
-        atom_begin = atom_end;
-        ikb_begin = ikb_end;
+        atom_begin = range.atom_end;
+        ikb_begin = range.projector_end;
     }
 
     Parallel_Reduce::reduce_pool(this->becp, static_cast<int>(coeff_size));
@@ -716,22 +741,9 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
     ikb_begin = 0;
     while (ikb_begin < nkb)
     {
-        int atom_end = atom_begin;
-        int ikb_end = ikb_begin;
-        while (atom_end < this->ucell->nat)
-        {
-            const int it = this->ucell->iat2it[atom_end];
-            const int nh = this->ucell->atoms[it].ncpp.nh;
-            if (ikb_end > ikb_begin && ikb_end + nh > ikb_begin + target_chunk)
-            {
-                break;
-            }
-            ikb_end += nh;
-            ++atom_end;
-        }
-
-        const int chunk_nkb = ikb_end - ikb_begin;
-        this->materialize_atom_chunk(ngk_ik, atom_begin, atom_end, chunk_nkb);
+        const ProjectorRange range = next_projector_range(*this->ucell, atom_begin, ikb_begin, target_chunk);
+        const int chunk_nkb = range.projector_end - range.projector_begin;
+        this->materialize_atom_chunk(ngk_ik, range.atom_begin, range.atom_end, chunk_nkb);
         if (nbands == 1)
         {
             const int inc = 1;
@@ -764,8 +776,8 @@ void Nonlocal<OperatorPW<T, Device>>::act_chunked(const int nbands,
                       this->max_npw);
         }
 
-        atom_begin = atom_end;
-        ikb_begin = ikb_end;
+        atom_begin = range.atom_end;
+        ikb_begin = range.projector_end;
     }
 
     ModuleBase::timer::end("Operator", "nonlocal_pw_chunked");
@@ -778,27 +790,14 @@ void Nonlocal<OperatorPW<T, Device>>::add_overlap_chunked(T* spsi, int nrow, int
     this->ensure_kpoint_caches(this->ik, this->npw);
 
     const int nkb = this->ppcell->nkb;
-    const int target_chunk = this->calculate_optimal_chunk_size(this->npw, nkb, nbands);
+    const int target_chunk = this->calculate_optimal_chunk_size(nkb);
     int atom_begin = 0;
     int ikb_begin = 0;
     while (ikb_begin < nkb)
     {
-        int atom_end = atom_begin;
-        int ikb_end = ikb_begin;
-        while (atom_end < this->ucell->nat)
-        {
-            const int it = this->ucell->iat2it[atom_end];
-            const int nh = this->ucell->atoms[it].ncpp.nh;
-            if (ikb_end > ikb_begin && ikb_end + nh > ikb_begin + target_chunk)
-            {
-                break;
-            }
-            ikb_end += nh;
-            ++atom_end;
-        }
-
-        const int chunk_nkb = ikb_end - ikb_begin;
-        this->materialize_atom_chunk(this->npw, atom_begin, atom_end, chunk_nkb);
+        const ProjectorRange range = next_projector_range(*this->ucell, atom_begin, ikb_begin, target_chunk);
+        const int chunk_nkb = range.projector_end - range.projector_begin;
+        this->materialize_atom_chunk(this->npw, range.atom_begin, range.atom_end, chunk_nkb);
 
         if (nbands == 1)
         {
@@ -832,8 +831,8 @@ void Nonlocal<OperatorPW<T, Device>>::add_overlap_chunked(T* spsi, int nrow, int
                       nrow);
         }
 
-        atom_begin = atom_end;
-        ikb_begin = ikb_end;
+        atom_begin = range.atom_end;
+        ikb_begin = range.projector_end;
     }
 }
 

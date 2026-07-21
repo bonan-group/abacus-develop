@@ -63,36 +63,6 @@ struct cal_vnl_op
 };
 
 template <typename FPTYPE, typename Device>
-struct cal_vnl_atoms_cached_op
-{
-    void operator()(const Device* ctx,
-                    const int& ntype,
-                    const int& npw,
-                    const int& npwx,
-                    const int& nhm,
-                    const int& tab_2,
-                    const int& tab_3,
-                    const int* atom_na,
-                    const int* atom_nb,
-                    const int* atom_nh,
-                    const int& atom_start,
-                    const int& atom_end,
-                    const FPTYPE& DQ,
-                    const FPTYPE& tpiba,
-                    const std::complex<FPTYPE>& NEG_IMAG_UNIT,
-                    const FPTYPE* gk,
-                    const FPTYPE* ylm,
-                    const FPTYPE* indv,
-                    const FPTYPE* nhtol,
-                    const FPTYPE* nhtolm,
-                    const FPTYPE* tab,
-                    FPTYPE* vkb1,
-                    const std::complex<FPTYPE>* sk_all,
-                    const int* iat2it,
-                    std::complex<FPTYPE>* vkb_out);
-};
-
-template <typename FPTYPE, typename Device>
 struct cal_vkb1_cache_op
 {
     void operator()(const Device* ctx,
@@ -149,25 +119,6 @@ struct cal_becp_from_vkb1_cache_op
                     std::complex<FPTYPE>* becp);
 };
 
-template <typename FPTYPE, typename Device>
-struct cal_hpsi_from_vkb1_cache_op
-{
-    void operator()(const Device* ctx,
-                    const int& npw,
-                    const int& npwx,
-                    const int& nbands,
-                    const int& nkb,
-                    const int& nhm,
-                    const int* jkb_to_iat,
-                    const int* jkb_to_it,
-                    const int* jkb_to_ih,
-                    const FPTYPE* jkb_pref_sign,
-                    const FPTYPE* vkb1_cache,
-                    const std::complex<FPTYPE>* sk_all,
-                    const std::complex<FPTYPE>* ps,
-                    std::complex<FPTYPE>* hpsi);
-};
-
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
 template <typename FPTYPE>
 struct cal_vnl_op<FPTYPE, base_device::DEVICE_GPU>
@@ -197,36 +148,6 @@ struct cal_vnl_op<FPTYPE, base_device::DEVICE_GPU>
 };
 
 #if __CUDA || __UT_USE_CUDA
-template <typename FPTYPE>
-struct cal_vnl_atoms_cached_op<FPTYPE, base_device::DEVICE_GPU>
-{
-    void operator()(const base_device::DEVICE_GPU* ctx,
-                    const int& ntype,
-                    const int& npw,
-                    const int& npwx,
-                    const int& nhm,
-                    const int& tab_2,
-                    const int& tab_3,
-                    const int* atom_na,
-                    const int* atom_nb,
-                    const int* atom_nh,
-                    const int& atom_start,
-                    const int& atom_end,
-                    const FPTYPE& DQ,
-                    const FPTYPE& tpiba,
-                    const std::complex<FPTYPE>& NEG_IMAG_UNIT,
-                    const FPTYPE* gk,
-                    const FPTYPE* ylm,
-                    const FPTYPE* indv,
-                    const FPTYPE* nhtol,
-                    const FPTYPE* nhtolm,
-                    const FPTYPE* tab,
-                    FPTYPE* vkb1,
-                    const std::complex<FPTYPE>* sk_all,
-                    const int* iat2it,
-                    std::complex<FPTYPE>* vkb_out);
-};
-
 template <typename FPTYPE>
 struct cal_vkb1_cache_op<FPTYPE, base_device::DEVICE_GPU>
 {
@@ -284,24 +205,6 @@ struct cal_becp_from_vkb1_cache_op<FPTYPE, base_device::DEVICE_GPU>
                     std::complex<FPTYPE>* becp);
 };
 
-template <typename FPTYPE>
-struct cal_hpsi_from_vkb1_cache_op<FPTYPE, base_device::DEVICE_GPU>
-{
-    void operator()(const base_device::DEVICE_GPU* ctx,
-                    const int& npw,
-                    const int& npwx,
-                    const int& nbands,
-                    const int& nkb,
-                    const int& nhm,
-                    const int* jkb_to_iat,
-                    const int* jkb_to_it,
-                    const int* jkb_to_ih,
-                    const FPTYPE* jkb_pref_sign,
-                    const FPTYPE* vkb1_cache,
-                    const std::complex<FPTYPE>* sk_all,
-                    const std::complex<FPTYPE>* ps,
-                    std::complex<FPTYPE>* hpsi);
-};
 #endif
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
 } // namespace hamilt

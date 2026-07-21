@@ -7,26 +7,10 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-TEST(TestSrcPWVnlPolicy, forceStressUsesChunkedWhenFullVkbIsMissing)
-{
-    EXPECT_TRUE(force_stress_should_use_chunked_vnl(true, false, false, 8));
-    EXPECT_FALSE(force_stress_should_use_chunked_vnl(true, true, false, 8));
-    EXPECT_TRUE(force_stress_should_use_chunked_vnl(true, true, true, 8));
-    EXPECT_FALSE(force_stress_should_use_chunked_vnl(false, false, true, 8));
-    EXPECT_FALSE(force_stress_should_use_chunked_vnl(true, false, true, 0));
-}
-
 TEST(TestSrcPWVnlPolicy, gpuPwFftRequiresOneRankPerPool)
 {
     EXPECT_TRUE(gpu_pw_fft_pool_supported(1));
     EXPECT_FALSE(gpu_pw_fft_pool_supported(2));
-}
-
-TEST(TestSrcPWVnlPolicy, zeroProjectorTypeHasNoChunk)
-{
-    EXPECT_EQ(projector_atom_chunk_size(3, 64, 0), 0);
-    EXPECT_EQ(projector_atom_chunk_size(3, 64, 4), 3);
-    EXPECT_EQ(projector_atom_chunk_size(20, 32, 4), 8);
 }
 
 class TestSrcPWVnlMultiDevice : public ::testing::Test
@@ -4235,7 +4219,7 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_vkb1_cache_materializes_vnl_gpu)
     delmem_complex_op()(d_vkb);
 }
 
-TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
+TEST_F(TestSrcPWVnlMultiDevice, cal_becp_matrix_free_vnl_gpu)
 {
     const int nbands = 2;
     const int nkb = atom_na[0] * atom_nh[0];
@@ -4259,22 +4243,15 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
     }
 
     std::vector<std::complex<double>> psi(nbands * npwx, {0, 0});
-    std::vector<std::complex<double>> ps(nkb * nbands, {0, 0});
     for (int ib = 0; ib < nbands; ++ib)
     {
         for (int ig = 0; ig < npw; ++ig)
         {
             psi[ib * npwx + ig] = {0.01 * (ig + 1), -0.02 * (ib + 1)};
         }
-        for (int ikb = 0; ikb < nkb; ++ikb)
-        {
-            ps[ikb * nbands + ib] = {0.03 * (ikb + 1), 0.04 * (ib + 1)};
-        }
     }
 
     std::vector<std::complex<double>> expected_becp(nkb * nbands, {0, 0});
-    std::vector<std::complex<double>> initial_hpsi(nbands * npwx, {0.125, -0.25});
-    std::vector<std::complex<double>> expected_hpsi = initial_hpsi;
     for (int ib = 0; ib < nbands; ++ib)
     {
         for (int ikb = 0; ikb < nkb; ++ikb)
@@ -4282,7 +4259,6 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
             for (int ig = 0; ig < npw; ++ig)
             {
                 expected_becp[ib * nkb + ikb] += std::conj(expected_vkb[ikb * npwx + ig]) * psi[ib * npwx + ig];
-                expected_hpsi[ib * npwx + ig] += expected_vkb[ikb * npwx + ig] * ps[ikb * nbands + ib];
             }
         }
     }
@@ -4291,7 +4267,7 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
         *d_jkb_to_ih = nullptr;
     double *d_gk = nullptr, *d_ylm = nullptr, *d_indv = nullptr, *d_nhtolm = nullptr, *d_tab = nullptr,
            *d_vkb1_cache = nullptr, *d_jkb_pref_sign = nullptr;
-    std::complex<double> *d_sk = nullptr, *d_psi = nullptr, *d_ps = nullptr, *d_becp = nullptr, *d_hpsi = nullptr;
+    std::complex<double> *d_sk = nullptr, *d_psi = nullptr, *d_becp = nullptr;
 
     resmem_int_op()(d_atom_nb, atom_nb.size());
     resmem_int_op()(d_atom_nh, atom_nh.size());
@@ -4320,13 +4296,9 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
 
     resmem_complex_op()(d_sk, sk.size());
     resmem_complex_op()(d_psi, psi.size());
-    resmem_complex_op()(d_ps, ps.size());
     resmem_complex_op()(d_becp, expected_becp.size());
-    resmem_complex_op()(d_hpsi, expected_hpsi.size());
     syncmem_complex_h2d_op()(d_sk, sk.data(), sk.size());
     syncmem_complex_h2d_op()(d_psi, psi.data(), psi.size());
-    syncmem_complex_h2d_op()(d_ps, ps.data(), ps.size());
-    syncmem_complex_h2d_op()(d_hpsi, initial_hpsi.data(), initial_hpsi.size());
 
     hamilt::cal_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
                                                                  ntype,
@@ -4358,32 +4330,11 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
                                                                            d_sk,
                                                                            d_psi,
                                                                            d_becp);
-    hamilt::cal_hpsi_from_vkb1_cache_op<double, base_device::DEVICE_GPU>()(gpu_ctx,
-                                                                           npw,
-                                                                           npwx,
-                                                                           nbands,
-                                                                           nkb,
-                                                                           nhm,
-                                                                           d_jkb_to_iat,
-                                                                           d_jkb_to_it,
-                                                                           d_jkb_to_ih,
-                                                                           d_jkb_pref_sign,
-                                                                           d_vkb1_cache,
-                                                                           d_sk,
-                                                                           d_ps,
-                                                                           d_hpsi);
-
     std::vector<std::complex<double>> becp(expected_becp.size());
-    std::vector<std::complex<double>> hpsi(expected_hpsi.size());
     syncmem_complex_d2h_op()(becp.data(), d_becp, becp.size());
-    syncmem_complex_d2h_op()(hpsi.data(), d_hpsi, hpsi.size());
     for (int ii = 0; ii < becp.size(); ii++)
     {
         EXPECT_LT(fabs(becp[ii] - expected_becp[ii]), 6e-5);
-    }
-    for (int ii = 0; ii < hpsi.size(); ii++)
-    {
-        EXPECT_LT(fabs(hpsi[ii] - expected_hpsi[ii]), 6e-5);
     }
 
     delmem_int_op()(d_atom_nb);
@@ -4400,9 +4351,7 @@ TEST_F(TestSrcPWVnlMultiDevice, cal_matrix_free_vnl_gpu)
     delmem_var_op()(d_jkb_pref_sign);
     delmem_complex_op()(d_sk);
     delmem_complex_op()(d_psi);
-    delmem_complex_op()(d_ps);
     delmem_complex_op()(d_becp);
-    delmem_complex_op()(d_hpsi);
 }
 #endif
 #endif // __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
