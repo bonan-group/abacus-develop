@@ -1,6 +1,8 @@
 #ifndef SOURCE_HAMILT_MODULE_XC_XC_RESIDENT_GPU_H
 #define SOURCE_HAMILT_MODULE_XC_XC_RESIDENT_GPU_H
 
+#include "source_hamilt/module_xc/kernels/xc_resident_selector.h"
+
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -20,17 +22,6 @@ class PW_Basis;
 
 namespace XC_Functional_GPU
 {
-
-enum class XcGpuMode
-{
-    Unsupported,
-    LdaPzSpin,
-    LdaPwSpin,
-    Pbe,
-    PbeSol,
-    SpinPbe,
-    SpinPbeSol
-};
 
 struct XcGpuRequest
 {
@@ -58,8 +49,6 @@ struct XcGpuResult
 };
 
 XcGpuMode select_xc_gpu_mode(const XcGpuRequest& request);
-XcGpuMode select_xc_gpu_mode(const std::vector<int>& functional_ids, int nspin, int poolnproc);
-bool is_xc_gpu_evaluator_available();
 XcGpuResult evaluate_resident_xc(const XcGpuRequest& request);
 bool evaluate_resident_xc_stress(const XcGpuRequest& request, std::vector<double>& stress);
 

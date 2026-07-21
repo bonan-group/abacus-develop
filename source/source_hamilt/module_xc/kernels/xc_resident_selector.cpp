@@ -1,4 +1,4 @@
-#include "source_hamilt/module_xc/xc_resident_gpu.h"
+#include "source_hamilt/module_xc/kernels/xc_resident_selector.h"
 
 #ifdef USE_LIBXC
 #include <xc.h>

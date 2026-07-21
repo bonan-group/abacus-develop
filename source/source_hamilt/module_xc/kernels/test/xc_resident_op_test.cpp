@@ -767,14 +767,6 @@ TEST(XCResidentOpTest, ChargeRealspaceDensitySyncIsNoopOnCpuDevice)
 
 TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
 {
-#ifdef __MPI
-    int mpi_initialized = 0;
-    MPI_Initialized(&mpi_initialized);
-    if (mpi_initialized == 0)
-    {
-        GTEST_SKIP() << "The public v_xc boundary performs pool reductions; gtest_main does not initialize MPI.";
-    }
-#endif
     using syncmem_h2d_op
         = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
     using syncmem_d2h_op

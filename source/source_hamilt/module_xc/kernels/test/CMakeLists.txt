@@ -26,6 +26,7 @@ if(USE_CUDA)
     LIBS xc_ parameter device base container planewave
     SOURCES xc_resident_gpu_test.cpp
       xc_resident_op_test.cpp
+      xc_resident_test_main.cpp
       xc_vxc_mock_unitcell_deps.cpp
       ../../../../source_estate/module_charge/charge.cpp
       ../../../../source_estate/module_charge/charge_device.cpp
