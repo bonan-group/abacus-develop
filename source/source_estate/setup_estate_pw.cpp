@@ -109,11 +109,8 @@ void setup_estate_pw_impl(
     locpp.init_vloc(ucell, pw_rhod);
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "LOCAL POTENTIAL");
 
-    ppcell.init(ucell,
-                &sf,
-                pw_wfc,
-                make_default_vnl_chunk_policy(inp.device == "gpu"),
-                true);
+    const bool use_gpu = inp.device == "gpu";
+    ppcell.init(ucell, &sf, pw_wfc, use_gpu, make_default_vnl_chunk_policy(use_gpu), true);
     ppcell.init_vnl(ucell, pw_rhod, inp.cal_stress);
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "NON-LOCAL POTENTIAL");
 

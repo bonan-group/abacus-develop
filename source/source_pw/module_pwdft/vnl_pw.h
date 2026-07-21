@@ -32,6 +32,7 @@ class pseudopot_cell_vnl
     void init(const UnitCell& cell,
               Structure_Factor* psf_in,
               const ModulePW::PW_Basis_K* wfc_basis,
+              bool use_gpu,
               const VnlChunkPolicy& chunk_policy,
               const bool allocate_vkb);
 

@@ -118,6 +118,7 @@ void pseudopot_cell_vnl::release_memory()
 void pseudopot_cell_vnl::init(const UnitCell& ucell,
                               Structure_Factor* psf_in,
                               const ModulePW::PW_Basis_K* wfc_basis,
+                              const bool use_gpu,
                               const VnlChunkPolicy& chunk_policy,
                               const bool allocate_vkb)
 {
@@ -130,8 +131,8 @@ void pseudopot_cell_vnl::init(const UnitCell& ucell,
     int it = 0;
     this->wfcpw = wfc_basis;
     this->psf = psf_in;
+    this->use_gpu_ = use_gpu;
     this->chunk_policy_ = chunk_policy;
-    this->use_gpu_ = chunk_policy.supported;
     //----------------------------------------------------------
     // MEMBER VARIABLE :
     // NAME : lmaxkb(max angular momentum,(see pseudo_h))
