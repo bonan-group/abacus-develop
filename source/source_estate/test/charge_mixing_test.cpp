@@ -111,6 +111,13 @@ class ChargeMixingTest : public ::testing::Test
     Charge charge;
     std::ostringstream running_log;
 
+    ChargeMixingPolicy test_policy(const int nspin,
+                                   const int scf_thr_type,
+                                   const bool include_magnetism) const
+    {
+        return ChargeMixingPolicy(nspin, scf_thr_type, false, include_magnetism);
+    }
+
     void configure_gpu_eligibility(Charge_Mixing& mixing,
                                    const std::string& mode,
                                    const double angle,
@@ -124,6 +131,79 @@ class ChargeMixingTest : public ::testing::Test
     }
 
 };
+
+TEST(ChargeMixingRuntimePolicyTest, MatchesReadInputMagneticMapping)
+{
+    const ChargeMixingPolicy nspin1 = make_charge_mixing_policy(1, 1, false);
+    EXPECT_FALSE(nspin1.domag_z);
+    EXPECT_TRUE(nspin1.include_magnetism);
+
+    const ChargeMixingPolicy nspin2 = make_charge_mixing_policy(2, 2, false);
+    EXPECT_FALSE(nspin2.domag_z);
+    EXPECT_TRUE(nspin2.include_magnetism);
+
+    const ChargeMixingPolicy noncollinear = make_charge_mixing_policy(4, 1, true);
+    EXPECT_FALSE(noncollinear.domag_z);
+    EXPECT_TRUE(noncollinear.include_magnetism);
+
+    const ChargeMixingPolicy z_only = make_charge_mixing_policy(4, 2, false);
+    EXPECT_TRUE(z_only.domag_z);
+    EXPECT_TRUE(z_only.include_magnetism);
+}
+
+TEST_F(ChargeMixingTest, ReciprocalPolicyControlsMagneticComponents)
+{
+    Charge_Mixing mixing;
+    mixing.set_rhopw(&pw_basis, &pw_basis);
+
+    std::vector<std::complex<double>> rhog(4 * pw_basis.npw);
+    for (int is = 1; is < 4; ++is)
+    {
+        for (int ig = 0; ig < pw_basis.npw; ++ig)
+        {
+            rhog[is * pw_basis.npw + ig] = std::complex<double>(is + 0.1 * ig, 0.0);
+        }
+    }
+
+    const ChargeMixingPolicy exclude_magnetism(4, 1, false, false);
+    mixing.set_mixing("plain",
+                      0.7,
+                      1,
+                      0.0,
+                      false,
+                      0.5,
+                      0.0,
+                      0.1,
+                      0.0,
+                      false,
+                      ucell.omega,
+                      ucell.tpiba,
+                      false,
+                      running_log,
+                      exclude_magnetism);
+    const double excluded = mixing.inner_product_recip_hartree(rhog.data(), rhog.data(), 4);
+
+    const ChargeMixingPolicy include_magnetism(4, 1, false, true);
+    mixing.set_mixing("plain",
+                      0.7,
+                      1,
+                      0.0,
+                      false,
+                      0.5,
+                      0.0,
+                      0.1,
+                      0.0,
+                      false,
+                      ucell.omega,
+                      ucell.tpiba,
+                      false,
+                      running_log,
+                      include_magnetism);
+    const double included = mixing.inner_product_recip_hartree(rhog.data(), rhog.data(), 4);
+
+    EXPECT_DOUBLE_EQ(excluded, 0.0);
+    EXPECT_GT(included, excluded);
+}
 
 TEST_F(ChargeMixingTest, SetMixingTest)
 {
@@ -151,7 +231,7 @@ TEST_F(ChargeMixingTest, SetMixingTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     EXPECT_EQ(CMtest.get_mixing_mode(), "broyden");
     EXPECT_EQ(CMtest.get_mixing_beta(), 1.0);
     EXPECT_EQ(CMtest.get_mixing_ndim(), 1);
@@ -179,7 +259,7 @@ TEST_F(ChargeMixingTest, SetMixingTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     EXPECT_EQ(CMtest.mixing_mode, "plain");
     EXPECT_EQ(CMtest.mixing_tau, true);
 
@@ -200,7 +280,7 @@ TEST_F(ChargeMixingTest, SetMixingTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);, ::testing::ExitedWithCode(1), "");
+                    test_policy(1, 1, true));, ::testing::ExitedWithCode(1), "");
     output = testing::internal::GetCapturedStdout();
     EXPECT_THAT(output, testing::HasSubstr("You'd better set mixing_beta to [0.0, 1.0]!"));
 
@@ -222,7 +302,7 @@ TEST_F(ChargeMixingTest, SetMixingTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);, ::testing::ExitedWithCode(1), "");
+                    test_policy(2, 1, true));, ::testing::ExitedWithCode(1), "");
     output = testing::internal::GetCapturedStdout();
     EXPECT_THAT(output, testing::HasSubstr("You'd better set mixing_beta_mag >= 0.0!"));
 
@@ -245,7 +325,7 @@ TEST_F(ChargeMixingTest, SetMixingTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);, ::testing::ExitedWithCode(1), "");
+                    test_policy(1, 1, true));, ::testing::ExitedWithCode(1), "");
     output = testing::internal::GetCapturedStdout();
     EXPECT_THAT(output, testing::HasSubstr("This Mixing mode is not implemended yet,coming soon."));
 }
@@ -255,84 +335,50 @@ TEST_F(ChargeMixingTest, InitMixingTest)
 #ifdef _OPENMP
     omp_set_num_threads(1);
 #endif
-    PARAM.input.nspin = 1;
     XC_Functional::func_type = 1;
     XC_Functional::ked_flag = false;
     Charge_Mixing CMtest;
     CMtest.set_rhopw(&pw_basis, &pw_basis);
 
-    CMtest.set_mixing(PARAM.input.mixing_mode,
-                    PARAM.input.mixing_beta,
-                    PARAM.input.mixing_ndim,
-                    PARAM.input.mixing_gg0,
-                    PARAM.input.mixing_tau,
-                    PARAM.input.mixing_beta_mag,
-                    PARAM.input.mixing_gg0_mag,
-                    PARAM.input.mixing_gg0_min,
-                    PARAM.input.mixing_angle,
-                    PARAM.input.mixing_dmr,
-                    ucell.omega,
-                    ucell.tpiba,
-                    true,
-                    running_log,
-                    true);
-    
-    PARAM.input.scf_thr_type= 1;
-    charge.nspin = 1;
-    CMtest.init_mixing(charge);
+    const auto configure = [&](const int nspin, const int scf_thr_type, const bool mixing_tau, const double angle)
+    {
+        CMtest.set_mixing("broyden",
+                          0.8,
+                          8,
+                          1.0,
+                          mixing_tau,
+                          1.6,
+                          0.0,
+                          0.1,
+                          angle,
+                          false,
+                          ucell.omega,
+                          ucell.tpiba,
+                          true,
+                          running_log,
+                          test_policy(nspin, scf_thr_type, true));
+    };
+
+    configure(1, 1, false, -10.0);
+    CMtest.init_mixing();
     EXPECT_EQ(CMtest.rho_mdata.length, pw_basis.npw);
-    
-    PARAM.input.scf_thr_type= 2;
-    CMtest.init_mixing(charge);
+
+    configure(1, 2, false, -10.0);
+    CMtest.init_mixing();
     EXPECT_EQ(CMtest.rho_mdata.length, pw_basis.nrxx);
 
-    PARAM.input.nspin = 4;
-    charge.nspin = 4;
-    CMtest.init_mixing(charge);
+    configure(4, 2, false, -10.0);
+    CMtest.init_mixing();
     EXPECT_EQ(CMtest.rho_mdata.length, 4 * pw_basis.nrxx);
 
-    PARAM.input.nspin = 1;
-    PARAM.input.mixing_tau = true;
-    CMtest.set_mixing(PARAM.input.mixing_mode,
-                    PARAM.input.mixing_beta,
-                    PARAM.input.mixing_ndim,
-                    PARAM.input.mixing_gg0,
-                    PARAM.input.mixing_tau,
-                    PARAM.input.mixing_beta_mag,
-                    PARAM.input.mixing_gg0_mag,
-                    PARAM.input.mixing_gg0_min,
-                    PARAM.input.mixing_angle,
-                    PARAM.input.mixing_dmr,
-                    ucell.omega,
-                    ucell.tpiba,
-                    true,
-                    running_log,
-                    true);
     XC_Functional::func_type = 3;
     XC_Functional::ked_flag = true;
-    charge.nspin = 1;
-    CMtest.init_mixing(charge);
+    configure(1, 2, true, -10.0);
+    CMtest.init_mixing();
     EXPECT_EQ(CMtest.tau_mdata.length, pw_basis.nrxx);
 
-    PARAM.input.nspin = 4;
-    PARAM.input.mixing_angle = 1.0;
-    CMtest.set_mixing(PARAM.input.mixing_mode,
-                    PARAM.input.mixing_beta,
-                    PARAM.input.mixing_ndim,
-                    PARAM.input.mixing_gg0,
-                    PARAM.input.mixing_tau,
-                    PARAM.input.mixing_beta_mag,
-                    PARAM.input.mixing_gg0_mag,
-                    PARAM.input.mixing_gg0_min,
-                    PARAM.input.mixing_angle,
-                    PARAM.input.mixing_dmr,
-                    ucell.omega,
-                    ucell.tpiba,
-                    true,
-                    running_log,
-                    true);
-    charge.nspin = 4;
-    CMtest.init_mixing(charge);
+    configure(4, 2, true, 1.0);
+    CMtest.init_mixing();
     EXPECT_EQ(CMtest.rho_mdata.length, 2 * pw_basis.nrxx);
 }
 
@@ -371,11 +417,11 @@ TEST_F(ChargeMixingTest, ExplicitSetupCapturesLogAndRuntimePolicy)
                       ucell.tpiba,
                       true,
                       running_log,
-                      false);
-    mixing.init_mixing(chr);
+                      test_policy(2, 2, false));
+    mixing.init_mixing();
 
     EXPECT_THAT(running_log.str(), testing::HasSubstr("Setup charge mixing parameters"));
-    EXPECT_FALSE(mixing.include_magnetism_);
+    EXPECT_FALSE(mixing.runtime_policy_.include_magnetism);
     EXPECT_NE(mixing.mixing_highf, nullptr);
     EXPECT_EQ(mixing.rho_mdata.length, 2 * pw_basis.nrxx);
 
@@ -395,8 +441,8 @@ TEST_F(ChargeMixingTest, ExplicitSetupCapturesLogAndRuntimePolicy)
                                ucell.tpiba,
                                true,
                                running_log,
-                               true);
-    EXPECT_TRUE(magnetic_mixing.include_magnetism_);
+                               test_policy(2, 2, true));
+    EXPECT_TRUE(magnetic_mixing.runtime_policy_.include_magnetism);
 }
 
 TEST_F(ChargeMixingTest, PlainNspin1EligibleForGpuResidentMixing)
@@ -559,7 +605,7 @@ TEST_F(ChargeMixingTest, GpuResidentMixingActiveMessageIsLoggedOnce)
                       ucell.tpiba,
                       true,
                       running_log,
-                      false);
+                      test_policy(1, 1, false));
     running_log.str("");
     running_log.clear();
 
@@ -586,7 +632,7 @@ TEST_F(ChargeMixingTest, GpuResidentMixingFallbackMessageIsLoggedOnce)
                       ucell.tpiba,
                       false,
                       running_log,
-                      false);
+                      test_policy(1, 1, false));
     running_log.str("");
     running_log.clear();
 
@@ -686,11 +732,8 @@ TEST_F(ChargeMixingTest, MixingAngleDoubleGridMatchesPlainMixReference)
                       ucell.tpiba,
                       true,
                       running_log,
-                      true);
-    CMtest.init_mixing(angle_charge);
-    CMtest.mixing->init_mixing_data(CMtest.rho_mdata,
-                                    2 * pw_basis.npw,
-                                    sizeof(std::complex<double>));
+                      test_policy(4, 1, true));
+    CMtest.init_mixing();
     CMtest.mix_rho_recip(&angle_charge);
 
     for (int ir = 0; ir < nrxx; ++ir)
@@ -768,11 +811,8 @@ TEST_F(ChargeMixingTest, MixingAngleDoubleGridHistoryHandlesSmallMagnetization)
                           ucell.tpiba,
                           true,
                           running_log,
-                          true);
-        mixing.init_mixing(angle_charge);
-        mixing.mixing->init_mixing_data(mixing.rho_mdata,
-                                        2 * pw_basis.npw,
-                                        sizeof(std::complex<double>));
+                          test_policy(4, 1, true));
+        mixing.init_mixing();
 
         const int history_steps = (mode == "pulay") ? 3 : 2;
         for (int iter = 0; iter < history_steps; ++iter)
@@ -876,7 +916,7 @@ TEST_F(ChargeMixingTest, InnerDotRealTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     CMtest.set_rhopw(&pw_basis, &pw_basis);
     PARAM.input.nspin = 4;
 
@@ -907,7 +947,7 @@ TEST_F(ChargeMixingTest, InnerDotRealTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     PARAM.input.nspin = 4;
 
     // a simple sum for inner product
@@ -940,7 +980,7 @@ TEST_F(ChargeMixingTest, InnerDotRecipSimpleTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     CMtest.set_rhopw(&pw_basis, &pw_basis);
     PARAM.input.nspin = 2;
 
@@ -991,7 +1031,7 @@ TEST_F(ChargeMixingTest, InnerDotRecipHartreeTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     PARAM.input.nspin = 1;
     std::vector<std::complex<double>> drhog1(pw_basis.npw);
     std::vector<std::complex<double>> drhog2(pw_basis.npw);
@@ -1042,13 +1082,11 @@ TEST_F(ChargeMixingTest, InnerDotRecipHartreeTest)
         drhog2[i] = std::complex<double>(1.0, 1.0);
     }
 
-    PARAM.sys.domag = false;
-    PARAM.sys.domag_z = false;
+    CMtest.runtime_policy_ = test_policy(4, 1, false);
     inner = CMtest.inner_product_recip_hartree(drhog1.data(), drhog2.data(), 4);
     EXPECT_NEAR(inner, 28260.091995611871, 1e-8);
     PARAM.sys.gamma_only_pw= true;
-    PARAM.sys.domag = true;
-    PARAM.sys.domag_z = true;
+    CMtest.runtime_policy_ = test_policy(4, 1, true);
     inner = CMtest.inner_product_recip_hartree(drhog1.data(), drhog2.data(), 4);
     EXPECT_NEAR(inner, 110668.61166927818, 1e-8);
 
@@ -1069,7 +1107,7 @@ TEST_F(ChargeMixingTest, InnerDotRecipHartreeTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     drhog1.resize(pw_basis.npw * 2);
     drhog2.resize(pw_basis.npw * 2);
     for (int i = 0; i < pw_basis.npw * 2; ++i)
@@ -1118,7 +1156,7 @@ TEST_F(ChargeMixingTest, InnerDotRecipRhoTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     PARAM.input.nspin = 1;
     std::vector<std::complex<double>> drhog1(pw_basis.npw);
     std::vector<std::complex<double>> drhog2(pw_basis.npw);
@@ -1157,13 +1195,11 @@ TEST_F(ChargeMixingTest, InnerDotRecipRhoTest)
         drhog2[i] = std::complex<double>(1.0, 1.0);
     }
 
-    PARAM.sys.domag = false;
-    PARAM.sys.domag_z = false;
+    CMtest.runtime_policy_ = test_policy(4, 1, false);
     inner = CMtest.inner_product_recip_rho(drhog1.data(), drhog2.data(), 4);
     EXPECT_NEAR(inner, 28260.091995611871, 1e-8);
     PARAM.sys.gamma_only_pw= true;
-    PARAM.sys.domag = true;
-    PARAM.sys.domag_z = true;
+    CMtest.runtime_policy_ = test_policy(4, 1, true);
     inner = CMtest.inner_product_recip_rho(drhog1.data(), drhog2.data(), 4);
     EXPECT_NEAR(inner, 110668.61166927818, 1e-8);
 }
@@ -1187,7 +1223,7 @@ TEST_F(ChargeMixingTest, KerkerScreenRecipTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     // nspin = 1
     PARAM.input.nspin = 1;
     std::complex<double>* drhog = new std::complex<double>[PARAM.input.nspin*pw_basis.npw];
@@ -1332,7 +1368,7 @@ TEST_F(ChargeMixingTest, KerkerScreenRealTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
     // nspin = 1
     PARAM.input.nspin = 1;
     double* drhor = new double[PARAM.input.nspin*pw_basis.nrxx];
@@ -1411,7 +1447,6 @@ TEST_F(ChargeMixingTest, MixRhoTest)
     charge.set_rhopw(&pw_basis);
     const int nspin = PARAM.input.nspin = 1;
     charge.nspin = nspin;
-    PARAM.sys.domag_z = false;
     XC_Functional::func_type = 3;
     XC_Functional::ked_flag = true;
     PARAM.input.mixing_beta = 0.7;
@@ -1460,7 +1495,6 @@ TEST_F(ChargeMixingTest, MixRhoTest)
     // RECIPROCAL
     Charge_Mixing CMtest_recip;
     CMtest_recip.set_rhopw(&pw_basis, &pw_basis);
-    PARAM.input.scf_thr_type= 1;
     CMtest_recip.set_mixing(PARAM.input.mixing_mode,
                             PARAM.input.mixing_beta,
                             PARAM.input.mixing_ndim,
@@ -1475,8 +1509,8 @@ TEST_F(ChargeMixingTest, MixRhoTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
-    CMtest_recip.init_mixing(charge);
+                    test_policy(1, 1, true));
+    CMtest_recip.init_mixing();
     for(int i = 0 ; i < nspin * npw; ++i)
     {
         charge._space_rhog[i] = recip_ref[i];
@@ -1503,7 +1537,6 @@ TEST_F(ChargeMixingTest, MixRhoTest)
 
     // REAL
     Charge_Mixing CMtest_real;
-    PARAM.input.scf_thr_type= 2;
     CMtest_real.set_rhopw(&pw_basis, &pw_basis);
     CMtest_real.set_mixing(PARAM.input.mixing_mode,
                         PARAM.input.mixing_beta,
@@ -1519,14 +1552,14 @@ TEST_F(ChargeMixingTest, MixRhoTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
-    CMtest_real.init_mixing(charge);
+                    test_policy(1, 2, true));
+    CMtest_real.init_mixing();
     for(int i = 0 ; i < nspin * nrxx; ++i)
     {
         charge._space_rho[i] = real_ref[i];
         charge._space_rho_save[i] = real_save_ref[i];
     }
-    CMtest_recip.mix_rho(&charge);
+    CMtest_real.mix_rho(&charge);
     for(int is = 0 ; is < nspin; ++is)
     {
         for(int ir = 0 ; ir < nrxx ; ++ir)
@@ -1557,7 +1590,6 @@ TEST_F(ChargeMixingTest, MixDoubleGridRhoTest)
     charge.set_rhopw(&pw_dbasis);
     const int nspin = PARAM.input.nspin = 1;
     charge.nspin = nspin;
-    PARAM.sys.domag_z = false;
     XC_Functional::func_type = 3;
     XC_Functional::ked_flag = true;
     PARAM.input.mixing_beta = 0.7;
@@ -1607,7 +1639,6 @@ TEST_F(ChargeMixingTest, MixDoubleGridRhoTest)
     Charge_Mixing CMtest_recip;
     CMtest_recip.set_rhopw(&pw_basis, &pw_dbasis);
 
-    PARAM.input.scf_thr_type= 1;
     CMtest_recip.set_mixing(PARAM.input.mixing_mode,
                             PARAM.input.mixing_beta,
                             PARAM.input.mixing_ndim,
@@ -1622,9 +1653,9 @@ TEST_F(ChargeMixingTest, MixDoubleGridRhoTest)
                     ucell.tpiba,
                     true,
                     running_log,
-                    true);
+                    test_policy(1, 1, true));
 
-    CMtest_recip.init_mixing(charge);
+    CMtest_recip.init_mixing();
     for (int i = 0; i < nspin * npw; ++i)
     {
         charge._space_rhog[i] = recip_ref[i];

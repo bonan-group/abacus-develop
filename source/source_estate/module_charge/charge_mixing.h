@@ -17,6 +17,22 @@ class GpuMixing;
 struct ChargeMixingGpuWorkspace;
 #endif
 
+struct ChargeMixingPolicy
+{
+    ChargeMixingPolicy();
+    ChargeMixingPolicy(int nspin_in,
+                       int scf_thr_type_in,
+                       bool domag_z_in,
+                       bool include_magnetism_in);
+
+    int nspin;
+    int scf_thr_type;
+    bool domag_z;
+    bool include_magnetism;
+};
+
+ChargeMixingPolicy make_charge_mixing_policy(int nspin, int scf_thr_type, bool noncolin);
+
 class Charge_Mixing
 {
   /// Charge_Mixing class
@@ -49,7 +65,7 @@ class Charge_Mixing
      * @param tpiba_in 2*pi/beta for non-linear core correction
      * @param mixing_gpu_in whether GPU-resident mixing is enabled
      * @param running_log stream for setup and fallback messages
-     * @param include_magnetism whether reciprocal GPU reductions include magnetic components
+     * @param runtime_policy spin, SCF-space, and magnetic policy resolved by the owner
      */
     void set_mixing(const std::string& mixing_mode_in,
                     const double& mixing_beta_in,
@@ -65,16 +81,15 @@ class Charge_Mixing
                     double& tpiba_in,
                     const bool mixing_gpu_in,
                     std::ostream& running_log,
-                    const bool include_magnetism);
+                    const ChargeMixingPolicy& runtime_policy);
 
     void close_kerker_gg0() { mixing_gg0 = 0.0; mixing_gg0_mag = 0.0; }
     void conserve_setting() { mixing_beta = 0.01; mixing_beta_mag = 0.04; }
     /**
      * @brief initialize mixing, including constructing mixing and allocating memory for mixing data
      * @brief this function should be called at eachiterinit()
-     * @param chr charge object that owns the spin count
      */
-    void init_mixing(const Charge& chr);
+    void init_mixing();
 
     /**
      * @brief allocate memory of dmr_mdata
@@ -196,7 +211,7 @@ class Charge_Mixing
     /// Runtime device selection: "cpu" or "gpu"
     std::string device_ = "cpu";
     std::ostream* running_log_ = nullptr;
-    bool include_magnetism_ = false;
+    ChargeMixingPolicy runtime_policy_;
     bool gpu_charge_mixing_active_logged_ = false;
     bool gpu_charge_mixing_fallback_logged_ = false;
 

@@ -316,7 +316,7 @@ void ESolver_KS_LCAO<TK, TR>::iter_init(UnitCell& ucell, const int istep, const 
     // call iter_init() of ESolver_KS
     ESolver_KS::iter_init(ucell, istep, iter);
 
-    module_charge::chgmixing_ks_lcao(iter, this->chr, this->p_chgmix, this->dftu,
+    module_charge::chgmixing_ks_lcao(iter, this->p_chgmix, this->dftu,
       this->dmat.dm->get_DMR_pointer(1)->get_nnr(), PARAM.inp);
 
     if (iter == 1)

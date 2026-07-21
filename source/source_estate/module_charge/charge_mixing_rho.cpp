@@ -1,5 +1,4 @@
 #include "charge_mixing.h"
-#include "source_io/module_parameter/parameter.h"
 #include "source_base/timer.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_base/module_device/types.h"
@@ -25,7 +24,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
         // Restore timer context for GPU path
         ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip");
 
-        mix_rho_recip_gpu(chr, this->include_magnetism_);
+        mix_rho_recip_gpu(chr, this->runtime_policy_.include_magnetism);
         return;
     }
     if (device_ == "gpu")
@@ -662,7 +661,7 @@ void Charge_Mixing::mix_rho(Charge* chr)
     std::vector<double> rho123(nspin * nrxx);
     for (int is = 0; is < nspin; ++is)
     {
-        if (is == 0 || is == 3 || !PARAM.globalv.domag_z)
+        if (is == 0 || is == 3 || !this->runtime_policy_.domag_z)
         {
             double* rho123_is = rho123.data() + is * nrxx;
 #ifdef _OPENMP
@@ -691,11 +690,11 @@ void Charge_Mixing::mix_rho(Charge* chr)
         }
     }
     // --------------------Mixing Body--------------------
-    if (PARAM.inp.scf_thr_type == 1)
+    if (this->runtime_policy_.scf_thr_type == 1)
     {
         mix_rho_recip(chr);
     }
-    else if (PARAM.inp.scf_thr_type == 2)
+    else if (this->runtime_policy_.scf_thr_type == 2)
     {
         mix_rho_real(chr);
     }
@@ -705,7 +704,7 @@ void Charge_Mixing::mix_rho(Charge* chr)
     // rho_save is the charge before mixing
     for (int is = 0; is < nspin; ++is)
     {
-        if (is == 0 || is == 3 || !PARAM.globalv.domag_z)
+        if (is == 0 || is == 3 || !this->runtime_policy_.domag_z)
         {
             double* rho123_is = rho123.data() + is * nrxx;
 #ifdef _OPENMP

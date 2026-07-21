@@ -28,7 +28,7 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
     assert(nspin==1 || nspin==2 || nspin==4);
     double drho = 0.0;
 
-    if (PARAM.inp.scf_thr_type == 1)
+    if (this->runtime_policy_.scf_thr_type == 1)
     {
         // Perform FFT on rho(r) to obtain rho(G)
 #if __CUDA || __ROCM
@@ -98,7 +98,7 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
         //       The inner_product_real function (L1-norm) is different from that (L2-norm) in mixing.
         for (int is = 0; is < nspin; is++)
         {
-            if (is != 0 && is != 3 && PARAM.globalv.domag_z)
+            if (is != 0 && is != 3 && this->runtime_policy_.domag_z)
             {
                 continue;
             }
@@ -138,7 +138,7 @@ double Charge_Mixing::get_dkin(Charge* chr, const double nelec)
     const int nspin = chr->nspin;
     for (int is = 0; is < nspin; is++)
     {
-        if (is != 0 && is != 3 && PARAM.globalv.domag_z)
+        if (is != 0 && is != 3 && this->runtime_policy_.domag_z)
         {
             continue;
         }
@@ -239,7 +239,6 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1,
         }
         mag *= fac2;
 
-        // if(PARAM.globalv.gamma_only_pw);
         if (PARAM.globalv.gamma_only_pw) // Peize Lin delete ; 2020.01.31
         {
             mag *= 2.0;
@@ -252,7 +251,7 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1,
     }
     case 4:
         // non-collinear spin, added by zhengdy
-        if (!PARAM.globalv.domag && !PARAM.globalv.domag_z) {
+        if (!this->runtime_policy_.include_magnetism) {
             sum += part_of_noncolin();
         } else
         {
@@ -424,7 +423,7 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1,
     }
     else if (nspin==4)
     {
-        if (!PARAM.globalv.domag && !PARAM.globalv.domag_z)
+        if (!this->runtime_policy_.include_magnetism)
         {
             sum += part_of_rho();
         }

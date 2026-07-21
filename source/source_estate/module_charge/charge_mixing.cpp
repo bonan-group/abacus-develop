@@ -19,6 +19,29 @@ void log_mixing_parameter(std::ostream& running_log, const char* name, const T& 
 }
 } // namespace
 
+ChargeMixingPolicy::ChargeMixingPolicy()
+    : nspin(0), scf_thr_type(0), domag_z(false), include_magnetism(false)
+{
+}
+
+ChargeMixingPolicy::ChargeMixingPolicy(const int nspin_in,
+                                       const int scf_thr_type_in,
+                                       const bool domag_z_in,
+                                       const bool include_magnetism_in)
+    : nspin(nspin_in),
+      scf_thr_type(scf_thr_type_in),
+      domag_z(domag_z_in),
+      include_magnetism(include_magnetism_in)
+{
+}
+
+ChargeMixingPolicy make_charge_mixing_policy(const int nspin, const int scf_thr_type, const bool noncolin)
+{
+    const bool domag = nspin == 4 && noncolin;
+    const bool domag_z = nspin == 4 && !noncolin;
+    return ChargeMixingPolicy(nspin, scf_thr_type, domag_z, nspin != 4 || domag || domag_z);
+}
+
 Charge_Mixing::Charge_Mixing()
 {
     this->mixing = nullptr;
@@ -58,7 +81,7 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
                                double& tpiba_in,
                                const bool mixing_gpu_in,
                                std::ostream& running_log,
-                               const bool include_magnetism)
+                               const ChargeMixingPolicy& runtime_policy)
 {
     // get private mixing parameters
     this->mixing_mode = mixing_mode_in;
@@ -73,7 +96,7 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
     this->mixing_dmr = mixing_dmr_in;
     this->mixing_gpu_enabled = mixing_gpu_in;
     this->running_log_ = &running_log;
-    this->include_magnetism_ = include_magnetism;
+    this->runtime_policy_ = runtime_policy;
     this->omega = &omega_in;
     this->tpiba = &tpiba_in;
     // check the paramters
@@ -81,7 +104,7 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
     {
         ModuleBase::WARNING_QUIT("Charge_Mixing", "You'd better set mixing_beta to [0.0, 1.0]!");
     }
-    if (PARAM.inp.nspin >= 2 && this->mixing_beta_mag < 0.0)
+    if (this->runtime_policy_.nspin >= 2 && this->mixing_beta_mag < 0.0)
     {
         ModuleBase::WARNING_QUIT("Charge_Mixing", "You'd better set mixing_beta_mag >= 0.0!");
     }
@@ -110,7 +133,7 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
     log_mixing_parameter(running_log, "mixing_gg0", this->mixing_gg0);
     log_mixing_parameter(running_log, "mixing_gg0_min", this->mixing_gg0_min);
 
-    if (PARAM.inp.nspin==2 || PARAM.inp.nspin==4)
+    if (this->runtime_policy_.nspin == 2 || this->runtime_policy_.nspin == 4)
     {
         log_mixing_parameter(running_log, "mixing_beta_mag", this->mixing_beta_mag);
         log_mixing_parameter(running_log, "mixing_gg0_mag", this->mixing_gg0_mag);
@@ -161,7 +184,7 @@ bool Charge_Mixing::can_use_gpu_resident_mixing(const Charge* chr) const
     return spin_supported && supported_mode;
 }
 
-void Charge_Mixing::init_mixing(const Charge& chr)
+void Charge_Mixing::init_mixing()
 {
     // this init should be called at the 1-st iteration of each scf loop
 
@@ -193,8 +216,9 @@ void Charge_Mixing::init_mixing(const Charge& chr)
         ModuleBase::WARNING_QUIT("Charge_Mixing", "This Mixing mode is not implemended yet,coming soon.");
     }
 
-    const int nspin = chr.nspin;
+    const int nspin = this->runtime_policy_.nspin;
     assert(nspin == 1 || nspin == 2 || nspin == 4);
+    assert(this->runtime_policy_.scf_thr_type == 1 || this->runtime_policy_.scf_thr_type == 2);
     const bool double_grid = this->rhopw != this->rhodpw;
 
     if (double_grid)
@@ -207,7 +231,7 @@ void Charge_Mixing::init_mixing(const Charge& chr)
 
     // allocate memory for mixing data, if exists, free it first and then allocate new memory
     // initailize rho_mdata
-    if (PARAM.inp.scf_thr_type == 1)
+    if (this->runtime_policy_.scf_thr_type == 1)
     {  
         if (nspin == 4 && this->mixing_angle > 0)
         {
@@ -237,7 +261,7 @@ void Charge_Mixing::init_mixing(const Charge& chr)
     // initailize tau_mdata
     if ((XC_Functional::get_ked_flag()) && mixing_tau)
     {
-        if (PARAM.inp.scf_thr_type == 1)
+        if (this->runtime_policy_.scf_thr_type == 1)
         {
             this->mixing->init_mixing_data(this->tau_mdata,
                                            this->rhopw->npw * nspin,
