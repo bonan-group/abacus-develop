@@ -122,6 +122,16 @@ void Structure_Factor::setup(const UnitCell* Ucell, const Parallel_Grid& pgrid, 
     }
     
     if (device == "gpu") {
+#if !defined(__CUDA) && !defined(__UT_USE_CUDA)
+        // CUDA compute_eigts_gpu already owns these device buffers. Other GPU
+        // backends compute on the host and must upload the double source first.
+        resmem_zd_op()(this->z_eigts1, Ucell->nat * (2 * rho_basis->nx + 1));
+        resmem_zd_op()(this->z_eigts2, Ucell->nat * (2 * rho_basis->ny + 1));
+        resmem_zd_op()(this->z_eigts3, Ucell->nat * (2 * rho_basis->nz + 1));
+        syncmem_z2z_h2d_op()(this->z_eigts1, this->eigts1.c, Ucell->nat * (2 * rho_basis->nx + 1));
+        syncmem_z2z_h2d_op()(this->z_eigts2, this->eigts2.c, Ucell->nat * (2 * rho_basis->ny + 1));
+        syncmem_z2z_h2d_op()(this->z_eigts3, this->eigts3.c, Ucell->nat * (2 * rho_basis->nz + 1));
+#endif
         if (PARAM.globalv.has_float_data) {
             using castmem_z2c_d2d_op
                 = base_device::memory::cast_memory_op<std::complex<float>,
