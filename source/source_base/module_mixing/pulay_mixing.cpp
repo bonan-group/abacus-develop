@@ -1,7 +1,8 @@
 #include "pulay_mixing.h"
 
-#include "source_base/module_external/lapack_connector.h"
+#include "mixing_coefficients.h"
 #include "source_base/timer.h"
+#include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 namespace Base_Mixing
 {
@@ -131,44 +132,7 @@ void Pulay_Mixing::tem_cal_coef(const Mixing_Data& mdata, std::function<double(F
             }
         }
 
-        double* work = new double[ndim_use];
-        int* iwork = new int[ndim_use];
-        char uu = 'U';
-        int info;
-        dsytrf_(&uu, &ndim_use, beta_tmp.c, &ndim_use, iwork, work, &ndim_use, &info);
-        if (info != 0)
-            ModuleBase::WARNING_QUIT("Charge_Mixing", "Error when factorizing beta.");
-        dsytri_(&uu, &ndim_use, beta_tmp.c, &ndim_use, iwork, work, &info);
-        if (info != 0)
-            ModuleBase::WARNING_QUIT("Charge_Mixing", "Error when DSYTRI beta.");
-        for (int i = 0; i < ndim_use; ++i)
-        {
-            for (int j = i + 1; j < ndim_use; ++j)
-            {
-                beta_tmp(i, j) = beta_tmp(j, i);
-            }
-        }
-
-        // coef{i} = \sum_j beta{ij} / \sum_k \sum_j beta{kj}
-        double sum_beta = 0.;
-        for (int i = 0; i < ndim_use; ++i)
-        {
-            for (int j = 0; j < ndim_use; ++j)
-            {
-                sum_beta += beta_tmp(j, i);
-            }
-        }
-        for (int i = 0; i < ndim_use; ++i)
-        {
-            coef[i] = 0.;
-            for (int j = 0; j < ndim_use; ++j)
-            {
-                coef[i] += beta_tmp(i, j);
-            }
-            coef[i] /= sum_beta;
-        }
-        delete[] work;
-        delete[] iwork;
+        solve_pulay_system(beta_tmp, coef);
     }
     else
     {

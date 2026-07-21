@@ -61,6 +61,7 @@ add_library(
     projgen.cpp
     module_mixing/mixing_data.cpp
     module_mixing/mixing.cpp
+    module_mixing/mixing_coefficients.cpp
     module_mixing/plain_mixing.cpp
     module_mixing/pulay_mixing.cpp
     module_mixing/broyden_mixing.cpp

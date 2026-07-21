@@ -1,8 +1,9 @@
 #include "broyden_mixing.h"
 
-#include "source_base/module_external/lapack_connector.h"
+#include "mixing_coefficients.h"
 #include "source_base/module_container/base/third_party/blas.h"
 #include "source_base/timer.h"
+#include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 namespace Base_Mixing
 {
@@ -141,11 +142,6 @@ void Broyden_Mixing::tem_cal_coef(const Mixing_Data& mdata, std::function<double
                 }
             }
         }
-        double* work = new double[ndim_cal_dF];   // workspace
-        int* iwork = new int[ndim_cal_dF];   // ipiv
-        char uu = 'U';
-        int info = 0;
-        int m = 1;
         // gamma means the coeficients for mixing
         // but now gamma store <dFi|Fm>, namely c
         std::vector<double> gamma(ndim_cal_dF);
@@ -155,23 +151,8 @@ void Broyden_Mixing::tem_cal_coef(const Mixing_Data& mdata, std::function<double
             gamma[i] = inner_product(dFi, FP_F);
         }
 
-		// solve aG = c 
-		dsysv_(&uu, 
-				&ndim_cal_dF, 
-				&m, 
-				beta_tmp.c, 
-				&ndim_cal_dF, 
-				iwork, 
-				gamma.data(), 
-				&ndim_cal_dF, 
-				work, 
-				&ndim_cal_dF, 
-				&info);
-
-		if (info != 0)
-		{
-			ModuleBase::WARNING_QUIT("Charge_Mixing", "Error when DSYSV.");
-		}
+        // solve aG = c
+        solve_broyden_system(beta_tmp, gamma);
 
         // after solving, gamma store the coeficients for mixing
         coef[mdata.start] = 1 + gamma[dFindex_move(0)];
@@ -180,9 +161,6 @@ void Broyden_Mixing::tem_cal_coef(const Mixing_Data& mdata, std::function<double
             coef[mdata.index_move(-i)] = gamma[dFindex_move(-i)] - gamma[dFindex_move(-i + 1)];
         }
         coef[mdata.index_move(-ndim_cal_dF)] = -gamma[dFindex_move(-ndim_cal_dF + 1)];
-
-        delete[] work;
-        delete[] iwork;
     }
     else
     {

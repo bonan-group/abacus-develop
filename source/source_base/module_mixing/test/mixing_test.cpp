@@ -3,6 +3,7 @@
 #endif
 
 #include "../broyden_mixing.h"
+#include "../mixing_coefficients.h"
 #include "../plain_mixing.h"
 #include "../pulay_mixing.h"
 #if __UT_USE_CUDA
@@ -20,6 +21,83 @@ double ext_inner_product_mock(double* x1, double* x2)
 {
     return 0.0;
 }
+
+TEST(MixingCoefficientsTest, SolvesBroydenSystemInPlace)
+{
+    ModuleBase::matrix gram(2, 2);
+    gram(0, 0) = 4.0;
+    gram(0, 1) = 1.0;
+    gram(1, 0) = 1.0;
+    gram(1, 1) = 3.0;
+    std::vector<double> rhs = {1.0, 2.0};
+
+    Base_Mixing::solve_broyden_system(gram, rhs);
+
+    EXPECT_NEAR(rhs[0], 1.0 / 11.0, DOUBLETHRESHOLD);
+    EXPECT_NEAR(rhs[1], 7.0 / 11.0, DOUBLETHRESHOLD);
+    EXPECT_TRUE(gram(0, 0) != 4.0 || gram(0, 1) != 1.0 || gram(1, 0) != 1.0 || gram(1, 1) != 3.0);
+}
+
+TEST(MixingCoefficientsTest, SolvesPulaySystemWithNormalizedInverseRowSums)
+{
+    ModuleBase::matrix gram(2, 2);
+    gram(0, 0) = 4.0;
+    gram(0, 1) = 1.0;
+    gram(1, 0) = 1.0;
+    gram(1, 1) = 3.0;
+    std::vector<double> coefficients(2);
+
+    Base_Mixing::solve_pulay_system(gram, coefficients);
+
+    EXPECT_NEAR(coefficients[0], 0.4, DOUBLETHRESHOLD);
+    EXPECT_NEAR(coefficients[1], 0.6, DOUBLETHRESHOLD);
+    EXPECT_NEAR(coefficients[0] + coefficients[1], 1.0, DOUBLETHRESHOLD);
+    EXPECT_NEAR(gram(0, 0), 3.0 / 11.0, DOUBLETHRESHOLD);
+    EXPECT_NEAR(gram(0, 1), -1.0 / 11.0, DOUBLETHRESHOLD);
+    EXPECT_NEAR(gram(1, 0), -1.0 / 11.0, DOUBLETHRESHOLD);
+    EXPECT_NEAR(gram(1, 1), 4.0 / 11.0, DOUBLETHRESHOLD);
+}
+
+TEST(MixingCoefficientsTest, ReportsSingularBroydenSystem)
+{
+    testing::internal::CaptureStdout();
+    EXPECT_EXIT(
+        {
+            ModuleBase::matrix gram(2, 2);
+            gram(0, 0) = 1.0;
+            gram(0, 1) = 2.0;
+            gram(1, 0) = 2.0;
+            gram(1, 1) = 4.0;
+            std::vector<double> rhs(2);
+            rhs[0] = 1.0;
+            rhs[1] = 2.0;
+            Base_Mixing::solve_broyden_system(gram, rhs);
+        },
+        ::testing::ExitedWithCode(1),
+        "");
+    const std::string output = testing::internal::GetCapturedStdout();
+    EXPECT_THAT(output, testing::HasSubstr("Error when DSYSV."));
+}
+
+TEST(MixingCoefficientsTest, ReportsSingularPulaySystem)
+{
+    testing::internal::CaptureStdout();
+    EXPECT_EXIT(
+        {
+            ModuleBase::matrix gram(2, 2);
+            gram(0, 0) = 1.0;
+            gram(0, 1) = 2.0;
+            gram(1, 0) = 2.0;
+            gram(1, 1) = 4.0;
+            std::vector<double> coefficients(2);
+            Base_Mixing::solve_pulay_system(gram, coefficients);
+        },
+        ::testing::ExitedWithCode(1),
+        "");
+    const std::string output = testing::internal::GetCapturedStdout();
+    EXPECT_THAT(output, testing::HasSubstr("Error when factorizing beta."));
+}
+
 class Mixing_Test : public testing::Test
 {
   protected:
