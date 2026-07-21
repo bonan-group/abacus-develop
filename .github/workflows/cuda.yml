@@ -57,49 +57,13 @@ jobs:
 
       - name: Test GPU-resident mixing workflows
         run: |
-          cd tests/11_PW_GPU
           # GPU PW FFT currently requires one MPI rank per pool.
-          OMP_NUM_THREADS=1 bash ../integrate/Autotest.sh -n 1 -t 1e-3 -f CASES_MIXING_GPU.txt
-          while read -r case_name; do
-            grep -q 'INFO: Using GPU-resident reciprocal charge mixing.' \
-              "${case_name}/OUT.autotest/running_scf.log"
-            awk '/^ CG/ {
-                   rows++
-                   for (i = 2; i <= NF; ++i) {
-                     value = tolower($i)
-                     if (value ~ /^[+-]?(nan|inf|infinity)$/) bad = 1
-                   }
-                 }
-                 END { exit !(rows == 3 && !bad) }' "${case_name}/log.txt"
-            awk '/Number of plane waves =/ { values[++count] = $NF }
-                 END { exit !(count >= 2 && values[1] != values[2]) }' \
-              "${case_name}/OUT.autotest/running_scf.log"
-          done < CASES_MIXING_GPU.txt
-          grep -q 'DKIN' mixing_pulay_tau_spin2_double_grid/log.txt
+          OMP_NUM_THREADS=1 tests/11_PW_GPU/run_resident_mixing_tests.sh CASES_MIXING_GPU.txt mixing_pulay_tau_spin2_double_grid
 
       - name: Test GPU-resident USPP mixing workflows
         run: |
-          cd tests/11_PW_GPU
           # GPU PW FFT currently requires one MPI rank per pool.
-          OMP_NUM_THREADS=1 bash ../integrate/Autotest.sh -n 1 -t 1e-3 -f CASES_USPP_MIXING_GPU.txt
-          while read -r case_name; do
-            grep -q 'INFO: Using GPU-resident reciprocal charge mixing.' \
-              "${case_name}/OUT.autotest/running_scf.log"
-            grep -q 'INFO: Using GPU-resident USPP effective-D assembly.' \
-              "${case_name}/OUT.autotest/running_scf.log"
-            awk '/^ CG/ {
-                   rows++
-                   for (i = 2; i <= NF; ++i) {
-                     value = tolower($i)
-                     if (value ~ /^[+-]?(nan|inf|infinity)$/) bad = 1
-                   }
-                 }
-                 END { exit !(rows == 3 && !bad) }' "${case_name}/log.txt"
-            awk '/Number of plane waves =/ { values[++count] = $NF }
-                 END { exit !(count >= 2 && values[1] != values[2]) }' \
-              "${case_name}/OUT.autotest/running_scf.log"
-          done < CASES_USPP_MIXING_GPU.txt
-          grep -q 'DKIN' uspp_mixing_pulay_tau_spin2_double_grid/log.txt
+          OMP_NUM_THREADS=1 tests/11_PW_GPU/run_resident_mixing_tests.sh CASES_USPP_MIXING_GPU.txt uspp_mixing_pulay_tau_spin2_double_grid 'INFO: Using GPU-resident USPP effective-D assembly.'
 
       - name: Test 11_PW_GPU
         run: |

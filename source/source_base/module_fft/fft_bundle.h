@@ -202,6 +202,9 @@ class FFT_Bundle
     void fft3D_backward(std::complex<FPTYPE>* in, std::complex<FPTYPE>* out) const;
 
   private:
+    template <typename FPTYPE>
+    FFT_BASE<FPTYPE>* host_fft() const;
+
     int fft_mode = 0;
     bool float_flag = false;
     bool double_flag = false;
