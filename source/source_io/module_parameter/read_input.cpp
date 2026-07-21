@@ -10,7 +10,6 @@
 #include <vector>
 #include <cassert>
 #include <cctype>
-#include <cstdlib>
 #include <limits>
 #include "source_base/formatter.h"
 #include "source_base/global_file.h"
@@ -18,7 +17,6 @@
 #include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 #include "source_base/module_device/device.h"
-#include "source_base/memory_recorder.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -60,12 +58,6 @@ bool assume_as_boolean(const std::string& val)
         warnmsg.append(", please check the input parameters in file INPUT");
         ModuleBase::WARNING_QUIT("Input", warnmsg);
     }
-}
-
-bool env_flag_enabled(const char* name)
-{
-    const char* value = std::getenv(name);
-    return value != nullptr && assume_as_boolean(value);
 }
 
 std::string to_dir(const std::string& str)
@@ -289,19 +281,6 @@ void ReadInput::create_directory(const Parameter& param)
                                           param.globalv.log_file,
                                           param.input.of_ml_gene_data,
                                           param.input.deepks_out_freq_elec > 0); // xiaohui add 2013-09-01
-#if defined(__CUDA) || defined(__ROCM)
-    std::string mem_stream_path;
-    const bool mem_stream_enabled = env_flag_enabled("ABACUS_MEM_STREAM");
-    if (mem_stream_enabled)
-    {
-        mem_stream_path = param.sys.global_out_dir + "memory_stream";
-#ifdef __MPI
-        mem_stream_path += ".rank" + std::to_string(this->rank);
-#endif
-        mem_stream_path += ".jsonl";
-    }
-    ModuleBase::Memory::set_stream_enabled(mem_stream_enabled, mem_stream_path);
-#endif
     //const std::string ss = "test -d " + PARAM.inp.read_file_dir;
     struct stat st;
     if (stat(PARAM.inp.read_file_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
