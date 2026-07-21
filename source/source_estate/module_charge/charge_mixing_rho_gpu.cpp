@@ -607,7 +607,8 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr, const bool include_magnetism)
     const bool mix_tau = (XC_Functional::get_ked_flag()) && mixing_tau;
     if (mix_tau)
     {
-        chr->sync_kin_r_and_save_to_device();
+        chr->sync_kin_r_to_device();
+        chr->sync_kin_r_save_to_device();
         for (int is = 0; is < nspin; ++is)
         {
             this->rhodpw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(

@@ -146,7 +146,7 @@ TEST(ChargeDeviceTest, SavedRhoUploadDoesNotOverwriteDeviceRhogSave)
     expect_complex_data(device_rhog_save, charge.rhog_save[0]);
 }
 
-TEST(ChargeDeviceTest, CurrentAndSavedKineticDensityUploadTogether)
+TEST(ChargeDeviceTest, CurrentKineticDensityUploadDoesNotOverwriteSaved)
 {
     ModulePW::PW_Basis basis;
     initialize_basis(basis);
@@ -159,16 +159,45 @@ TEST(ChargeDeviceTest, CurrentAndSavedKineticDensityUploadTogether)
                                          1.01, 1.02, 1.03, 1.04, 1.05};
     const std::vector<double> kinetic_save = {0.05, 0.04, 0.03, 0.02, 0.01,
                                               1.05, 1.04, 1.03, 1.02, 1.01};
+    const std::vector<double> saved_sentinel(kinetic_save.size(), -3.0);
     std::copy(kinetic.begin(), kinetic.end(), charge.kin_r[0]);
     std::copy(kinetic_save.begin(), kinetic_save.end(), charge.kin_r_save[0]);
+    sync_double_h2d_op()(charge.get_kin_r_save_d(0), saved_sentinel.data(), saved_sentinel.size());
 
-    charge.sync_kin_r_and_save_to_device();
-    std::fill(charge.kin_r[0], charge.kin_r[0] + kinetic.size(), 0.0);
-    charge.sync_kin_r_to_host();
+    charge.sync_kin_r_to_device();
 
-    expect_double_data(kinetic, charge.kin_r[0]);
+    std::vector<double> uploaded_current(kinetic.size(), 0.0);
     std::vector<double> uploaded_save(kinetic_save.size(), 0.0);
+    sync_double_d2h_op()(uploaded_current.data(), charge.get_kin_r_d(0), uploaded_current.size());
     sync_double_d2h_op()(uploaded_save.data(), charge.get_kin_r_save_d(0), uploaded_save.size());
+    expect_double_data(kinetic, uploaded_current.data());
+    expect_double_data(saved_sentinel, uploaded_save.data());
+}
+
+TEST(ChargeDeviceTest, SavedKineticDensityUploadDoesNotOverwriteCurrent)
+{
+    ModulePW::PW_Basis basis;
+    initialize_basis(basis);
+    Charge charge;
+    charge.set_rhopw(&basis);
+    charge.set_device("gpu");
+    charge.allocate(2, true);
+
+    const std::vector<double> kinetic(10, 4.0);
+    const std::vector<double> kinetic_save = {0.05, 0.04, 0.03, 0.02, 0.01,
+                                              1.05, 1.04, 1.03, 1.02, 1.01};
+    const std::vector<double> current_sentinel(kinetic.size(), -4.0);
+    std::copy(kinetic.begin(), kinetic.end(), charge.kin_r[0]);
+    std::copy(kinetic_save.begin(), kinetic_save.end(), charge.kin_r_save[0]);
+    sync_double_h2d_op()(charge.get_kin_r_d(0), current_sentinel.data(), current_sentinel.size());
+
+    charge.sync_kin_r_save_to_device();
+
+    std::vector<double> retained_current(kinetic.size(), 0.0);
+    std::vector<double> uploaded_save(kinetic_save.size(), 0.0);
+    sync_double_d2h_op()(retained_current.data(), charge.get_kin_r_d(0), retained_current.size());
+    sync_double_d2h_op()(uploaded_save.data(), charge.get_kin_r_save_d(0), uploaded_save.size());
+    expect_double_data(current_sentinel, retained_current.data());
     expect_double_data(kinetic_save, uploaded_save.data());
 }
 
@@ -180,7 +209,8 @@ TEST(ChargeDeviceTest, OrdinarySyncMethodsAreSafeWithoutDeviceStorage)
     EXPECT_NO_THROW(charge.sync_rho_to_host());
     EXPECT_NO_THROW(charge.sync_rhog_to_device());
     EXPECT_NO_THROW(charge.sync_rhog_to_host());
-    EXPECT_NO_THROW(charge.sync_kin_r_and_save_to_device());
+    EXPECT_NO_THROW(charge.sync_kin_r_to_device());
+    EXPECT_NO_THROW(charge.sync_kin_r_save_to_device());
     EXPECT_NO_THROW(charge.sync_kin_r_to_host());
     EXPECT_NO_THROW(charge.sync_rho_save_to_device());
     EXPECT_NO_THROW(charge.sync_rhog_save_to_host());

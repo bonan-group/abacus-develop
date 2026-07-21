@@ -104,7 +104,7 @@ void module_charge::chgmixing_ks(const int iter, // scf iteration number
 #endif
 
     chr.sync_rho_to_device();
-    chr.sync_kin_r_and_save_to_device();
+    chr.sync_kin_r_to_device();
 
     // mohan move the following code here, 2025-10-18
     // SCF restart information

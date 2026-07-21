@@ -759,7 +759,7 @@ TEST(XCResidentOpTest, ChargeRealspaceDensitySyncIsNoopOnCpuDevice)
     }
 
     chr.sync_rho_to_device();
-    chr.sync_kin_r_and_save_to_device();
+    chr.sync_kin_r_to_device();
 
     EXPECT_EQ(chr.get_device(), "cpu");
     EXPECT_EQ(chr.get_rho_d(0), nullptr);
@@ -800,7 +800,7 @@ TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
         chr.rho_core[ir] = rho_core[ir];
     }
     chr.sync_rho_to_device();
-    chr.sync_kin_r_and_save_to_device();
+    chr.sync_kin_r_to_device();
 
     XC_Functional::set_xc_type("PZ");
 
