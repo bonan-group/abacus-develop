@@ -270,7 +270,8 @@ void Charge::init_rho(const UnitCell& ucell,
 				kv->get_nkstot(),kv->ik2iktot,kv->isk,GlobalV::ofs_running);
     }
 
-    this->sync_realspace_density_to_device();
+    this->sync_rho_to_device();
+    this->sync_kin_r_to_device();
 }
 
 //==========================================================

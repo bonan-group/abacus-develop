@@ -38,8 +38,8 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
             validate_gpu_fft_poolnproc(chr->rhopw, "Charge_Mixing::get_drho");
 
             // GPU path: sync rho to GPU, then GPU FFT
-            chr->sync_rho_to_device<base_device::DEVICE_GPU>();
-            chr->sync_rho_save_to_device<base_device::DEVICE_GPU>();
+            chr->sync_rho_to_device();
+            chr->sync_saved_density_to_device();
 
             for (int is = 0; is < nspin; ++is)
             {
@@ -52,8 +52,8 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
                     chr->get_rho_save_d(is), chr->get_rhog_save_d(is));
             }
             // Sync rhog back to CPU for inner product calculation
-            chr->sync_rhog_to_host<base_device::DEVICE_GPU>();
-            chr->sync_rhog_save_to_host<base_device::DEVICE_GPU>();
+            chr->sync_rhog_to_host();
+            chr->sync_rhog_save_to_host();
         }
         else
 #endif

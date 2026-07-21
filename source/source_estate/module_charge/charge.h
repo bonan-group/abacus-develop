@@ -8,12 +8,11 @@
 #include "source_cell/module_symmetry/symmetry.h"
 // #include "source_estate/fp_energy.h"
 #include "source_pw/module_pwdft/parallel_grid.h"
-#include "source_base/module_device/types.h"
 #include <string>
-#include <type_traits>
 
 //a forward declaration of UnitCell
 class UnitCell;
+class ChargeDeviceStorage;
 
 // Electron Charge Density
 class Charge
@@ -23,6 +22,9 @@ class Charge
 
     Charge();
     ~Charge();
+
+    Charge(const Charge&) = delete;
+    Charge& operator=(const Charge&) = delete;
 
     //==========================================================
     // MEMBER VARIABLES :
@@ -103,9 +105,6 @@ class Charge
 
     void renormalize_rho();
 
-    void sync_realspace_density_to_device();
-    void sync_realspace_density_to_device() const;
-
     double sum_rho() const;
 
     void save_rho_before_sum_band();
@@ -177,13 +176,6 @@ class Charge
     /// @brief Get current device type
     std::string get_device() const { return device_; }
 
-    /// @brief Set precision type
-    /// @param precision_in "single" or "double"
-    void set_precision(const std::string& precision_in) { precision_ = precision_in; }
-
-    /// @brief Get current precision type
-    std::string get_precision() const { return precision_; }
-
     /// @brief Get device pointer for rho (nullptr if device != "gpu")
     /// @param is spin index
     double* get_rho_d() const { return get_rho_d(0); }
@@ -209,105 +201,14 @@ class Charge
     double* get_kin_r_save_d() const { return get_kin_r_save_d(0); }
     double* get_kin_r_save_d(int is) const;
 
-    /// @brief Sync rho from host to device (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rho_to_device();
-
-    /// @brief Sync rho from host to device (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rho_to_device() {} // No-op for CPU
-
-    /// @brief Sync rho from device to host (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rho_to_host();
-
-    /// @brief Sync rho from device to host (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rho_to_host() {} // No-op for CPU
-
-    /// @brief Sync rhog from host to device (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rhog_to_device();
-
-    /// @brief Sync rhog from host to device (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rhog_to_device() {} // No-op for CPU
-
-    /// @brief Sync rhog from device to host (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rhog_to_host();
-
-    /// @brief Sync rhog from device to host (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rhog_to_host() {} // No-op for CPU
-
-    /// @brief Sync kin_r from host to device (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_kin_r_to_device();
-
-    /// @brief Sync kin_r from host to device (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_kin_r_to_device() {} // No-op for CPU
-
-    /// @brief Sync kin_r from device to host (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_kin_r_to_host();
-
-    /// @brief Sync kin_r from device to host (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_kin_r_to_host() {} // No-op for CPU
-
-    /// @brief Sync kin_r_save from host to device (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_kin_r_save_to_device();
-
-    /// @brief Sync kin_r_save from host to device (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_kin_r_save_to_device() {} // No-op for CPU
-
-    /// @brief Sync rho_save from host to device (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rho_save_to_device();
-
-    /// @brief Sync rho_save from host to device (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rho_save_to_device() {} // No-op for CPU
-
-    /// @brief Sync rhog_save from host to device (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rhog_save_to_device();
-
-    /// @brief Sync rhog_save from host to device (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rhog_save_to_device() {} // No-op for CPU
-
-    /// @brief Sync rhog_save from device to host (GPU specialization)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_GPU>::value, int>::type = 0>
-    void sync_rhog_save_to_host();
-
-    /// @brief Sync rhog_save from device to host (CPU no-op)
-    template <typename Device,
-              typename std::enable_if<std::is_same<Device, base_device::DEVICE_CPU>::value, int>::type = 0>
-    void sync_rhog_save_to_host() {} // No-op for CPU
+    void sync_rho_to_device() const;
+    void sync_rho_to_host() const;
+    void sync_rhog_to_device() const;
+    void sync_rhog_to_host() const;
+    void sync_kin_r_to_device() const;
+    void sync_kin_r_to_host() const;
+    void sync_saved_density_to_device() const;
+    void sync_rhog_save_to_host() const;
 
   private:
 
@@ -331,26 +232,7 @@ class Charge
     /// Runtime device selection: "cpu" or "gpu"
     std::string device_ = "cpu";
 
-    /// Runtime precision selection: "single" or "double"
-    std::string precision_ = "double";
-
-    /// Device memory for rho [nspin*nrxx] (allocated when device_ == "gpu")
-    double* rho_d_ = nullptr;
-
-    /// Device memory for rho_save [nspin*nrxx]
-    double* rho_save_d_ = nullptr;
-
-    /// Device memory for rhog [nspin*ngmc]
-    std::complex<double>* rhog_d_ = nullptr;
-
-    /// Device memory for rhog_save [nspin*ngmc]
-    std::complex<double>* rhog_save_d_ = nullptr;
-
-    /// Device memory for kin_r [nspin*nrxx]
-    double* kin_r_d_ = nullptr;
-
-    /// Device memory for kin_r_save [nspin*nrxx]
-    double* kin_r_save_d_ = nullptr;
+    ChargeDeviceStorage* device_storage_ = nullptr;
 
     /// @brief Allocate device memory when switching to GPU mode
     void allocate_device_memory();

@@ -607,8 +607,7 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr, const bool include_magnetism)
     const bool mix_tau = (XC_Functional::get_ked_flag()) && mixing_tau;
     if (mix_tau)
     {
-        chr->sync_kin_r_to_device<base_device::DEVICE_GPU>();
-        chr->sync_kin_r_save_to_device<base_device::DEVICE_GPU>();
+        chr->sync_kin_r_to_device();
         for (int is = 0; is < nspin; ++is)
         {
             this->rhodpw->real_to_recip<double, std::complex<double>, base_device::DEVICE_GPU>(
@@ -711,11 +710,11 @@ void Charge_Mixing::mix_rho_recip_gpu(Charge* chr, const bool include_magnetism)
     }
 
     // Step 8: Sync final result to CPU
-    chr->sync_rho_to_host<base_device::DEVICE_GPU>();
-    chr->sync_rhog_to_host<base_device::DEVICE_GPU>();
+    chr->sync_rho_to_host();
+    chr->sync_rhog_to_host();
     if (mix_tau)
     {
-        chr->sync_kin_r_to_host<base_device::DEVICE_GPU>();
+        chr->sync_kin_r_to_host();
     }
     ModuleBase::timer::end("Charge_Mixing", "mix_rho_recip_gpu");
 }

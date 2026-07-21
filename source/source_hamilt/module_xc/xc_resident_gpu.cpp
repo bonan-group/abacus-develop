@@ -499,7 +499,8 @@ bool evaluate_resident_xc_stress(const XcGpuRequest& request, std::vector<double
     }
 
 #if __CUDA || __UT_USE_CUDA
-    request.charge->sync_realspace_density_to_device();
+    request.charge->sync_rho_to_device();
+    request.charge->sync_kin_r_to_device();
     ModuleBase::timer::start("XC_Functional", "gradcorr_stress_gpu");
     XcGpuWorkspace workspace(request);
     workspace.allocate_stress(spin);

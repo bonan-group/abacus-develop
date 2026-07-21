@@ -349,7 +349,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 #if __CUDA || __ROCM
         if (device_ == "gpu" && chr->get_device() == "gpu")
         {
-            chr->sync_rho_to_device<base_device::DEVICE_GPU>();
+            chr->sync_rho_to_device();
         }
 #endif
     }
@@ -360,7 +360,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
         if (device_ == "gpu" && chr->get_device() == "gpu")
         {
             // Sync rhog to GPU (mixing was done on CPU, result in chr->rhog[is])
-            chr->sync_rhog_to_device<base_device::DEVICE_GPU>();
+            chr->sync_rhog_to_device();
 
             for (int is = 0; is < nspin; is++)
             {
@@ -370,7 +370,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
                     chr->get_rhog_d(is), chr->get_rho_d(is));
             }
             // Sync rho back to CPU for subsequent operations
-            chr->sync_rho_to_host<base_device::DEVICE_GPU>();
+            chr->sync_rho_to_host();
         }
         else
 #endif
@@ -385,7 +385,7 @@ void Charge_Mixing::mix_rho_recip(Charge* chr)
 #if __CUDA || __ROCM
             if (device_ == "gpu" && chr->get_device() == "gpu")
             {
-                chr->sync_rho_to_device<base_device::DEVICE_GPU>();
+                chr->sync_rho_to_device();
             }
 #endif
         }

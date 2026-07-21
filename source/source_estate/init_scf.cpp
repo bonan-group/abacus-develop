@@ -21,7 +21,8 @@ void init_scf(const UnitCell& ucell,
     {
         pelec->charge->renormalize_rho();
     }
-    pelec->charge->sync_realspace_density_to_device();
+    pelec->charge->sync_rho_to_device();
+    pelec->charge->sync_kin_r_to_device();
 
     //! initialize the potential
     pelec->pot->init_pot(pelec->charge);

@@ -80,7 +80,6 @@ void ElecStatePW<T, Device>::init_rho_data()
     if (std::is_same<Device, base_device::DEVICE_GPU>::value)
     {
         this->charge->set_device("gpu");
-        this->charge->set_precision(PARAM.inp.precision);
     }
 
     if (PARAM.inp.device == "gpu" || PARAM.inp.precision == "single")
@@ -224,15 +223,16 @@ void ElecStatePW<T, Device>::psiToRho(const psi::Psi<T, Device>& psi)
         // Sync rho from host to Charge's device memory for use by other modules (e.g., Charge_Mixing)
         if (std::is_same<Device, base_device::DEVICE_GPU>::value)
         {
-            this->charge->sync_rho_to_device<Device>();
+            this->charge->sync_rho_to_device();
             if (XC_Functional::get_ked_flag())
             {
-                this->charge->sync_kin_r_to_device<Device>();
+                this->charge->sync_kin_r_to_device();
             }
         }
     }
     this->parallelK();
-    this->charge->sync_realspace_density_to_device();
+    this->charge->sync_rho_to_device();
+    this->charge->sync_kin_r_to_device();
     ModuleBase::timer::end("ElecStatePW", "psiToRho");
 }
 
