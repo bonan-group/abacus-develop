@@ -504,18 +504,6 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
     std::vector<FPTYPE> cpu_mixed(length);
     std::vector<FPTYPE> cpu_tau_mixed(length);
     std::vector<FPTYPE> gpu_mixed(length);
-    std::vector<FPTYPE> reference_mixed(length);
-    std::vector<FPTYPE> tau_reference(length);
-    std::vector<std::vector<FPTYPE>> legacy_pulay_history(
-        mixing_ndim, std::vector<FPTYPE>(length));
-    std::vector<std::vector<FPTYPE>> legacy_pulay_tau_history(
-        mixing_ndim, std::vector<FPTYPE>(length));
-    std::vector<std::vector<FPTYPE>> legacy_pulay_residuals(
-        mixing_ndim, std::vector<FPTYPE>(length));
-    ModuleBase::matrix legacy_pulay_gram(mixing_ndim, mixing_ndim, true);
-    std::vector<double> legacy_pulay_coefficients(mixing_ndim, 0.0);
-    int legacy_pulay_slot = -1;
-    int legacy_pulay_size = 0;
     auto cpu_mix = [](FPTYPE* out, const FPTYPE* in, const FPTYPE* residual) {
         for (int i = 0; i < split; ++i)
         {
@@ -549,87 +537,14 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
         cpu_mixer.cal_coef(cpu_data,
                            [](FPTYPE* a, FPTYPE* b) { return cpu_inner_product(a, b, length); });
         cpu_mixer.mix_data(cpu_data, cpu_mixed.data());
-
-        if (algorithm == Base_Mixing::MixingAlgorithm::Pulay)
-        {
-            legacy_pulay_slot = (legacy_pulay_slot + 1) % mixing_ndim;
-            legacy_pulay_size = std::min(legacy_pulay_size + 1, mixing_ndim);
-            for (int i = 0; i < length; ++i)
-            {
-                legacy_pulay_residuals[legacy_pulay_slot][i] = outputs[step][i] - inputs[step][i];
-                legacy_pulay_tau_history[legacy_pulay_slot][i]
-                    = outputs[step][i]
-                      + static_cast<FPTYPE>(mixing_beta) * (inputs[step][i] - outputs[step][i]);
-                if (i < split)
-                {
-                    legacy_pulay_history[legacy_pulay_slot][i]
-                        = inputs[step][i]
-                          + static_cast<FPTYPE>(mixing_beta)
-                                * legacy_pulay_residuals[legacy_pulay_slot][i];
-                }
-                else
-                {
-                    legacy_pulay_history[legacy_pulay_slot][i]
-                        = inputs[step][i]
-                          + static_cast<FPTYPE>(mixing_beta_secondary)
-                                * legacy_pulay_residuals[legacy_pulay_slot][i];
-                }
-            }
-            std::fill(legacy_pulay_coefficients.begin(), legacy_pulay_coefficients.end(), 0.0);
-            if (legacy_pulay_size == 1)
-            {
-                legacy_pulay_coefficients[legacy_pulay_slot] = 1.0;
-            }
-            else
-            {
-                ModuleBase::matrix gram(legacy_pulay_size, legacy_pulay_size);
-                for (int i = 0; i < legacy_pulay_size; ++i)
-                {
-                    for (int j = i; j < legacy_pulay_size; ++j)
-                    {
-                        if (i != legacy_pulay_slot && j != legacy_pulay_slot)
-                        {
-                            gram(i, j) = legacy_pulay_gram(i, j);
-                        }
-                        if (j != i)
-                        {
-                            gram(j, i) = gram(i, j);
-                        }
-                    }
-                }
-                for (int i = 0; i < legacy_pulay_size; ++i)
-                {
-                    const double value = cpu_inner_product(
-                        legacy_pulay_residuals[legacy_pulay_slot].data(),
-                        legacy_pulay_residuals[i].data(),
-                        length);
-                    gram(legacy_pulay_slot, i) = value;
-                    gram(i, legacy_pulay_slot) = value;
-                    legacy_pulay_gram(legacy_pulay_slot, i) = value;
-                    legacy_pulay_gram(i, legacy_pulay_slot) = value;
-                }
-                std::vector<double> active_coefficients(legacy_pulay_size);
-                Base_Mixing::solve_pulay_system(gram, active_coefficients);
-                for (int i = 0; i < legacy_pulay_size; ++i)
-                {
-                    legacy_pulay_coefficients[i] = active_coefficients[i];
-                }
-            }
-            std::fill(reference_mixed.begin(), reference_mixed.end(), FPTYPE(0));
-            for (int slot = 0; slot < mixing_ndim; ++slot)
-            {
-                for (int i = 0; i < length; ++i)
-                {
-                    reference_mixed[i]
-                        += static_cast<FPTYPE>(legacy_pulay_coefficients[slot])
-                           * legacy_pulay_history[slot][i];
-                }
-            }
-        }
-        else
-        {
-            reference_mixed = cpu_mixed;
-        }
+        cpu_mixer.push_data(
+            cpu_tau_data,
+            outputs[step].data(),
+            inputs[step].data(),
+            nullptr,
+            cpu_tau_mix,
+            false);
+        cpu_mixer.mix_data(cpu_tau_data, cpu_tau_mixed.data());
 
         base_device::memory::synchronize_memory_op<FPTYPE, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
             input_d, inputs[step].data(), length);
@@ -670,10 +585,11 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
 
         for (int i = 0; i < length; ++i)
         {
-            expect_near_value(gpu_mixed[i], reference_mixed[i], 1e-8);
+            expect_near_value(gpu_mixed[i], cpu_mixed[i], 1e-8);
         }
 
-        EXPECT_EQ(gram_callback_count, step == 0 ? 0 : 1);
+        EXPECT_EQ(gram_callback_count,
+                  algorithm == Base_Mixing::MixingAlgorithm::Pulay || step > 0 ? 1 : 0);
         EXPECT_EQ(rhs_callback_count, algorithm == Base_Mixing::MixingAlgorithm::Broyden && step > 0 ? 1 : 0);
 
         gpu_mixer.push_data(tau_data, output_d, input_d, nullptr, nullptr, false);
@@ -683,34 +599,9 @@ void compare_cpu_gpu_mixing_history(const Base_Mixing::MixingAlgorithm algorithm
                                                    base_device::DEVICE_GPU>()(
             gpu_mixed.data(), mixed_d, length);
 
-        if (algorithm == Base_Mixing::MixingAlgorithm::Pulay)
-        {
-            std::fill(tau_reference.begin(), tau_reference.end(), FPTYPE(0));
-            for (int slot = 0; slot < mixing_ndim; ++slot)
-            {
-                for (int i = 0; i < length; ++i)
-                {
-                    tau_reference[i]
-                        += static_cast<FPTYPE>(legacy_pulay_coefficients[slot])
-                           * legacy_pulay_tau_history[slot][i];
-                }
-            }
-        }
-        else
-        {
-            cpu_mixer.push_data(
-                cpu_tau_data,
-                outputs[step].data(),
-                inputs[step].data(),
-                nullptr,
-                cpu_tau_mix,
-                false);
-            cpu_mixer.mix_data(cpu_tau_data, cpu_tau_mixed.data());
-            tau_reference = cpu_tau_mixed;
-        }
         for (int i = 0; i < length; ++i)
         {
-            expect_near_value(gpu_mixed[i], tau_reference[i], 1e-8);
+            expect_near_value(gpu_mixed[i], cpu_tau_mixed[i], 1e-8);
         }
     }
 

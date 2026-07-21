@@ -418,6 +418,10 @@ void GpuMixing<T>::update_coefficients(const GpuMixingData<T>& data,
     }
     else
     {
+        ModuleBase::matrix gram(1, 1);
+        build_gram(impl.residual_history, 1, impl.residual_slot, gram);
+        impl.gram_cache(impl.residual_slot, impl.residual_slot)
+            = gram(impl.residual_slot, impl.residual_slot);
         impl.use_latest_coefficients(data);
     }
 }
