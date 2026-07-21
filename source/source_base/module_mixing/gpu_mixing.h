@@ -30,6 +30,7 @@ class GpuMixingData
     GpuMixingData(int capacity, std::size_t length);
     ~GpuMixingData();
 
+  private:
     void resize(int capacity, std::size_t length);
     void reset();
     void push(const T* data);
@@ -39,7 +40,6 @@ class GpuMixingData
     int current_slot() const;
     int index_move(int offset) const;
 
-  private:
     GpuMixingData(const GpuMixingData&) = delete;
     GpuMixingData& operator=(const GpuMixingData&) = delete;
 
