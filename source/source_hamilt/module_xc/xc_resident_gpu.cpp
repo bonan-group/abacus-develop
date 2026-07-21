@@ -6,6 +6,7 @@
 #include "source_hamilt/module_xc/kernels/xc_gradcorr_op.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 
+#include <cmath>
 #include <complex>
 #include <vector>
 
@@ -22,29 +23,58 @@ XcGpuRequest::XcGpuRequest()
       charge(nullptr),
       rho_basis(nullptr),
       unit_cell(nullptr),
-      rho_up(nullptr),
-      rho_down(nullptr),
       host_potential(nullptr),
-      device_potential(nullptr)
+      device_potential(nullptr),
+      potential_size(0)
 {
 }
 
-XcGpuMode select_xc_gpu_mode(const XcGpuRequest& request)
+namespace
 {
+
+XcGpuMode select_available_mode(const XcGpuRequest& request, const bool require_potential_output)
+{
+#if !__CUDA && !__UT_USE_CUDA
+    (void)request;
+    (void)require_potential_output;
+    return XcGpuMode::Unsupported;
+#else
     if (request.device != "gpu" || request.use_libxc || request.has_kinetic_energy_density
         || request.functional_ids == nullptr || request.charge == nullptr || request.rho_basis == nullptr
-        || request.unit_cell == nullptr || request.rho_up == nullptr || request.nrxx <= 0
-        || (request.host_potential == nullptr && request.device_potential == nullptr)
-        || request.rho_basis->nrxx != request.nrxx || request.charge->get_device() != "gpu"
-        || request.rho_basis->get_device() != "gpu")
+        || request.unit_cell == nullptr || request.nrxx <= 0 || request.charge->nrxx != request.nrxx
+        || request.charge->rhopw != request.rho_basis || request.rho_basis->nrxx != request.nrxx
+        || request.rho_basis->nxyz <= 0 || request.charge->nspin < request.nspin
+        || request.charge->rho_core == nullptr || request.charge->get_rho_d(0) == nullptr
+        || request.charge->get_device() != "gpu" || request.rho_basis->get_device() != "gpu")
     {
         return XcGpuMode::Unsupported;
+    }
+
+    if (require_potential_output)
+    {
+        const bool host_output = request.host_potential != nullptr;
+        const bool device_output = request.device_potential != nullptr;
+        const std::size_t expected_size = static_cast<std::size_t>(request.nspin) * request.nrxx;
+        if (host_output == device_output || !std::isfinite(request.unit_cell->omega) || request.unit_cell->omega <= 0.0)
+        {
+            return XcGpuMode::Unsupported;
+        }
+        if (host_output
+            && (request.potential_size != 0 || request.host_potential->nr != request.nspin
+                || request.host_potential->nc != request.nrxx || request.host_potential->c == nullptr))
+        {
+            return XcGpuMode::Unsupported;
+        }
+        if (device_output && request.potential_size != expected_size)
+        {
+            return XcGpuMode::Unsupported;
+        }
     }
 
     const std::vector<int>& ids = *request.functional_ids;
     const bool is_pz = ids.size() == 2 && ids[0] == XC_LDA_X && ids[1] == XC_LDA_C_PZ;
     const bool is_pw = ids.size() == 2 && ids[0] == XC_LDA_X && ids[1] == XC_LDA_C_PW;
-    if (request.nspin == 2 && request.rho_down != nullptr)
+    if (request.nspin == 2 && request.charge->get_rho_d(1) != nullptr)
     {
         if (is_pz)
         {
@@ -56,7 +86,8 @@ XcGpuMode select_xc_gpu_mode(const XcGpuRequest& request)
         }
     }
 
-    if (request.rho_basis->poolnproc != 1)
+    if (request.rho_basis->poolnproc != 1 || request.rho_basis->npw <= 0 || request.rho_basis->gcar == nullptr
+        || !std::isfinite(request.unit_cell->tpiba) || request.unit_cell->tpiba <= 0.0)
     {
         return XcGpuMode::Unsupported;
     }
@@ -67,11 +98,19 @@ XcGpuMode select_xc_gpu_mode(const XcGpuRequest& request)
     {
         return is_pbe ? XcGpuMode::Pbe : (is_pbesol ? XcGpuMode::PbeSol : XcGpuMode::Unsupported);
     }
-    if (request.nspin == 2 && request.rho_down != nullptr)
+    if (request.nspin == 2 && request.charge->get_rho_d(1) != nullptr)
     {
         return is_pbe ? XcGpuMode::SpinPbe : (is_pbesol ? XcGpuMode::SpinPbeSol : XcGpuMode::Unsupported);
     }
     return XcGpuMode::Unsupported;
+#endif
+}
+
+} // namespace
+
+XcGpuMode select_xc_gpu_mode(const XcGpuRequest& request)
+{
+    return select_available_mode(request, true);
 }
 
 #if __CUDA || __UT_USE_CUDA
@@ -327,8 +366,8 @@ XcGpuResult evaluate_lda(const XcGpuRequest& request, const XcGpuMode mode, XcGp
                                                                      mode == XcGpuMode::LdaPzSpin ? 0 : 1,
                                                                      2.0,
                                                                      1.0e-10,
-                                                                     request.rho_up,
-                                                                     request.rho_down,
+                                                                     request.charge->get_rho_d(0),
+                                                                     request.charge->get_rho_d(1),
                                                                      workspace.rho_core(),
                                                                      workspace.rho_up(),
                                                                      workspace.rho_down(),
@@ -355,8 +394,8 @@ XcGpuResult evaluate_pbe(const XcGpuRequest& request, const XcGpuMode mode, XcGp
                                                                          1,
                                                                          2.0,
                                                                          1.0e-10,
-                                                                         request.rho_up,
-                                                                         request.rho_down,
+                                                                         request.charge->get_rho_d(0),
+                                                                         request.charge->get_rho_d(1),
                                                                          workspace.rho_core(),
                                                                          workspace.rho_up(),
                                                                          workspace.rho_down(),
@@ -402,7 +441,7 @@ XcGpuResult evaluate_pbe(const XcGpuRequest& request, const XcGpuMode mode, XcGp
                                                                     request.nrxx,
                                                                     2.0,
                                                                     1.0e-10,
-                                                                    request.rho_up,
+                                                                    request.charge->get_rho_d(0),
                                                                     workspace.rho_core(),
                                                                     workspace.rho_up(),
                                                                     workspace.potential(),
@@ -461,7 +500,7 @@ XcGpuResult evaluate_resident_xc(const XcGpuRequest& request)
 
 bool evaluate_resident_xc_stress(const XcGpuRequest& request, std::vector<double>& stress)
 {
-    const XcGpuMode mode = select_xc_gpu_mode(request);
+    const XcGpuMode mode = select_available_mode(request, false);
     const bool spin = mode == XcGpuMode::SpinPbe || mode == XcGpuMode::SpinPbeSol;
     const bool scalar = mode == XcGpuMode::Pbe || mode == XcGpuMode::PbeSol;
     if (!spin && !scalar)
@@ -483,8 +522,8 @@ bool evaluate_resident_xc_stress(const XcGpuRequest& request, std::vector<double
                                                                          1,
                                                                          ModuleBase::e2,
                                                                          1.0e-10,
-                                                                         request.rho_up,
-                                                                         request.rho_down,
+                                                                         request.charge->get_rho_d(0),
+                                                                         request.charge->get_rho_d(1),
                                                                          workspace.rho_core(),
                                                                          workspace.rho_up(),
                                                                          workspace.rho_down(),
@@ -512,7 +551,7 @@ bool evaluate_resident_xc_stress(const XcGpuRequest& request, std::vector<double
                                                                     request.nrxx,
                                                                     ModuleBase::e2,
                                                                     1.0e-10,
-                                                                    request.rho_up,
+                                                                    request.charge->get_rho_d(0),
                                                                     workspace.rho_core(),
                                                                     workspace.rho_up(),
                                                                     workspace.potential(),

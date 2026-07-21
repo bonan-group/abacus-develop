@@ -11,7 +11,6 @@
 #include "xc_functional.h"
 #include "source_base/timer.h"
 #include "source_basis/module_pw/pw_basis_k.h"
-#include "source_io/module_parameter/parameter.h"
 #include <ATen/core/tensor.h>
 #include <ATen/core/tensor_map.h>
 #include <ATen/core/tensor_types.h>
@@ -48,10 +47,6 @@ bool XC_Functional::gradcorr_stress_gpu(const Charge* const chr,
     request.charge = chr;
     request.rho_basis = rhopw;
     request.unit_cell = ucell;
-    request.rho_up = chr == nullptr ? nullptr : chr->get_rho_d(0);
-    request.rho_down = chr == nullptr || nspin != 2 ? nullptr : chr->get_rho_d(1);
-    ModuleBase::matrix unused_potential;
-    request.host_potential = &unused_potential;
     return XC_Functional_GPU::evaluate_resident_xc_stress(request, stress_gga);
 }
 
@@ -84,39 +79,6 @@ void XC_Functional::gradcorr(
                             hybrid_alpha_in,
                             hse_omega_in,
                             "cpu");
-}
-
-void XC_Functional::gradcorr(
-    double &etxc,
-    double &vtxc,
-    ModuleBase::matrix &v,
-    const Charge* const chr,
-    ModulePW::PW_Basis* rhopw,
-    const UnitCell *ucell,
-    std::vector<double> &stress_gga,
-    const bool is_stress,
-    const std::string& device)
-{
-    const double hybrid_alpha = XC_Functional::get_hybrid_alpha();
-#ifdef __EXX
-    const double hse_omega = XC_Functional::get_hse_omega();
-#else
-    const double hse_omega = 0.0;
-#endif
-    XC_Functional::gradcorr(etxc,
-                            vtxc,
-                            v,
-                            chr,
-                            rhopw,
-                            ucell,
-                            stress_gga,
-                            is_stress,
-                            PARAM.inp.nspin,
-                            PARAM.globalv.domag,
-                            PARAM.globalv.domag_z,
-                            hybrid_alpha,
-                            hse_omega,
-                            device);
 }
 
 void XC_Functional::gradcorr(

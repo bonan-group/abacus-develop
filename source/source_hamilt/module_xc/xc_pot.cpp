@@ -110,8 +110,6 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     gpu_request.charge = chr;
     gpu_request.rho_basis = chr == nullptr ? nullptr : chr->rhopw;
     gpu_request.unit_cell = ucell;
-    gpu_request.rho_up = chr == nullptr ? nullptr : chr->get_rho_d(0);
-    gpu_request.rho_down = chr == nullptr || nspin != 2 ? nullptr : chr->get_rho_d(1);
     gpu_request.host_potential = &v;
     const XC_Functional_GPU::XcGpuResult gpu_result = XC_Functional_GPU::evaluate_resident_xc(gpu_request);
     if (gpu_result.used)
@@ -312,9 +310,8 @@ bool XC_Functional::add_v_xc_to_device(const int& nrxx,
     request.charge = chr;
     request.rho_basis = chr == nullptr ? nullptr : chr->rhopw;
     request.unit_cell = ucell;
-    request.rho_up = chr == nullptr ? nullptr : chr->get_rho_d(0);
-    request.rho_down = chr == nullptr || nspin != 2 ? nullptr : chr->get_rho_d(1);
     request.device_potential = d_v_eff;
+    request.potential_size = static_cast<std::size_t>(nspin) * nrxx;
     const XC_Functional_GPU::XcGpuResult result = XC_Functional_GPU::evaluate_resident_xc(request);
     if (result.used)
     {

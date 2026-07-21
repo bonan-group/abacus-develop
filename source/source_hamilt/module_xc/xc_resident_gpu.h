@@ -1,6 +1,7 @@
 #ifndef SOURCE_HAMILT_MODULE_XC_XC_RESIDENT_GPU_H
 #define SOURCE_HAMILT_MODULE_XC_XC_RESIDENT_GPU_H
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -44,10 +45,9 @@ struct XcGpuRequest
     const Charge* charge;
     ModulePW::PW_Basis* rho_basis;
     const UnitCell* unit_cell;
-    const double* rho_up;
-    const double* rho_down;
     ModuleBase::matrix* host_potential;
     double* device_potential;
+    std::size_t potential_size;
 };
 
 struct XcGpuResult
