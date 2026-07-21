@@ -76,12 +76,7 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
 
     int calculate_optimal_chunk_size(int nkb) const;
 
-    void ensure_chunk_buffer(int chunk_nkb, int npw) const;
-    void materialize_atom_chunk(int npw, int atom_start, int atom_end, int chunk_nkb) const;
-
-    void ensure_kpoint_caches(int ik, int npw) const;
-    void invalidate_kpoint_caches() const;
-    void ensure_type_metadata_cache() const;
+    const T* materialize_atom_chunk(int npw, int atom_start, int atom_end, int chunk_nkb) const;
 
     void invalidate_becp_cache() const;
     void cache_becp_for(const T* psi, int nrow, int nbands) const;
@@ -120,32 +115,6 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     mutable T *ps = nullptr;
     mutable T *vkb = nullptr;
     mutable T *becp = nullptr;
-    mutable T* vkb_chunk = nullptr;
-    mutable bool full_vkb_ready = false;
-    mutable int full_vkb_ready_ik = -1;
-    mutable int chunk_buffer_capacity = 0;
-    mutable int chunk_npw_capacity = 0;
-
-    mutable Real* cached_gk = nullptr;
-    mutable Real* cached_ylm = nullptr;
-    mutable Real* cached_vkb1 = nullptr;
-    mutable T* cached_sk = nullptr;
-    mutable int* cached_atom_nh = nullptr;
-    mutable int* cached_atom_nb = nullptr;
-    mutable int* cached_iat2it = nullptr;
-    mutable int* cached_jkb_to_iat = nullptr;
-    mutable int* cached_jkb_to_it = nullptr;
-    mutable int* cached_jkb_to_ih = nullptr;
-    mutable Real* cached_jkb_pref_sign = nullptr;
-    mutable int cached_ik = -1;
-    mutable int cached_npw = 0;
-    mutable int cached_ylm_size = 0;
-    mutable int cached_vkb1_ntype = 0;
-    mutable int cached_vkb1_nhm = 0;
-    mutable unsigned long cached_structure_generation = 0;
-    mutable int cached_metadata_ntype = 0;
-    mutable int cached_metadata_nat = 0;
-    mutable int cached_metadata_nkb = 0;
 
     Device* ctx = {};
     base_device::DEVICE_CPU* cpu_ctx = {};
@@ -165,10 +134,6 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     using delmem_complex_op = base_device::memory::delete_memory_op<T, Device>;
 #endif
     using syncmem_complex_h2d_op = base_device::memory::synchronize_memory_op<T, Device, base_device::DEVICE_CPU>;
-    using resmem_real_op = base_device::memory::resize_memory_op<Real, Device>;
-    using delmem_real_op = base_device::memory::delete_memory_op<Real, Device>;
-    using resmem_int_op = base_device::memory::resize_memory_op<int, Device>;
-    using delmem_int_op = base_device::memory::delete_memory_op<int, Device>;
 
     T one{1, 0};
     T zero{0, 0};

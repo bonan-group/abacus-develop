@@ -20,6 +20,7 @@ template <class T>
 class Nonlocal;
 }
 class VnlGpuCacheTestAccess;
+class VnlProjectorWorkspace;
 
 //==========================================================
 // Calculate the non-local pseudopotential in reciprocal
@@ -31,6 +32,8 @@ class pseudopot_cell_vnl
   public:
     pseudopot_cell_vnl();
     ~pseudopot_cell_vnl();
+    pseudopot_cell_vnl(const pseudopot_cell_vnl&) = delete;
+    pseudopot_cell_vnl& operator=(const pseudopot_cell_vnl&) = delete;
     void init(const UnitCell& cell,
               Structure_Factor* psf_in,
               const ModulePW::PW_Basis_K* wfc_basis,
@@ -71,6 +74,18 @@ class pseudopot_cell_vnl
                               int nbands,
                               const std::complex<FPTYPE>* psi,
                               std::complex<FPTYPE>* becp) const;
+
+    template <typename FPTYPE, typename Device>
+    const std::complex<FPTYPE>* materialize_vnl_chunk(Device* ctx,
+                                                       const UnitCell& ucell,
+                                                       int ik,
+                                                       int npw,
+                                                       int atom_begin,
+                                                       int atom_end,
+                                                       int chunk_nkb) const;
+
+    template <typename FPTYPE>
+    bool full_vkb_ready(int ik, int npw) const;
 
     // void getvnl_alpha(const int &ik);
 
@@ -270,10 +285,12 @@ class pseudopot_cell_vnl
     template <class T>
     friend class hamilt::Nonlocal;
     friend class VnlGpuCacheTestAccess;
+    friend class VnlProjectorWorkspace;
 
     bool memory_released = false;
     bool qgm_cache_ready = false;
     unsigned long structure_generation_ = 0;
+    mutable VnlProjectorWorkspace* projector_workspace_ = nullptr;
     float* s_nhtol = nullptr;
     float* s_nhtolm = nullptr;
     float* s_indv = nullptr;
@@ -293,6 +310,7 @@ class pseudopot_cell_vnl
     double omega_old = 0;
     int qgm_nqxq_ = 0;
     double qgm_dq_ = 0.0;
+    double projector_dq_ = 0.0;
     bool use_gpu_ = false;
     VnlChunkPolicy chunk_policy_ = {false, 0, 64};
 

@@ -9,6 +9,7 @@
 #include "source_base/output.h"
 #include "source_base/math_sphbes.h"
 #include "source_base/math_ylmreal.h"
+#include "source_base/kernels/math_kernel_op.h"
 #include "source_base/memory_recorder.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/module_device/device.h"
@@ -19,6 +20,319 @@
 #include "source_base/parallel_comm.h" // use POOL_WORLD
 
 #include <algorithm>
+#include <vector>
+
+class VnlProjectorWorkspace
+{
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    template <typename FPTYPE>
+    struct PrecisionState
+    {
+        FPTYPE* gk = nullptr;
+        FPTYPE* ylm = nullptr;
+        FPTYPE* vkb1 = nullptr;
+        FPTYPE* jkb_pref_sign = nullptr;
+        std::complex<FPTYPE>* sk = nullptr;
+        std::complex<FPTYPE>* chunk = nullptr;
+        int* atom_nh = nullptr;
+        int* atom_nb = nullptr;
+        int* iat2it = nullptr;
+        int* jkb_to_iat = nullptr;
+        int* jkb_to_it = nullptr;
+        int* jkb_to_ih = nullptr;
+        int ik = -1;
+        int npw = 0;
+        int ylm_size = 0;
+        int metadata_ntype = 0;
+        int metadata_nat = 0;
+        int metadata_nkb = 0;
+        int metadata_nhm = 0;
+        int chunk_projectors = 0;
+        int chunk_stride = 0;
+        int full_ik = -1;
+        int full_npw = 0;
+        unsigned long generation = 0;
+        unsigned long full_generation = 0;
+
+        ~PrecisionState()
+        {
+            using Device = base_device::DEVICE_GPU;
+            base_device::memory::delete_memory_op<FPTYPE, Device>()(gk);
+            base_device::memory::delete_memory_op<FPTYPE, Device>()(ylm);
+            base_device::memory::delete_memory_op<FPTYPE, Device>()(vkb1);
+            base_device::memory::delete_memory_op<FPTYPE, Device>()(jkb_pref_sign);
+            base_device::memory::delete_memory_op<std::complex<FPTYPE>, Device>()(sk);
+            base_device::memory::delete_memory_op<std::complex<FPTYPE>, Device>()(chunk);
+            base_device::memory::delete_memory_op<int, Device>()(atom_nh);
+            base_device::memory::delete_memory_op<int, Device>()(atom_nb);
+            base_device::memory::delete_memory_op<int, Device>()(iat2it);
+            base_device::memory::delete_memory_op<int, Device>()(jkb_to_iat);
+            base_device::memory::delete_memory_op<int, Device>()(jkb_to_it);
+            base_device::memory::delete_memory_op<int, Device>()(jkb_to_ih);
+        }
+    };
+
+    PrecisionState<float> float_state_;
+    PrecisionState<double> double_state_;
+
+    PrecisionState<float>& state_for(float*) { return float_state_; }
+    PrecisionState<double>& state_for(double*) { return double_state_; }
+    const PrecisionState<float>& state_for(const float*) const { return float_state_; }
+    const PrecisionState<double>& state_for(const double*) const { return double_state_; }
+
+    template <typename FPTYPE>
+    PrecisionState<FPTYPE>& state()
+    {
+        return state_for(static_cast<FPTYPE*>(nullptr));
+    }
+
+    template <typename FPTYPE>
+    const PrecisionState<FPTYPE>& state() const
+    {
+        return state_for(static_cast<const FPTYPE*>(nullptr));
+    }
+
+    template <typename FPTYPE>
+    void ensure_metadata(const pseudopot_cell_vnl& owner, const UnitCell& ucell)
+    {
+        using Device = base_device::DEVICE_GPU;
+        PrecisionState<FPTYPE>& cache = state<FPTYPE>();
+        if (cache.metadata_ntype == ucell.ntype && cache.metadata_nat == ucell.nat
+            && cache.metadata_nkb == owner.nkb && cache.metadata_nhm == owner.nhm && cache.atom_nh != nullptr)
+        {
+            return;
+        }
+
+        base_device::memory::delete_memory_op<int, Device> del_int;
+        base_device::memory::delete_memory_op<FPTYPE, Device> del_real;
+        del_int(cache.atom_nh);
+        del_int(cache.atom_nb);
+        del_int(cache.iat2it);
+        del_int(cache.jkb_to_iat);
+        del_int(cache.jkb_to_it);
+        del_int(cache.jkb_to_ih);
+        del_real(cache.jkb_pref_sign);
+
+        base_device::memory::resize_memory_op<int, Device> resize_int;
+        base_device::memory::resize_memory_op<FPTYPE, Device> resize_real;
+        resize_int(cache.atom_nh, ucell.ntype, "VNL::workspace_atom_nh");
+        resize_int(cache.atom_nb, ucell.ntype, "VNL::workspace_atom_nb");
+        resize_int(cache.iat2it, ucell.nat, "VNL::workspace_iat2it");
+        resize_int(cache.jkb_to_iat, owner.nkb, "VNL::workspace_jkb_iat");
+        resize_int(cache.jkb_to_it, owner.nkb, "VNL::workspace_jkb_it");
+        resize_int(cache.jkb_to_ih, owner.nkb, "VNL::workspace_jkb_ih");
+        resize_real(cache.jkb_pref_sign, 2 * owner.nkb, "VNL::workspace_pref_sign");
+
+        std::vector<int> atom_nh(ucell.ntype);
+        std::vector<int> atom_nb(ucell.ntype);
+        std::vector<int> jkb_to_iat(owner.nkb);
+        std::vector<int> jkb_to_it(owner.nkb);
+        std::vector<int> jkb_to_ih(owner.nkb);
+        std::vector<FPTYPE> jkb_pref_sign(2 * owner.nkb);
+        for (int it = 0; it < ucell.ntype; ++it)
+        {
+            atom_nh[it] = ucell.atoms[it].ncpp.nh;
+            atom_nb[it] = ucell.atoms[it].ncpp.nbeta;
+        }
+        int jkb = 0;
+        for (int iat = 0; iat < ucell.nat; ++iat)
+        {
+            const int it = ucell.iat2it[iat];
+            for (int ih = 0; ih < ucell.atoms[it].ncpp.nh; ++ih)
+            {
+                jkb_to_iat[jkb] = iat;
+                jkb_to_it[jkb] = it;
+                jkb_to_ih[jkb] = ih;
+                const int lmod = static_cast<int>(owner.nhtol(it, ih)) % 4;
+                const FPTYPE pref_re[4] = {1, 0, -1, 0};
+                const FPTYPE pref_im[4] = {0, -1, 0, 1};
+                jkb_pref_sign[2 * jkb] = pref_re[lmod];
+                jkb_pref_sign[2 * jkb + 1] = pref_im[lmod];
+                ++jkb;
+            }
+        }
+
+        base_device::memory::synchronize_memory_op<int, Device, base_device::DEVICE_CPU> sync_int;
+        base_device::memory::synchronize_memory_op<FPTYPE, Device, base_device::DEVICE_CPU> sync_real;
+        sync_int(cache.atom_nh, atom_nh.data(), atom_nh.size());
+        sync_int(cache.atom_nb, atom_nb.data(), atom_nb.size());
+        sync_int(cache.iat2it, ucell.iat2it, ucell.nat);
+        sync_int(cache.jkb_to_iat, jkb_to_iat.data(), jkb_to_iat.size());
+        sync_int(cache.jkb_to_it, jkb_to_it.data(), jkb_to_it.size());
+        sync_int(cache.jkb_to_ih, jkb_to_ih.data(), jkb_to_ih.size());
+        sync_real(cache.jkb_pref_sign, jkb_pref_sign.data(), jkb_pref_sign.size());
+        cache.metadata_ntype = ucell.ntype;
+        cache.metadata_nat = ucell.nat;
+        cache.metadata_nkb = owner.nkb;
+        cache.metadata_nhm = owner.nhm;
+    }
+
+    template <typename FPTYPE>
+    void ensure_kpoint(base_device::DEVICE_GPU* ctx,
+                       const pseudopot_cell_vnl& owner,
+                       const UnitCell& ucell,
+                       int ik,
+                       int npw,
+                       double dq)
+    {
+        using Device = base_device::DEVICE_GPU;
+        PrecisionState<FPTYPE>& cache = state<FPTYPE>();
+        const int x1 = (owner.lmaxkb + 1) * (owner.lmaxkb + 1);
+        if (cache.ik == ik && cache.npw == npw && cache.ylm_size == x1
+            && cache.generation == owner.structure_generation_)
+        {
+            return;
+        }
+        ensure_metadata<FPTYPE>(owner, ucell);
+
+        base_device::memory::delete_memory_op<FPTYPE, Device> del_real;
+        base_device::memory::delete_memory_op<std::complex<FPTYPE>, Device> del_complex;
+        del_real(cache.gk);
+        del_real(cache.ylm);
+        del_real(cache.vkb1);
+        del_complex(cache.sk);
+        base_device::memory::resize_memory_op<FPTYPE, Device> resize_real;
+        base_device::memory::resize_memory_op<std::complex<FPTYPE>, Device> resize_complex;
+        resize_real(cache.gk, static_cast<size_t>(npw) * 3, "VNL::workspace_gk");
+        resize_real(cache.ylm, static_cast<size_t>(x1) * npw, "VNL::workspace_ylm");
+        resize_real(cache.vkb1,
+                    static_cast<size_t>(ucell.ntype) * owner.nhm * npw,
+                    "VNL::workspace_vkb1");
+        resize_complex(cache.sk, static_cast<size_t>(ucell.nat) * npw, "VNL::workspace_sk");
+
+        std::vector<ModuleBase::Vector3<double>> gk_host(npw);
+        for (int ig = 0; ig < npw; ++ig)
+        {
+            gk_host[ig] = owner.wfcpw->getgpluskcar(ik, ig);
+        }
+        base_device::memory::cast_memory_op<FPTYPE, double, Device, base_device::DEVICE_CPU>()(
+            cache.gk,
+            reinterpret_cast<const double*>(gk_host.data()),
+            static_cast<size_t>(npw) * 3);
+        ModuleBase::YlmReal::Ylm_Real(ctx, x1, npw, cache.gk, cache.ylm);
+        hamilt::cal_vkb1_cache_op<FPTYPE, Device>()(ctx,
+                                                    ucell.ntype,
+                                                    npw,
+                                                    owner.nhm,
+                                                    owner.tab.getBound2(),
+                                                    owner.tab.getBound3(),
+                                                    cache.atom_nb,
+                                                    cache.atom_nh,
+                                                    static_cast<FPTYPE>(dq),
+                                                    static_cast<FPTYPE>(ucell.tpiba),
+                                                    cache.gk,
+                                                    cache.ylm,
+                                                    owner.get_indv_data<FPTYPE>(),
+                                                    owner.get_nhtolm_data<FPTYPE>(),
+                                                    owner.get_tab_data<FPTYPE>(),
+                                                    cache.vkb1);
+        owner.psf->get_sk(ctx, ik, owner.wfcpw, cache.sk);
+        cache.ik = ik;
+        cache.npw = npw;
+        cache.ylm_size = x1;
+        cache.generation = owner.structure_generation_;
+    }
+#endif
+
+  public:
+    template <typename FPTYPE>
+    bool full_ready(int ik, int npw, unsigned long generation) const
+    {
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+        const PrecisionState<FPTYPE>& cache = state<FPTYPE>();
+        return cache.full_ik == ik && cache.full_npw == npw && cache.full_generation == generation;
+#else
+        return false;
+#endif
+    }
+
+    template <typename FPTYPE>
+    void mark_full(int ik, int npw, unsigned long generation)
+    {
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+        PrecisionState<FPTYPE>& cache = state<FPTYPE>();
+        cache.full_ik = ik;
+        cache.full_npw = npw;
+        cache.full_generation = generation;
+#endif
+    }
+
+    template <typename FPTYPE>
+    const std::complex<FPTYPE>* materialize(base_device::DEVICE_GPU* ctx,
+                                            const pseudopot_cell_vnl& owner,
+                                            const UnitCell& ucell,
+                                            int ik,
+                                            int npw,
+                                            int atom_begin,
+                                            int atom_end,
+                                            int chunk_nkb,
+                                            double dq)
+    {
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+        using Device = base_device::DEVICE_GPU;
+        ensure_kpoint<FPTYPE>(ctx, owner, ucell, ik, npw, dq);
+        PrecisionState<FPTYPE>& cache = state<FPTYPE>();
+        const int stride = owner.wfcpw->npwk_max;
+        if (chunk_nkb > cache.chunk_projectors || stride > cache.chunk_stride)
+        {
+            base_device::memory::delete_memory_op<std::complex<FPTYPE>, Device>()(cache.chunk);
+            cache.chunk_projectors = std::max(cache.chunk_projectors, chunk_nkb);
+            cache.chunk_stride = std::max(cache.chunk_stride, stride);
+            base_device::memory::resize_memory_op<std::complex<FPTYPE>, Device>()(
+                cache.chunk,
+                static_cast<size_t>(cache.chunk_projectors) * cache.chunk_stride,
+                "VNL::workspace_chunk");
+        }
+        hamilt::cal_vnl_from_vkb1_cache_op<FPTYPE, Device>()(ctx,
+                                                             npw,
+                                                             stride,
+                                                             owner.nhm,
+                                                             cache.atom_nh,
+                                                             atom_begin,
+                                                             atom_end,
+                                                             owner.get_nhtol_data<FPTYPE>(),
+                                                             cache.vkb1,
+                                                             cache.sk,
+                                                             cache.iat2it,
+                                                             cache.chunk);
+        return cache.chunk;
+#else
+        return nullptr;
+#endif
+    }
+
+    template <typename FPTYPE>
+    void becp(base_device::DEVICE_GPU* ctx,
+              const pseudopot_cell_vnl& owner,
+              const UnitCell& ucell,
+              int ik,
+              int npw,
+              int npwx,
+              int nbands,
+              const std::complex<FPTYPE>* psi,
+              std::complex<FPTYPE>* result,
+              double dq)
+    {
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+        ensure_kpoint<FPTYPE>(ctx, owner, ucell, ik, npw, dq);
+        const PrecisionState<FPTYPE>& cache = state<FPTYPE>();
+        hamilt::cal_becp_from_vkb1_cache_op<FPTYPE, base_device::DEVICE_GPU>()(ctx,
+                                                                              npw,
+                                                                              npwx,
+                                                                              nbands,
+                                                                              owner.nkb,
+                                                                              owner.nhm,
+                                                                              cache.jkb_to_iat,
+                                                                              cache.jkb_to_it,
+                                                                              cache.jkb_to_ih,
+                                                                              cache.jkb_pref_sign,
+                                                                              cache.vkb1,
+                                                                              cache.sk,
+                                                                              psi,
+                                                                              result);
+#endif
+    }
+};
 
 namespace
 {
@@ -44,16 +358,23 @@ double radial_interpolation_derivative(const ModuleBase::realArray& table,
 }
 } // namespace
 
-pseudopot_cell_vnl::pseudopot_cell_vnl() = default;
+pseudopot_cell_vnl::pseudopot_cell_vnl()
+    : projector_workspace_(new VnlProjectorWorkspace)
+{
+}
 
 pseudopot_cell_vnl::~pseudopot_cell_vnl()
 {
+    delete this->projector_workspace_;
     delete[] indv_ijkb0;
 }
 
 void pseudopot_cell_vnl::release_memory()
 {
     this->qgm_cache_ready = false;
+    ++this->structure_generation_;
+    delete this->projector_workspace_;
+    this->projector_workspace_ = new VnlProjectorWorkspace;
     if (this->nhm <= 0 || memory_released) {
         return;
 }
@@ -120,6 +441,9 @@ void pseudopot_cell_vnl::init(const UnitCell& ucell,
                               const VnlChunkPolicy& chunk_policy,
                               const bool allocate_vkb)
 {
+    ++this->structure_generation_;
+    delete this->projector_workspace_;
+    this->projector_workspace_ = new VnlProjectorWorkspace;
     const int ntype = ucell.ntype;
     ModuleBase::TITLE("pseudopot_cell_vnl", "init");
     ModuleBase::timer::start("ppcell_vnl", "init");
@@ -366,123 +690,74 @@ void pseudopot_cell_vnl::cal_becp_matrix_free(Device* ctx,
                                                const std::complex<FPTYPE>* psi,
                                                std::complex<FPTYPE>* becp) const
 {
-    using resmem_int_op = base_device::memory::resize_memory_op<int, Device>;
-    using delmem_int_op = base_device::memory::delete_memory_op<int, Device>;
-    using syncmem_int_op = base_device::memory::synchronize_memory_op<int, Device, base_device::DEVICE_CPU>;
-    using resmem_var_op = base_device::memory::resize_memory_op<FPTYPE, Device>;
-    using delmem_var_op = base_device::memory::delete_memory_op<FPTYPE, Device>;
-    using syncmem_var_op = base_device::memory::synchronize_memory_op<FPTYPE, Device, base_device::DEVICE_CPU>;
-    using castmem_var_op = base_device::memory::cast_memory_op<FPTYPE, double, Device, base_device::DEVICE_CPU>;
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    if (std::is_same<Device, base_device::DEVICE_GPU>::value)
+    {
+        this->projector_workspace_->becp(reinterpret_cast<base_device::DEVICE_GPU*>(ctx),
+                                         *this,
+                                         ucell,
+                                         ik,
+                                         npw,
+                                         npwx,
+                                         nbands,
+                                         psi,
+                                         becp,
+                                         this->projector_dq_);
+        return;
+    }
+#endif
     using resmem_complex_op = base_device::memory::resize_memory_op<std::complex<FPTYPE>, Device>;
     using delmem_complex_op = base_device::memory::delete_memory_op<std::complex<FPTYPE>, Device>;
 
-    const int x1 = (this->lmaxkb + 1) * (this->lmaxkb + 1);
-    std::vector<int> atom_nb(ucell.ntype);
-    std::vector<int> atom_nh(ucell.ntype);
-    std::vector<int> jkb_to_iat(this->nkb);
-    std::vector<int> jkb_to_it(this->nkb);
-    std::vector<int> jkb_to_ih(this->nkb);
-    std::vector<FPTYPE> jkb_pref_sign(2 * this->nkb);
-    std::vector<ModuleBase::Vector3<double>> gk_host(npw);
+    std::complex<FPTYPE>* full_vkb = nullptr;
+    resmem_complex_op()(full_vkb, static_cast<size_t>(this->nkb) * npwx, "VNL::becp_full_vkb");
+    this->getvnl(ctx, ucell, ik, full_vkb);
+    const std::complex<FPTYPE> one(1, 0);
+    const std::complex<FPTYPE> zero(0, 0);
+    ModuleBase::gemm_op<std::complex<FPTYPE>, Device>()('C',
+                                                        'N',
+                                                        this->nkb,
+                                                        nbands,
+                                                        npw,
+                                                        &one,
+                                                        full_vkb,
+                                                        npwx,
+                                                        psi,
+                                                        npwx,
+                                                        &zero,
+                                                        becp,
+                                                        this->nkb);
+    delmem_complex_op()(full_vkb);
+}
 
-    int jkb = 0;
-    for (int it = 0; it < ucell.ntype; ++it)
-    {
-        atom_nb[it] = ucell.atoms[it].ncpp.nbeta;
-        atom_nh[it] = ucell.atoms[it].ncpp.nh;
-    }
-    for (int iat = 0; iat < ucell.nat; ++iat)
-    {
-        const int it = ucell.iat2it[iat];
-        for (int ih = 0; ih < ucell.atoms[it].ncpp.nh; ++ih)
-        {
-            jkb_to_iat[jkb] = iat;
-            jkb_to_it[jkb] = it;
-            jkb_to_ih[jkb] = ih;
-            const int lmod = static_cast<int>(this->nhtol(it, ih)) % 4;
-            const FPTYPE pref_re[4] = {1, 0, -1, 0};
-            const FPTYPE pref_im[4] = {0, -1, 0, 1};
-            jkb_pref_sign[2 * jkb] = pref_re[lmod];
-            jkb_pref_sign[2 * jkb + 1] = pref_im[lmod];
-            ++jkb;
-        }
-    }
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static, 4096 / sizeof(FPTYPE))
+template <typename FPTYPE, typename Device>
+const std::complex<FPTYPE>* pseudopot_cell_vnl::materialize_vnl_chunk(Device* ctx,
+                                                                      const UnitCell& ucell,
+                                                                      int ik,
+                                                                      int npw,
+                                                                      int atom_begin,
+                                                                      int atom_end,
+                                                                      int chunk_nkb) const
+{
+#if defined(__CUDA) || defined(__UT_USE_CUDA)
+    return this->projector_workspace_->materialize<FPTYPE>(reinterpret_cast<base_device::DEVICE_GPU*>(ctx),
+                                                           *this,
+                                                           ucell,
+                                                           ik,
+                                                           npw,
+                                                           atom_begin,
+                                                           atom_end,
+                                                           chunk_nkb,
+                                                           this->projector_dq_);
+#else
+    return nullptr;
 #endif
-    for (int ig = 0; ig < npw; ++ig)
-    {
-        gk_host[ig] = this->wfcpw->getgpluskcar(ik, ig);
-    }
+}
 
-    int *d_atom_nb = nullptr, *d_atom_nh = nullptr, *d_jkb_to_iat = nullptr, *d_jkb_to_it = nullptr,
-        *d_jkb_to_ih = nullptr;
-    FPTYPE *gk = nullptr, *ylm = nullptr, *vkb1 = nullptr, *d_jkb_pref_sign = nullptr;
-    std::complex<FPTYPE>* sk = nullptr;
-    resmem_int_op()(d_atom_nb, atom_nb.size(), "VNL::becp_atom_nb");
-    resmem_int_op()(d_atom_nh, atom_nh.size(), "VNL::becp_atom_nh");
-    resmem_int_op()(d_jkb_to_iat, jkb_to_iat.size(), "VNL::becp_jkb_iat");
-    resmem_int_op()(d_jkb_to_it, jkb_to_it.size(), "VNL::becp_jkb_it");
-    resmem_int_op()(d_jkb_to_ih, jkb_to_ih.size(), "VNL::becp_jkb_ih");
-    syncmem_int_op()(d_atom_nb, atom_nb.data(), atom_nb.size());
-    syncmem_int_op()(d_atom_nh, atom_nh.data(), atom_nh.size());
-    syncmem_int_op()(d_jkb_to_iat, jkb_to_iat.data(), jkb_to_iat.size());
-    syncmem_int_op()(d_jkb_to_it, jkb_to_it.data(), jkb_to_it.size());
-    syncmem_int_op()(d_jkb_to_ih, jkb_to_ih.data(), jkb_to_ih.size());
-
-    resmem_var_op()(gk, static_cast<size_t>(npw) * 3, "VNL::becp_gk");
-    resmem_var_op()(ylm, static_cast<size_t>(x1) * npw, "VNL::becp_ylm");
-    resmem_var_op()(vkb1,
-                    static_cast<size_t>(ucell.ntype) * this->nhm * npw,
-                    "VNL::becp_vkb1");
-    resmem_var_op()(d_jkb_pref_sign, jkb_pref_sign.size(), "VNL::becp_pref");
-    castmem_var_op()(gk, reinterpret_cast<const double*>(gk_host.data()), static_cast<size_t>(npw) * 3);
-    syncmem_var_op()(d_jkb_pref_sign, jkb_pref_sign.data(), jkb_pref_sign.size());
-    ModuleBase::YlmReal::Ylm_Real(ctx, x1, npw, gk, ylm);
-
-    hamilt::cal_vkb1_cache_op<FPTYPE, Device>()(ctx,
-                                                ucell.ntype,
-                                                npw,
-                                                this->nhm,
-                                                this->tab.getBound2(),
-                                                this->tab.getBound3(),
-                                                d_atom_nb,
-                                                d_atom_nh,
-                                                static_cast<FPTYPE>(PARAM.globalv.dq),
-                                                static_cast<FPTYPE>(ucell.tpiba),
-                                                gk,
-                                                ylm,
-                                                this->get_indv_data<FPTYPE>(),
-                                                this->get_nhtolm_data<FPTYPE>(),
-                                                this->get_tab_data<FPTYPE>(),
-                                                vkb1);
-    resmem_complex_op()(sk, static_cast<size_t>(ucell.nat) * npw, "VNL::becp_sk");
-    this->psf->get_sk(ctx, ik, this->wfcpw, sk);
-    hamilt::cal_becp_from_vkb1_cache_op<FPTYPE, Device>()(ctx,
-                                                          npw,
-                                                          npwx,
-                                                          nbands,
-                                                          this->nkb,
-                                                          this->nhm,
-                                                          d_jkb_to_iat,
-                                                          d_jkb_to_it,
-                                                          d_jkb_to_ih,
-                                                          d_jkb_pref_sign,
-                                                          vkb1,
-                                                          sk,
-                                                          psi,
-                                                          becp);
-
-    delmem_int_op()(d_atom_nb);
-    delmem_int_op()(d_atom_nh);
-    delmem_int_op()(d_jkb_to_iat);
-    delmem_int_op()(d_jkb_to_it);
-    delmem_int_op()(d_jkb_to_ih);
-    delmem_var_op()(gk);
-    delmem_var_op()(ylm);
-    delmem_var_op()(vkb1);
-    delmem_var_op()(d_jkb_pref_sign);
-    delmem_complex_op()(sk);
+template <typename FPTYPE>
+bool pseudopot_cell_vnl::full_vkb_ready(int ik, int npw) const
+{
+    return this->projector_workspace_->full_ready<FPTYPE>(ik, npw, this->structure_generation_);
 }
 
 template <typename FPTYPE, typename Device>
@@ -614,6 +889,10 @@ void pseudopot_cell_vnl::getvnl(Device* ctx,
         delmem_int_op()(atom_nh);
         delmem_int_op()(atom_nb);
         delmem_int_op()(atom_na);
+    }
+    if (this->use_gpu_)
+    {
+        this->projector_workspace_->mark_full<FPTYPE>(ik, npw, this->structure_generation_);
     }
     ModuleBase::timer::end("pp_cell_vnl", "getvnl");
 } // end subroutine getvnl
@@ -823,6 +1102,7 @@ void pseudopot_cell_vnl::init_vnl(UnitCell& cell,
     const double qgm_dq = PARAM.globalv.dq;
     this->qgm_nqxq_ = qgm_nqxq;
     this->qgm_dq_ = qgm_dq;
+    this->projector_dq_ = qgm_dq;
     if (has_uspp)
     {
         this->prepare_qgm_cache(cell,
@@ -2014,6 +2294,7 @@ void pseudopot_cell_vnl::update_after_structure_change(UnitCell& cell,
                                                         int nqxq,
                                                         double dq)
 {
+    this->projector_dq_ = dq;
     if (!cell.cell_parameter_updated && !cell.ionic_position_updated)
     {
         return;
@@ -2250,6 +2531,22 @@ template void pseudopot_cell_vnl::cal_becp_matrix_free<double, base_device::DEVI
     int,
     const std::complex<double>*,
     std::complex<double>*) const;
+#if defined(__CUDA)
+template const std::complex<float>* pseudopot_cell_vnl::materialize_vnl_chunk<float,
+                                                                                base_device::DEVICE_CPU>(
+    base_device::DEVICE_CPU*, const UnitCell&, int, int, int, int, int) const;
+template const std::complex<double>* pseudopot_cell_vnl::materialize_vnl_chunk<double,
+                                                                                 base_device::DEVICE_CPU>(
+    base_device::DEVICE_CPU*, const UnitCell&, int, int, int, int, int) const;
+template const std::complex<float>* pseudopot_cell_vnl::materialize_vnl_chunk<float,
+                                                                                base_device::DEVICE_GPU>(
+    base_device::DEVICE_GPU*, const UnitCell&, int, int, int, int, int) const;
+template const std::complex<double>* pseudopot_cell_vnl::materialize_vnl_chunk<double,
+                                                                                 base_device::DEVICE_GPU>(
+    base_device::DEVICE_GPU*, const UnitCell&, int, int, int, int, int) const;
+template bool pseudopot_cell_vnl::full_vkb_ready<float>(int, int) const;
+template bool pseudopot_cell_vnl::full_vkb_ready<double>(int, int) const;
+#endif
 #endif
 
 template void pseudopot_cell_vnl::radial_fft_q<float, base_device::DEVICE_CPU>(base_device::DEVICE_CPU*,
