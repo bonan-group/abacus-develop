@@ -189,9 +189,7 @@ TYPED_TEST(PW_BASIS_C2R_GPU_TEST, Mixing)
 {
     using T = typename TestFixture::T;
     using Device = typename TestFixture::Device;
-    ModulePW::PW_Basis pwtest;
-    pwtest.set_device("gpu");
-    pwtest.set_precision("mixing");
+    ModulePW::PW_Basis pwtest("gpu", "mixing");
     this->init(pwtest);
     int startiz = pwtest.startz_current;
     const int nx = pwtest.nx;
@@ -220,21 +218,8 @@ TYPED_TEST(PW_BASIS_C2R_GPU_TEST, FloatDouble)
 {
     using T = typename TestFixture::T;
     using Device = typename TestFixture::Device;
-    ModulePW::PW_Basis pwtest;
-    pwtest.set_device("gpu");
-    if (typeid(T) == typeid(float))
-    {
-        pwtest.set_precision("single");
-    }
-    else if (typeid(T) == typeid(double))
-    {
-        pwtest.set_precision("double");
-    }
-    else
-    {
-        cout << "Error: Unsupported type" << endl;
-        return;
-    }
+    const std::string precision = typeid(T) == typeid(float) ? "single" : "double";
+    ModulePW::PW_Basis pwtest("gpu", precision);
     this->init(pwtest);
     int startiz = pwtest.startz_current;
     const int nx = pwtest.nx;

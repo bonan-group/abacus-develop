@@ -21,6 +21,10 @@ add_library(
     exx_info.cpp
 )
 
+if(ENABLE_LIBXC)
+  target_link_libraries(xc_ PUBLIC Libxc::xc)
+endif()
+
 if(ENABLE_COVERAGE)
   add_coverage(xc_)
 endif()
