@@ -16,7 +16,6 @@ struct ChargeMixingGpuWorkspace
 {
     Base_Mixing::GpuMixingData<std::complex<double>>* rho_history = nullptr;
     Base_Mixing::GpuMixingData<std::complex<double>>* tau_history = nullptr;
-    double* reduction = nullptr;
     double* batch_reduction = nullptr;
     double* batch_result = nullptr;
     std::complex<double>* tau = nullptr;
@@ -33,7 +32,6 @@ struct ChargeMixingGpuWorkspace
     {
         delete this->rho_history;
         delete this->tau_history;
-        this->delete_device(this->reduction);
         this->delete_device(this->batch_reduction);
         this->delete_device(this->batch_result);
         this->delete_device(this->tau);
@@ -240,14 +238,6 @@ void Charge_Mixing::init_mixing_gpu(const int nspin)
             this->mixing_gpu->history_capacity(), tau_length);
     }
 
-    if (this->gpu_workspace_->reduction == nullptr)
-    {
-        const int max_npw = std::max(this->rhopw->npw, this->rhodpw->npw);
-        constexpr int min_reduction_threads = 128;
-        const int max_blocks = (max_npw + min_reduction_threads - 1) / min_reduction_threads;
-        base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(
-            this->gpu_workspace_->reduction, max_blocks, "charge_mixing_workspace");
-    }
     if (this->gpu_workspace_->batch_reduction == nullptr || this->gpu_workspace_->batch_result == nullptr)
     {
         const int max_npw = std::max(this->rhopw->npw, this->rhodpw->npw);
