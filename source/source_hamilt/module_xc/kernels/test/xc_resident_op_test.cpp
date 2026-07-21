@@ -103,91 +103,17 @@ TEST(XCGradcorrOpTest, PbeGridCpuMatchesBuiltinReferenceValues)
 }
 
 #if __CUDA || __UT_USE_CUDA
-TEST(XCGradcorrOpTest, PbeGridGpuMatchesCpu)
+class XCPbeVariantGpuTest : public ::testing::TestWithParam<int>
+{
+};
+
+TEST_P(XCPbeVariantGpuTest, GridMatchesCpu)
 {
     using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
     using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
 
     const int nrxx = 6;
-    const int iflag = 0;
-    const double e2 = 2.0;
-    const double epsr = 1.0e-6;
-
-    const std::vector<double> rho = {0.018, 0.024, 0.031, 0.045, 0.052, 0.063};
-    const std::vector<double> rho_core = {0.002, 0.0015, 0.001, 0.0025, 0.003, 0.002};
-    const std::vector<double> gdr = {0.011, 0.017, 0.019, -0.009, 0.021, 0.013,
-                                     0.015, -0.014, 0.026, 0.010, -0.018, 0.022,
-                                     -0.020, 0.012, 0.016, 0.024, 0.019, -0.011};
-
-    std::vector<double> ref_v(nrxx, 0.0);
-    std::vector<double> ref_h(3 * nrxx, 0.0);
-    double ref_etxc = 0.0;
-    double ref_vtxc = 0.0;
-    xc_gradcorr_pbe_grid_op<double, base_device::DEVICE_CPU>()(nullptr,
-                                                               nrxx,
-                                                               iflag,
-                                                               e2,
-                                                               epsr,
-                                                               rho.data(),
-                                                               rho_core.data(),
-                                                               gdr.data(),
-                                                               ref_v.data(),
-                                                               ref_h.data(),
-                                                               &ref_etxc,
-                                                               &ref_vtxc);
-
-    DeviceBuffer<double> d_rho(nrxx);
-    DeviceBuffer<double> d_rho_core(nrxx);
-    DeviceBuffer<double> d_gdr(3 * nrxx);
-    DeviceBuffer<double> d_v(nrxx);
-    DeviceBuffer<double> d_h(3 * nrxx);
-    DeviceBuffer<double> d_sums(2);
-
-    syncmem_h2d_op()(d_rho.get(), rho.data(), nrxx);
-    syncmem_h2d_op()(d_rho_core.get(), rho_core.data(), nrxx);
-    syncmem_h2d_op()(d_gdr.get(), gdr.data(), 3 * nrxx);
-
-    double gpu_etxc = 0.0;
-    double gpu_vtxc = 0.0;
-    xc_gradcorr_pbe_grid_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                               nrxx,
-                                                               iflag,
-                                                               e2,
-                                                               epsr,
-                                                               d_rho.get(),
-                                                               d_rho_core.get(),
-                                                               d_gdr.get(),
-                                                               d_v.get(),
-                                                               d_h.get(),
-                                                               d_sums.get(),
-                                                               &gpu_etxc,
-                                                               &gpu_vtxc);
-
-    std::vector<double> gpu_v(nrxx, 0.0);
-    std::vector<double> gpu_h(3 * nrxx, 0.0);
-    syncmem_d2h_op()(gpu_v.data(), d_v.get(), nrxx);
-    syncmem_d2h_op()(gpu_h.data(), d_h.get(), 3 * nrxx);
-
-    for (int ir = 0; ir < nrxx; ++ir)
-    {
-        EXPECT_NEAR(gpu_v[ir], ref_v[ir], 1.0e-10);
-    }
-    for (int ir = 0; ir < 3 * nrxx; ++ir)
-    {
-        EXPECT_NEAR(gpu_h[ir], ref_h[ir], 1.0e-10);
-    }
-    EXPECT_NEAR(gpu_etxc, ref_etxc, 1.0e-10);
-    EXPECT_NEAR(gpu_vtxc, ref_vtxc, 1.0e-10);
-
-}
-
-TEST(XCGradcorrOpTest, PbesolGridGpuMatchesCpu)
-{
-    using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
-    using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
-
-    const int nrxx = 6;
-    const int iflag = 2;
+    const int iflag = GetParam();
     const double e2 = 2.0;
     const double epsr = 1.0e-6;
 
@@ -555,13 +481,13 @@ TEST(XCResidentOpTest, GridGpuAccumulatesIntoResidentPotential)
 
 }
 
-TEST(XCResidentOpTest, StressPbeGpuMatchesCpu)
+TEST_P(XCPbeVariantGpuTest, StressMatchesCpu)
 {
     using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
     using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
 
     const int nrxx = 6;
-    const int iflag = 0;
+    const int iflag = GetParam();
     const double e2 = 2.0;
     const double epsr = 1.0e-6;
     const std::vector<double> rho_total = {0.020, 0.0255, 0.032, 0.0475, 0.055, 0.065};
@@ -603,53 +529,7 @@ TEST(XCResidentOpTest, StressPbeGpuMatchesCpu)
 
 }
 
-TEST(XCResidentOpTest, StressPbesolGpuMatchesCpu)
-{
-    using syncmem_h2d_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
-    using syncmem_d2h_op = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
-
-    const int nrxx = 6;
-    const int iflag = 2;
-    const double e2 = 2.0;
-    const double epsr = 1.0e-6;
-    const std::vector<double> rho_total = {0.020, 0.0255, 0.032, 0.0475, 0.055, 0.065};
-    const std::vector<double> gdr = {0.011, 0.017, 0.019, -0.009, 0.021, 0.013,
-                                     0.015, -0.014, 0.026, 0.010, -0.018, 0.022,
-                                     -0.020, 0.012, 0.016, 0.024, 0.019, -0.011};
-
-    std::vector<double> ref_stress(9, 0.0);
-    xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_CPU>()(nullptr,
-                                                                 nrxx,
-                                                                 iflag,
-                                                                 e2,
-                                                                 epsr,
-                                                                 rho_total.data(),
-                                                                 gdr.data(),
-                                                                 ref_stress.data());
-
-    DeviceBuffer<double> d_rho_total(nrxx);
-    DeviceBuffer<double> d_gdr(3 * nrxx);
-    DeviceBuffer<double> d_stress(9);
-    syncmem_h2d_op()(d_rho_total.get(), rho_total.data(), nrxx);
-    syncmem_h2d_op()(d_gdr.get(), gdr.data(), 3 * nrxx);
-
-    xc_gradcorr_pbe_stress_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                                 nrxx,
-                                                                 iflag,
-                                                                 e2,
-                                                                 epsr,
-                                                                 d_rho_total.get(),
-                                                                 d_gdr.get(),
-                                                                 d_stress.get());
-
-    std::vector<double> stress(9, 0.0);
-    syncmem_d2h_op()(stress.data(), d_stress.get(), 9);
-    for (int i = 0; i < 9; ++i)
-    {
-        EXPECT_NEAR(stress[i], ref_stress[i], 1.0e-11);
-    }
-
-}
+INSTANTIATE_TEST_SUITE_P(PbeAndPbesol, XCPbeVariantGpuTest, ::testing::Values(0, 2));
 
 TEST(XCResidentOpTest, StressSpinPbeAndPbesolGpuMatchCpu)
 {

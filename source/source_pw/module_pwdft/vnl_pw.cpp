@@ -22,6 +22,11 @@
 
 namespace
 {
+bool gpu_pw_fft_pool_supported(const int poolnproc)
+{
+    return poolnproc == 1;
+}
+
 double radial_interpolation_derivative(const ModuleBase::realArray& table,
                                        int dim1,
                                        int dim2,

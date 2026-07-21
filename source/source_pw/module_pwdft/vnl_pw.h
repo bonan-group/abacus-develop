@@ -14,11 +14,6 @@
 #include "source_basis/module_ao/ORB_gaunt_table.h"
 #endif
 
-inline bool gpu_pw_fft_pool_supported(const int poolnproc)
-{
-    return poolnproc == 1;
-}
-
 //==========================================================
 // Calculate the non-local pseudopotential in reciprocal
 // space using plane wave as basis set.

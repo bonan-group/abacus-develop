@@ -1,17 +1,10 @@
 #include "source_pw/module_pwdft/kernels/vnl_op.h"
-#include "source_pw/module_pwdft/vnl_pw.h"
 
 #include "source_base/module_device/memory_op.h"
 
 #include <complex>
 #include <gtest/gtest.h>
 #include <vector>
-
-TEST(TestSrcPWVnlPolicy, gpuPwFftRequiresOneRankPerPool)
-{
-    EXPECT_TRUE(gpu_pw_fft_pool_supported(1));
-    EXPECT_FALSE(gpu_pw_fft_pool_supported(2));
-}
 
 class TestSrcPWVnlMultiDevice : public ::testing::Test
 {
