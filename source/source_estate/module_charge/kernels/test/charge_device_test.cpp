@@ -56,7 +56,7 @@ TEST(ChargeDeviceTest, AllocatesWhenHostStorageExistsFirst)
     Charge charge;
     charge.set_rhopw(&basis);
     charge.allocate(2, false);
-    EXPECT_EQ(charge.get_rho_d(), nullptr);
+    EXPECT_EQ(charge.get_rho_d(0), nullptr);
 
     charge.set_device("gpu");
 
@@ -65,7 +65,7 @@ TEST(ChargeDeviceTest, AllocatesWhenHostStorageExistsFirst)
     EXPECT_NE(charge.get_rhog_d(0), nullptr);
     EXPECT_NE(charge.get_rho_save_d(0), nullptr);
     EXPECT_NE(charge.get_rhog_save_d(0), nullptr);
-    EXPECT_EQ(charge.get_kin_r_d(), nullptr);
+    EXPECT_EQ(charge.get_kin_r_d(0), nullptr);
 }
 
 TEST(ChargeDeviceTest, AllocatesWhenGpuIsEnabledFirst)
@@ -76,7 +76,7 @@ TEST(ChargeDeviceTest, AllocatesWhenGpuIsEnabledFirst)
     Charge charge;
     charge.set_rhopw(&basis);
     charge.set_device("gpu");
-    EXPECT_EQ(charge.get_rho_d(), nullptr);
+    EXPECT_EQ(charge.get_rho_d(0), nullptr);
 
     charge.allocate(2, true);
 
@@ -224,15 +224,15 @@ TEST(ChargeDeviceTest, RecreatesStorageAcrossGpuCpuGpuSwitch)
     charge.set_rhopw(&basis);
     charge.allocate(2, false);
     charge.set_device("gpu");
-    ASSERT_NE(charge.get_rho_d(), nullptr);
+    ASSERT_NE(charge.get_rho_d(0), nullptr);
 
     charge.set_device("cpu");
-    EXPECT_EQ(charge.get_rho_d(), nullptr);
-    EXPECT_EQ(charge.get_rhog_d(), nullptr);
+    EXPECT_EQ(charge.get_rho_d(0), nullptr);
+    EXPECT_EQ(charge.get_rhog_d(0), nullptr);
 
     charge.set_device("gpu");
-    ASSERT_NE(charge.get_rho_d(), nullptr);
-    ASSERT_NE(charge.get_rhog_d(), nullptr);
+    ASSERT_NE(charge.get_rho_d(0), nullptr);
+    ASSERT_NE(charge.get_rhog_d(0), nullptr);
     const std::vector<double> rho = {0.7, 0.6, 0.5, 0.4, 0.3,
                                      1.7, 1.6, 1.5, 1.4, 1.3};
     std::copy(rho.begin(), rho.end(), charge.rho[0]);
@@ -250,7 +250,7 @@ TEST(ChargeDeviceTest, RecreatesStorageWhenHostArraysAreReallocated)
     charge.set_rhopw(&basis);
     charge.set_device("gpu");
     charge.allocate(2, false);
-    ASSERT_NE(charge.get_rho_d(), nullptr);
+    ASSERT_NE(charge.get_rho_d(0), nullptr);
 
     basis.nrxx = 7;
     basis.nxyz = 7;

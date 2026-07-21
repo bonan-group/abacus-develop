@@ -178,27 +178,21 @@ class Charge
 
     /// @brief Get device pointer for rho (nullptr if device != "gpu")
     /// @param is spin index
-    double* get_rho_d() const { return get_rho_d(0); }
     double* get_rho_d(int is) const;
 
     /// @brief Get device pointer for rho_save (nullptr if device != "gpu")
-    double* get_rho_save_d() const { return get_rho_save_d(0); }
     double* get_rho_save_d(int is) const;
 
     /// @brief Get device pointer for rhog (nullptr if device != "gpu")
-    std::complex<double>* get_rhog_d() const { return get_rhog_d(0); }
     std::complex<double>* get_rhog_d(int is) const;
 
     /// @brief Get device pointer for rhog_save (nullptr if device != "gpu")
-    std::complex<double>* get_rhog_save_d() const { return get_rhog_save_d(0); }
     std::complex<double>* get_rhog_save_d(int is) const;
 
     /// @brief Get device pointer for kin_r (nullptr if device != "gpu")
-    double* get_kin_r_d() const { return get_kin_r_d(0); }
     double* get_kin_r_d(int is) const;
 
     /// @brief Get device pointer for kin_r_save (nullptr if device != "gpu")
-    double* get_kin_r_save_d() const { return get_kin_r_save_d(0); }
     double* get_kin_r_save_d(int is) const;
 
     void sync_rho_to_device() const;

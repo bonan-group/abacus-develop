@@ -13,6 +13,7 @@ struct VnlChunkPolicy
     int atoms_in_chunk(int remaining_atoms, int projectors_per_atom) const;
 };
 
+bool gpu_pw_fft_pool_supported(int poolnproc);
 VnlChunkPolicy make_default_vnl_chunk_policy(bool use_gpu);
 
 #endif // ABACUS_SOURCE_PW_MODULE_PWDFT_VNL_CHUNK_POLICY_H

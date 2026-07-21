@@ -7,6 +7,12 @@
 namespace
 {
 
+TEST(VnlChunkPolicy, GpuPwFftRequiresOneRankPerPool)
+{
+    EXPECT_TRUE(gpu_pw_fft_pool_supported(1));
+    EXPECT_FALSE(gpu_pw_fft_pool_supported(2));
+}
+
 TEST(VnlChunkPolicy, UnsupportedBackendNeverChunks)
 {
     const VnlChunkPolicy policy = {false, 1, 64};

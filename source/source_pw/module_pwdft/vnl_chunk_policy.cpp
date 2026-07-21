@@ -7,6 +7,11 @@
 #include <cuda_runtime.h>
 #endif
 
+bool gpu_pw_fft_pool_supported(const int poolnproc)
+{
+    return poolnproc == 1;
+}
+
 bool VnlChunkPolicy::should_chunk(const int nkb,
                                   const int npwx,
                                   const std::size_t element_size) const
