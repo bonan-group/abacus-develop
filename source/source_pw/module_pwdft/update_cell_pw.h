@@ -11,10 +11,14 @@ struct Input_para;
 namespace pw
 {
 
-void update_cell_pw(const UnitCell& ucell,
+void update_cell_pw(UnitCell& ucell,
                     pseudopot_cell_vnl& ppcell,
                     const K_Vectors& kv,
                     ModulePW::PW_Basis_K* pw_wfc,
+                    const ModulePW::PW_Basis* pw_rhod,
+                    bool prepare_uspp_stress,
+                    int nqxq,
+                    double dq,
                     const Input_para& inp);
 
 }

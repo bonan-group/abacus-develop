@@ -32,14 +32,21 @@ AddTest(
   TARGET MODULE_PW_vnl_chunk_policy
   SOURCES vnl_chunk_policy_test.cpp vnl_chunk_dispatch_test.cpp ../vnl_chunk_policy.cpp
 )
+set(vnl_qgm_cache_libs parameter base device planewave cell symmetry)
+if(ENABLE_LCAO)
+  list(APPEND vnl_qgm_cache_libs orb)
+endif()
 if(USE_CUDA)
   target_link_libraries(MODULE_PW_vnl_chunk_policy PRIVATE CUDA::cudart)
-  AddTest(
-    TARGET MODULE_PW_vnl_qgm_cache
-    LIBS parameter base device planewave
-    SOURCES vnl_qgm_cache_test.cpp ../vnl_chunk_policy.cpp ../vnl_pw.cpp ../vnl_qgm_cache.cpp
-            ../soc.cpp ../structure_factor.cpp ../structure_factor_k.cpp ../parallel_grid.cpp
-  )
+endif()
+AddTest(
+  TARGET MODULE_PW_vnl_qgm_cache
+  LIBS ${vnl_qgm_cache_libs}
+  SOURCES vnl_qgm_cache_test.cpp ../vnl_chunk_policy.cpp ../vnl_pw.cpp ../vnl_qgm_cache.cpp
+          ../soc.cpp ../structure_factor.cpp ../structure_factor_k.cpp ../parallel_grid.cpp
+          ../../../source_estate/read_orb.cpp
+)
+if(USE_CUDA)
   target_link_libraries(MODULE_PW_vnl_qgm_cache PRIVATE CUDA::cudart)
 endif()
 

@@ -6,20 +6,29 @@
 namespace pw
 {
 
-void update_cell_pw(const UnitCell& ucell,
+void update_cell_pw(UnitCell& ucell,
                     pseudopot_cell_vnl& ppcell,
                     const K_Vectors& kv,
                     ModulePW::PW_Basis_K* pw_wfc,
+                    const ModulePW::PW_Basis* pw_rhod,
+                    bool prepare_uspp_stress,
+                    int nqxq,
+                    double dq,
                     const Input_para& inp)
 {
     ModuleBase::TITLE("pw", "update_cell_pw");
 
+    if (!ucell.cell_parameter_updated && !ucell.ionic_position_updated)
+    {
+        return;
+    }
+
+    ppcell.update_after_structure_change(ucell, pw_rhod, prepare_uspp_stress, nqxq, dq);
     if (!ucell.cell_parameter_updated)
     {
         return;
     }
 
-    ppcell.rescale_vnl(ucell.omega);
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "NON-LOCAL POTENTIAL");
 
     pw_wfc->initgrids(ucell.lat0, ucell.latvec, pw_wfc->nx, pw_wfc->ny, pw_wfc->nz);

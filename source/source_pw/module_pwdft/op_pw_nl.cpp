@@ -866,6 +866,7 @@ void Nonlocal<OperatorPW<T, Device>>::invalidate_kpoint_caches() const
     this->cached_ylm_size = 0;
     this->cached_vkb1_ntype = 0;
     this->cached_vkb1_nhm = 0;
+    this->cached_structure_generation = 0;
     this->cached_metadata_ntype = 0;
     this->cached_metadata_nat = 0;
     this->cached_metadata_nkb = 0;
@@ -876,7 +877,8 @@ void Nonlocal<OperatorPW<T, Device>>::ensure_kpoint_caches(int ik, int npw) cons
 {
     const int x1 = (this->ppcell->lmaxkb + 1) * (this->ppcell->lmaxkb + 1);
     if (this->cached_ik == ik && this->cached_npw == npw && this->cached_ylm_size == x1
-        && this->cached_vkb1_ntype == this->ucell->ntype && this->cached_vkb1_nhm == this->ppcell->nhm)
+        && this->cached_vkb1_ntype == this->ucell->ntype && this->cached_vkb1_nhm == this->ppcell->nhm
+        && this->cached_structure_generation == this->ppcell->structure_generation_)
     {
         return;
     }
@@ -952,6 +954,7 @@ void Nonlocal<OperatorPW<T, Device>>::ensure_kpoint_caches(int ik, int npw) cons
     this->cached_ylm_size = x1;
     this->cached_vkb1_ntype = this->ucell->ntype;
     this->cached_vkb1_nhm = this->ppcell->nhm;
+    this->cached_structure_generation = this->ppcell->structure_generation_;
 }
 
 template<typename T, typename Device>

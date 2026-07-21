@@ -14,6 +14,13 @@
 #include "source_basis/module_ao/ORB_gaunt_table.h"
 #endif
 
+namespace hamilt
+{
+template <class T>
+class Nonlocal;
+}
+class VnlGpuCacheTestAccess;
+
 //==========================================================
 // Calculate the non-local pseudopotential in reciprocal
 // space using plane wave as basis set.
@@ -46,7 +53,11 @@ class pseudopot_cell_vnl
                   const ModulePW::PW_Basis* rho_basis,
                   bool prepare_uspp_stress);
 
-    void rescale_vnl(const double& omega_in);
+    void update_after_structure_change(UnitCell& cell,
+                                       const ModulePW::PW_Basis* rho_basis,
+                                       bool prepare_uspp_stress,
+                                       int nqxq,
+                                       double dq);
 
     template <typename FPTYPE, typename Device>
     void getvnl(Device* ctx, const UnitCell& ucell, const int& ik, std::complex<FPTYPE>* vkb_in) const;
@@ -256,8 +267,13 @@ class pseudopot_cell_vnl
     void release_memory();
 
   private:
+    template <class T>
+    friend class hamilt::Nonlocal;
+    friend class VnlGpuCacheTestAccess;
+
     bool memory_released = false;
     bool qgm_cache_ready = false;
+    unsigned long structure_generation_ = 0;
     float* s_nhtol = nullptr;
     float* s_nhtolm = nullptr;
     float* s_indv = nullptr;
@@ -275,9 +291,13 @@ class pseudopot_cell_vnl
     Soc soc;
 
     double omega_old = 0;
+    int qgm_nqxq_ = 0;
+    double qgm_dq_ = 0.0;
     bool use_gpu_ = false;
     VnlChunkPolicy chunk_policy_ = {false, 0, 64};
 
+    void rescale_vnl(double omega_in);
+    void refresh_qgm_phase(UnitCell& cell, const ModulePW::PW_Basis* rho_basis);
     void prepare_qgm_cache(UnitCell& cell,
                            const ModulePW::PW_Basis* rho_basis,
                            bool prepare_stress,

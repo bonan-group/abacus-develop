@@ -141,7 +141,15 @@ void ESolver_KS_PW<T, Device>::before_scf(UnitCell& ucell, const int istep)
     ESolver_KS::before_scf(ucell, istep);
 
     //! Init variables (once the cell has changed)
-    pw::update_cell_pw(ucell, this->ppcell, this->kv, this->pw_wfc, PARAM.inp);
+    pw::update_cell_pw(ucell,
+                       this->ppcell,
+                       this->kv,
+                       this->pw_wfc,
+                       this->pw_rhod,
+                       PARAM.inp.cal_stress,
+                       PARAM.globalv.nqxq,
+                       PARAM.globalv.dq,
+                       PARAM.inp);
 
     if (ucell.cell_parameter_updated)
     {

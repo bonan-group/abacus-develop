@@ -142,6 +142,7 @@ class Nonlocal<OperatorPW<T, Device>> : public OperatorPW<T, Device>
     mutable int cached_ylm_size = 0;
     mutable int cached_vkb1_ntype = 0;
     mutable int cached_vkb1_nhm = 0;
+    mutable unsigned long cached_structure_generation = 0;
     mutable int cached_metadata_ntype = 0;
     mutable int cached_metadata_nat = 0;
     mutable int cached_metadata_nkb = 0;

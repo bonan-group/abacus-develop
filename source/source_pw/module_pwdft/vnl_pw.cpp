@@ -821,6 +821,8 @@ void pseudopot_cell_vnl::init_vnl(UnitCell& cell,
 
     const int qgm_nqxq = PARAM.globalv.nqxq;
     const double qgm_dq = PARAM.globalv.dq;
+    this->qgm_nqxq_ = qgm_nqxq;
+    this->qgm_dq_ = qgm_dq;
     if (has_uspp)
     {
         this->prepare_qgm_cache(cell,
@@ -1076,7 +1078,7 @@ void pseudopot_cell_vnl::radial_fft_q(const int ng,
                                       const ModuleBase::matrix ylm,
                                       std::complex<double>* qg) const
 {
-    this->radial_fft_q_explicit(ng, ih, jh, itype, qnorm, ylm, PARAM.globalv.nqxq, PARAM.globalv.dq, qg);
+    this->radial_fft_q_explicit(ng, ih, jh, itype, qnorm, ylm, this->qgm_nqxq_, this->qgm_dq_, qg);
 }
 
 void pseudopot_cell_vnl::radial_fft_q_explicit(const int ng,
@@ -1191,8 +1193,8 @@ void pseudopot_cell_vnl::radial_fft_dq(const int ng,
                                  tpiba,
                                  ylm,
                                  dylm,
-                                 PARAM.globalv.nqxq,
-                                 PARAM.globalv.dq,
+                                 this->qgm_nqxq_,
+                                 this->qgm_dq_,
                                  dqg);
 }
 
@@ -2006,10 +2008,55 @@ void pseudopot_cell_vnl::newd_nc(const int& iat, UnitCell& cell)
     }
 }
 
-// scale the non-local pseudopotential tables
-void pseudopot_cell_vnl::rescale_vnl(const double& omega_in)
+void pseudopot_cell_vnl::update_after_structure_change(UnitCell& cell,
+                                                        const ModulePW::PW_Basis* rho_basis,
+                                                        bool prepare_uspp_stress,
+                                                        int nqxq,
+                                                        double dq)
 {
-    const double ratio = this->omega_old / omega_in;
+    if (!cell.cell_parameter_updated && !cell.ionic_position_updated)
+    {
+        return;
+    }
+
+    ++this->structure_generation_;
+    const bool qgm_cache_allocated = this->qgm_phase.size > 0 || this->z_qgm_phase != nullptr;
+    if (cell.cell_parameter_updated)
+    {
+        this->rescale_vnl(cell.omega);
+        if (this->use_gpu_)
+        {
+            if (this->s_tab != nullptr)
+            {
+                castmem_d2s_h2d_op()(this->s_tab, this->tab.ptr, this->tab.getSize());
+            }
+            if (this->d_tab != nullptr)
+            {
+                syncmem_d2d_h2d_op()(this->d_tab, this->tab.ptr, this->tab.getSize());
+            }
+        }
+        else if (this->s_tab != nullptr)
+        {
+            castmem_d2s_h2h_op()(this->s_tab, this->tab.ptr, this->tab.getSize());
+        }
+
+        if (qgm_cache_allocated)
+        {
+            this->prepare_qgm_cache(cell, rho_basis, prepare_uspp_stress, nqxq, dq);
+        }
+        return;
+    }
+
+    if (qgm_cache_allocated)
+    {
+        this->refresh_qgm_phase(cell, rho_basis);
+    }
+}
+
+// scale the non-local pseudopotential tables
+void pseudopot_cell_vnl::rescale_vnl(double omega_in)
+{
+    const double ratio = this->omega_old > 0.0 ? this->omega_old / omega_in : 1.0;
     const double sqrt_ratio = std::sqrt(ratio);
     this->omega_old = omega_in;
 
