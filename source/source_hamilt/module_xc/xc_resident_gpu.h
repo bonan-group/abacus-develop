@@ -58,6 +58,8 @@ struct XcGpuResult
 };
 
 XcGpuMode select_xc_gpu_mode(const XcGpuRequest& request);
+XcGpuMode select_xc_gpu_mode(const std::vector<int>& functional_ids, int nspin, int poolnproc);
+bool is_xc_gpu_evaluator_available();
 XcGpuResult evaluate_resident_xc(const XcGpuRequest& request);
 bool evaluate_resident_xc_stress(const XcGpuRequest& request, std::vector<double>& stress);
 

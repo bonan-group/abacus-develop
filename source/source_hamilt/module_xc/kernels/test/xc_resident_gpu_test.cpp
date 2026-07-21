@@ -68,39 +68,6 @@ TEST(XcGpuSelectorTest, RejectsCpuDevice)
     EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(request), XC_Functional_GPU::XcGpuMode::Unsupported);
 }
 
-TEST(XcGpuSelectorTest, SelectsLdaSpinIndependentOfPoolSize)
-{
-    const std::vector<int> pz_ids = {XC_LDA_X, XC_LDA_C_PZ};
-    SelectorFixture pz_fixture(pz_ids, 2);
-    XC_Functional_GPU::XcGpuRequest& request = pz_fixture.request;
-    request.rho_basis->poolnproc = 4;
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(request), XC_Functional_GPU::XcGpuMode::LdaPzSpin);
-
-    const std::vector<int> pw_ids = {XC_LDA_X, XC_LDA_C_PW};
-    SelectorFixture pw_fixture(pw_ids, 2);
-    pw_fixture.request.rho_basis->poolnproc = 7;
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(pw_fixture.request), XC_Functional_GPU::XcGpuMode::LdaPwSpin);
-}
-
-TEST(XcGpuSelectorTest, SelectsPbeAndPbeSolScalarAndSpinModes)
-{
-    const std::vector<int> pbe_ids = {XC_GGA_X_PBE, XC_GGA_C_PBE};
-    SelectorFixture pbe_scalar(pbe_ids, 1);
-    SelectorFixture pbe_spin(pbe_ids, 2);
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(pbe_scalar.request),
-              XC_Functional_GPU::XcGpuMode::Pbe);
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(pbe_spin.request),
-              XC_Functional_GPU::XcGpuMode::SpinPbe);
-
-    const std::vector<int> pbesol_ids = {XC_GGA_X_PBE_SOL, XC_GGA_C_PBE_SOL};
-    SelectorFixture pbesol_scalar(pbesol_ids, 1);
-    SelectorFixture pbesol_spin(pbesol_ids, 2);
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(pbesol_scalar.request),
-              XC_Functional_GPU::XcGpuMode::PbeSol);
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(pbesol_spin.request),
-              XC_Functional_GPU::XcGpuMode::SpinPbeSol);
-}
-
 TEST(XcGpuSelectorTest, RejectsUnsupportedFunctionalSpinAndLayout)
 {
     const std::vector<int> pbe_ids = {XC_GGA_X_PBE, XC_GGA_C_PBE};
@@ -139,20 +106,6 @@ TEST(XcGpuSelectorTest, RejectsUnsupportedFunctionalSpinAndLayout)
     SelectorFixture libxc_fixture(pbe_ids, 1);
     request = libxc_fixture.request;
     request.use_libxc = true;
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(request), XC_Functional_GPU::XcGpuMode::Unsupported);
-}
-
-TEST(XcGpuSelectorTest, RejectsMultiRankPbeLayouts)
-{
-    const std::vector<int> pbe_ids = {XC_GGA_X_PBE, XC_GGA_C_PBE};
-    SelectorFixture scalar_fixture(pbe_ids, 1);
-    XC_Functional_GPU::XcGpuRequest request = scalar_fixture.request;
-    request.rho_basis->poolnproc = 2;
-    EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(request), XC_Functional_GPU::XcGpuMode::Unsupported);
-
-    SelectorFixture spin_fixture(pbe_ids, 2);
-    request = spin_fixture.request;
-    request.rho_basis->poolnproc = 2;
     EXPECT_EQ(XC_Functional_GPU::select_xc_gpu_mode(request), XC_Functional_GPU::XcGpuMode::Unsupported);
 }
 

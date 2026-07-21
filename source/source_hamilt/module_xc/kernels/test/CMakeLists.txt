@@ -7,7 +7,17 @@ AddTest(
 AddTest(
   TARGET MODULE_HAMILT_XC_Formula_UTs
   LIBS device base
-  SOURCES xc_formula_test.cpp
+  SOURCES xc_formula_test.cpp xc_selector_test.cpp
+)
+
+AddTest(
+  TARGET MODULE_HAMILT_XC_Public_UTs
+  LIBS xc_ parameter device base container planewave
+  SOURCES xc_public_test.cpp
+    xc_vxc_mock_unitcell_deps.cpp
+    ../../../../source_estate/module_charge/charge.cpp
+    ../../../../source_estate/module_charge/charge_device.cpp
+    ../../../../source_cell/test/support/mock_unitcell.cpp
 )
 
 if(USE_CUDA)

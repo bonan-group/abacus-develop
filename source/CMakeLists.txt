@@ -504,6 +504,7 @@ list(APPEND device_srcs
   source_base/kernels/math_ylm_op.cpp
   source_hamilt/module_xc/kernels/xc_functional_op.cpp
   source_hamilt/module_xc/kernels/xc_gradcorr_op.cpp
+  source_hamilt/module_xc/kernels/xc_resident_selector.cpp
   source_pw/module_pwdft/kernels/cal_density_real_op.cpp
   source_pw/module_pwdft/kernels/mul_potential_op.cpp
   source_pw/module_pwdft/kernels/vec_mul_vec_complex_op.cpp

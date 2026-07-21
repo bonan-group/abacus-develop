@@ -53,7 +53,7 @@ jobs:
       - name: Test CUDA mixing support
         run: |
           ctest --test-dir build --output-on-failure \
-            -R '^(MODULE_BASE_MIXING_unittests|MODULE_ESTATE_charge_mixing|MODULE_ESTATE_charge_mixing_kernels_gpu|MODULE_PW_pw_basis_sup_gpu_map|MODULE_HAMILT_XC_Functional_UTs|MODULE_HAMILT_XC_Formula_UTs|MODULE_HAMILT_XC_Resident_UTs|MODULE_PSI_init_gpu_test)$'
+            -R '^(MODULE_BASE_MIXING_unittests|MODULE_ESTATE_charge_mixing|MODULE_ESTATE_charge_mixing_kernels_gpu|MODULE_PW_pw_basis_sup_gpu_map|MODULE_HAMILT_XC_Functional_UTs|MODULE_HAMILT_XC_Formula_UTs|MODULE_HAMILT_XC_Public_UTs|MODULE_HAMILT_XC_Resident_UTs|MODULE_PSI_init_gpu_test)$'
 
       - name: Test GPU-resident mixing workflows
         run: |

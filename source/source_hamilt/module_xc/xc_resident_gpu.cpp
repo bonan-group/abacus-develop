@@ -34,11 +34,13 @@ namespace
 
 XcGpuMode select_available_mode(const XcGpuRequest& request, const bool require_potential_output)
 {
-#if !__CUDA && !__UT_USE_CUDA
-    (void)request;
-    (void)require_potential_output;
-    return XcGpuMode::Unsupported;
-#else
+    if (!is_xc_gpu_evaluator_available())
+    {
+        (void)request;
+        (void)require_potential_output;
+        return XcGpuMode::Unsupported;
+    }
+#if __CUDA || __UT_USE_CUDA
     if (request.device != "gpu" || request.use_libxc || request.has_kinetic_energy_density
         || request.functional_ids == nullptr || request.charge == nullptr || request.rho_basis == nullptr
         || request.unit_cell == nullptr || request.nrxx <= 0 || request.charge->nrxx != request.nrxx
@@ -71,19 +73,15 @@ XcGpuMode select_available_mode(const XcGpuRequest& request, const bool require_
         }
     }
 
-    const std::vector<int>& ids = *request.functional_ids;
-    const bool is_pz = ids.size() == 2 && ids[0] == XC_LDA_X && ids[1] == XC_LDA_C_PZ;
-    const bool is_pw = ids.size() == 2 && ids[0] == XC_LDA_X && ids[1] == XC_LDA_C_PW;
-    if (request.nspin == 2 && request.charge->get_rho_d(1) != nullptr)
+    const XcGpuMode mode
+        = select_xc_gpu_mode(*request.functional_ids, request.nspin, request.rho_basis->poolnproc);
+    if (mode == XcGpuMode::Unsupported || (request.nspin == 2 && request.charge->get_rho_d(1) == nullptr))
     {
-        if (is_pz)
-        {
-            return XcGpuMode::LdaPzSpin;
-        }
-        if (is_pw)
-        {
-            return XcGpuMode::LdaPwSpin;
-        }
+        return XcGpuMode::Unsupported;
+    }
+    if (mode == XcGpuMode::LdaPzSpin || mode == XcGpuMode::LdaPwSpin)
+    {
+        return mode;
     }
 
     if (request.rho_basis->poolnproc != 1 || request.rho_basis->npw <= 0 || request.rho_basis->gcar == nullptr
@@ -92,16 +90,8 @@ XcGpuMode select_available_mode(const XcGpuRequest& request, const bool require_
         return XcGpuMode::Unsupported;
     }
 
-    const bool is_pbe = ids.size() == 2 && ids[0] == XC_GGA_X_PBE && ids[1] == XC_GGA_C_PBE;
-    const bool is_pbesol = ids.size() == 2 && ids[0] == XC_GGA_X_PBE_SOL && ids[1] == XC_GGA_C_PBE_SOL;
-    if (request.nspin == 1)
-    {
-        return is_pbe ? XcGpuMode::Pbe : (is_pbesol ? XcGpuMode::PbeSol : XcGpuMode::Unsupported);
-    }
-    if (request.nspin == 2 && request.charge->get_rho_d(1) != nullptr)
-    {
-        return is_pbe ? XcGpuMode::SpinPbe : (is_pbesol ? XcGpuMode::SpinPbeSol : XcGpuMode::Unsupported);
-    }
+    return mode;
+#else
     return XcGpuMode::Unsupported;
 #endif
 }

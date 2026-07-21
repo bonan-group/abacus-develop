@@ -1,6 +1,5 @@
 #include <source_hamilt/module_xc/kernels/xc_gradcorr_op.h>
 #include <source_hamilt/module_xc/xc_functional.h>
-#include <source_base/parallel_comm.h>
 
 #include <base/utils/gtest.h>
 #include <source_base/module_device/memory_op.h>
@@ -51,63 +50,7 @@ class DeviceBuffer
     T* data_;
 };
 
-class MpiPoolContext
-{
-  public:
-    MpiPoolContext()
-    {
-#ifdef __MPI
-        int initialized = 0;
-        MPI_Initialized(&initialized);
-        if (initialized == 0)
-        {
-            MPI_Init(nullptr, nullptr);
-            owns_mpi_ = true;
-        }
-        previous_pool_ = POOL_WORLD;
-        MPI_Comm_dup(MPI_COMM_WORLD, &pool_);
-        POOL_WORLD = pool_;
-#endif
-    }
-
-    ~MpiPoolContext()
-    {
-#ifdef __MPI
-        POOL_WORLD = previous_pool_;
-        MPI_Comm_free(&pool_);
-        if (owns_mpi_)
-        {
-            MPI_Finalize();
-        }
-#endif
-    }
-
-  private:
-    MpiPoolContext(const MpiPoolContext&);
-    MpiPoolContext& operator=(const MpiPoolContext&);
-
-#ifdef __MPI
-    bool owns_mpi_ = false;
-    MPI_Comm previous_pool_ = MPI_COMM_NULL;
-    MPI_Comm pool_ = MPI_COMM_NULL;
-#endif
-};
-
 } // namespace
-
-TEST(XCBuiltinPublicBoundaryTest, PwPreservesIflagOneDensityBranches)
-{
-    double energy = 0.0;
-    double potential = 0.0;
-
-    XC_Functional::pw(0.5, 1, energy, potential);
-    EXPECT_NEAR(energy, -0.075710887630248275, 1.0e-15);
-    EXPECT_NEAR(potential, -0.084675804750428588, 1.0e-15);
-
-    XC_Functional::pw(200.0, 1, energy, potential);
-    EXPECT_NEAR(energy, -0.0016581002748332113, 1.0e-15);
-    EXPECT_NEAR(potential, -0.0021259004122498168, 1.0e-15);
-}
 
 TEST(XCGradcorrOpTest, PbeGridCpuMatchesBuiltinReferenceValues)
 {
@@ -824,7 +767,14 @@ TEST(XCResidentOpTest, ChargeRealspaceDensitySyncIsNoopOnCpuDevice)
 
 TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
 {
-    MpiPoolContext mpi_pool;
+#ifdef __MPI
+    int mpi_initialized = 0;
+    MPI_Initialized(&mpi_initialized);
+    if (mpi_initialized == 0)
+    {
+        GTEST_SKIP() << "The public v_xc boundary performs pool reductions; gtest_main does not initialize MPI.";
+    }
+#endif
     using syncmem_h2d_op
         = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
     using syncmem_d2h_op
