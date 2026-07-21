@@ -1,7 +1,6 @@
 #include <source_hamilt/module_xc/kernels/xc_functional_op.h>
 #include <source_hamilt/module_xc/kernels/xc_gradcorr_op.h>
 #include <source_hamilt/module_xc/xc_functional.h>
-#include <source_hamilt/module_xc/xc_gpu_policy.h>
 #define private public
 #include <source_io/module_parameter/parameter.h>
 #undef private
@@ -14,7 +13,6 @@
 #include <ATen/core/tensor.h>
 
 #include <complex>
-#include <cstdlib>
 #include <string>
 
 #ifdef __MPI
@@ -105,68 +103,6 @@ public:
 };
 
 TYPED_TEST_SUITE(XC_FunctionalOpTest, base::utils::ComplexTypes);
-
-TEST(XCFunctionGpuPolicyTest, GuardsSupportedBuiltins)
-{
-    using XC_Functional_GPU::xc_gpu_policy;
-    using XC_Functional_GPU::xc_gpu_stress_policy;
-
-    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "PBE"));
-    EXPECT_TRUE(xc_gpu_policy(true, false, 1, "pbesol"));
-    EXPECT_FALSE(xc_gpu_policy(false, false, 1, "PBE"));
-    EXPECT_FALSE(xc_gpu_policy(true, true, 1, "PBE"));
-    EXPECT_FALSE(xc_gpu_policy(true, false, 2, "PBE"));
-    EXPECT_FALSE(xc_gpu_policy(true, false, 1, "PZ"));
-    EXPECT_FALSE(xc_gpu_policy(true, false, 1, "LDA"));
-    EXPECT_FALSE(xc_gpu_policy(true, false, 1, "SCAN"));
-
-    EXPECT_TRUE(xc_gpu_stress_policy(true, false, 1, "PBE"));
-    EXPECT_TRUE(xc_gpu_stress_policy(true, false, 2, "pbesol"));
-    EXPECT_FALSE(xc_gpu_stress_policy(false, false, 1, "PBE"));
-    EXPECT_FALSE(xc_gpu_stress_policy(true, true, 1, "PBE"));
-    EXPECT_FALSE(xc_gpu_stress_policy(true, false, 4, "PBE"));
-    EXPECT_FALSE(xc_gpu_stress_policy(true, false, 1, "LDA"));
-    EXPECT_FALSE(xc_gpu_stress_policy(true, false, 1, "SCAN"));
-}
-
-TEST(XCFunctionGpuPolicyTest, EnvDisablesGpuOnlyWhenExplicitlyOff)
-{
-    using XC_Functional_GPU::xc_gpu_disabled_by_env;
-    using XC_Functional_GPU::xc_gpu_explicitly_enabled_by_env;
-
-    const char* old_env_value = std::getenv("ABACUS_XC_GPU");
-    const bool had_xc_gpu_env = old_env_value != nullptr;
-    const std::string old_xc_gpu_env = had_xc_gpu_env ? std::string(old_env_value) : std::string();
-
-    unsetenv("ABACUS_XC_GPU");
-    EXPECT_FALSE(xc_gpu_disabled_by_env());
-    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
-
-    setenv("ABACUS_XC_GPU", "0", 1);
-    EXPECT_TRUE(xc_gpu_disabled_by_env());
-    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
-
-    setenv("ABACUS_XC_GPU", "off", 1);
-    EXPECT_TRUE(xc_gpu_disabled_by_env());
-    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
-
-    setenv("ABACUS_XC_GPU", "FALSE", 1);
-    EXPECT_TRUE(xc_gpu_disabled_by_env());
-    EXPECT_FALSE(xc_gpu_explicitly_enabled_by_env());
-
-    setenv("ABACUS_XC_GPU", "1", 1);
-    EXPECT_FALSE(xc_gpu_disabled_by_env());
-    EXPECT_TRUE(xc_gpu_explicitly_enabled_by_env());
-
-    if (had_xc_gpu_env)
-    {
-        setenv("ABACUS_XC_GPU", old_xc_gpu_env.c_str(), 1);
-    }
-    else
-    {
-        unsetenv("ABACUS_XC_GPU");
-    }
-}
 
 TEST(XCGradcorrOpTest, PbeGridCpuMatchesBuiltinReferenceValues)
 {
@@ -988,10 +924,12 @@ TEST(XCResidentOpTest, ChargeRealspaceDensitySyncIsNoopOnCpuDevice)
 TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
 {
     ScopedMpiInit scoped_mpi;
-    const int old_nspin = PARAM.input.nspin;
-    const char* old_env_value = std::getenv("ABACUS_XC_GPU");
-    const bool had_xc_gpu_env = old_env_value != nullptr;
-    const std::string old_xc_gpu_env = had_xc_gpu_env ? std::string(old_env_value) : std::string();
+    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
+    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
+    using syncmem_h2d_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
+    using syncmem_d2h_op
+        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
 
     constexpr int nrxx = 6;
     ModulePW::PW_Basis rhopw;
@@ -1021,14 +959,10 @@ TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
     }
     chr.sync_realspace_density_to_device();
 
-    PARAM.input.nspin = 2;
     XC_Functional::set_xc_type("PZ");
 
-    setenv("ABACUS_XC_GPU", "0", 1);
-    const auto cpu_result = XC_Functional::v_xc(nrxx, &chr, &ucell, "cpu");
-
-    setenv("ABACUS_XC_GPU", "1", 1);
-    const auto gpu_result = XC_Functional::v_xc(nrxx, &chr, &ucell, "gpu");
+    const auto cpu_result = XC_Functional::v_xc(nrxx, &chr, &ucell, "cpu", 2, false, false, 0.0, 0.0);
+    const auto gpu_result = XC_Functional::v_xc(nrxx, &chr, &ucell, "gpu", 2, false, false, 0.0, 0.0);
 
     const double cpu_etxc = std::get<0>(cpu_result);
     const double cpu_vtxc = std::get<1>(cpu_result);
@@ -1047,6 +981,27 @@ TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
         }
     }
 
+    const std::vector<double> initial_potential(2 * nrxx, 0.125);
+    double* d_v_eff = nullptr;
+    resmem_double_op()(d_v_eff, 2 * nrxx);
+    syncmem_h2d_op()(d_v_eff, initial_potential.data(), 2 * nrxx);
+    double device_etxc = 0.0;
+    double device_vtxc = 0.0;
+    ASSERT_TRUE(XC_Functional::add_v_xc_to_device(
+        nrxx, &chr, &ucell, "gpu", 2, d_v_eff, device_etxc, device_vtxc));
+    std::vector<double> device_potential(2 * nrxx, 0.0);
+    syncmem_d2h_op()(device_potential.data(), d_v_eff, 2 * nrxx);
+    EXPECT_NEAR(device_etxc, gpu_etxc, 1.0e-12);
+    EXPECT_NEAR(device_vtxc, gpu_vtxc, 1.0e-12);
+    for (int is = 0; is < 2; ++is)
+    {
+        for (int ir = 0; ir < nrxx; ++ir)
+        {
+            EXPECT_NEAR(device_potential[is * nrxx + ir], initial_potential[is * nrxx + ir] + gpu_v(is, ir), 1.0e-12);
+        }
+    }
+    delmem_double_op()(d_v_eff);
+
     const auto explicit_cpu_result
         = XC_Functional::v_xc(nrxx, &chr, &ucell, "cpu", 1, false, false, 0.0, 0.0);
     const auto explicit_gpu_result
@@ -1062,15 +1017,6 @@ TEST(XCResidentOpTest, FullVxcLdaSpinResidentGpuMatchesCpu)
         EXPECT_NEAR(explicit_gpu_v(0, ir), explicit_cpu_v(0, ir), 1.0e-12);
     }
 
-    PARAM.input.nspin = old_nspin;
-    if (had_xc_gpu_env)
-    {
-        setenv("ABACUS_XC_GPU", old_xc_gpu_env.c_str(), 1);
-    }
-    else
-    {
-        unsetenv("ABACUS_XC_GPU");
-    }
 }
 
 TEST(XCResidentOpTest, SpinPbeGridGpuMatchesCpu)

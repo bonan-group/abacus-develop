@@ -2,7 +2,6 @@
 #include "source_base/parallel_reduce.h"
 #include "source_base/global_variable.h"
 #include "source_hamilt/module_xc/xc_functional.h"
-#include "source_hamilt/module_xc/xc_gpu_policy.h"
 #include "source_base/timer.h"
 #include "source_io/module_parameter/parameter.h"
 
@@ -35,9 +34,10 @@ void Stress_Func<FPTYPE, Device>::stress_gga(const UnitCell& ucell,
     const double hse_omega = XC_Functional::get_hse_omega();
     // The first three gradcorr outputs are unused for stress.
     const std::string device = std::is_same<Device, base_device::DEVICE_GPU>::value ? "gpu" : "cpu";
-    if (!XC_Functional::gradcorr_stress_gpu(chr, rho_basis, &ucell, stress_gga, device))
+    const int nspin = PARAM.inp.nspin;
+    if (!XC_Functional::gradcorr_stress_gpu(chr, rho_basis, &ucell, stress_gga, device, nspin))
     {
-        if (device == "gpu" && !XC_Functional_GPU::xc_gpu_disabled_by_env() && GlobalV::ofs_running)
+        if (device == "gpu" && GlobalV::ofs_running)
         {
             GlobalV::ofs_running << " INFO: GPU-optimized GGA stress XC path is unavailable. "
                                  << "Using the existing CPU GGA stress implementation." << std::endl;
@@ -45,7 +45,7 @@ void Stress_Func<FPTYPE, Device>::stress_gga(const UnitCell& ucell,
         XC_Functional::gradcorr(
             dum1, dum2, dum3, chr, rho_basis, &ucell,
             stress_gga, is_stress,
-            PARAM.inp.nspin, PARAM.globalv.domag, PARAM.globalv.domag_z,
+            nspin, PARAM.globalv.domag, PARAM.globalv.domag_z,
             hybrid_alpha, hse_omega);
     }
 

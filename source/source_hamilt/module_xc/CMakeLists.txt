@@ -3,6 +3,7 @@ add_library(
     OBJECT
     xc_functional.cpp
     xc_pot.cpp
+    xc_resident_gpu.cpp
     xc_grad.cpp
     xc_lda_wrap.cpp
     xc_gga_wrap.cpp

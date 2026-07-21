@@ -58,16 +58,12 @@ class XC_Functional
         const bool domag_z,
         const double hybrid_alpha,
         const double hse_omega);
-    static std::tuple<double, double, ModuleBase::matrix> v_xc(
-        const int& nrxx,
-        const Charge* const chr,
-        const UnitCell* ucell,
-        const std::string& device); // charge density
     static bool add_v_xc_to_device(
         const int& nrxx,
         const Charge* const chr,
         const UnitCell* ucell,
         const std::string& device,
+        const int nspin,
         double* d_v_eff,
         double& etxc,
         double& vtxc);
@@ -285,7 +281,8 @@ class XC_Functional
         ModulePW::PW_Basis* rhopw,
         const UnitCell* ucell,
         std::vector<double>& stress_gga,
-        const std::string& device);
+        const std::string& device,
+        const int nspin);
     template <typename T, typename Device,
               typename Real = typename GetTypeReal<T>::type>
 

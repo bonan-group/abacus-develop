@@ -6,16 +6,10 @@
 
 #include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
-#include "source_base/global_variable.h"
-#include "source_base/module_device/memory_op.h"
-#include "source_hamilt/module_xc/kernels/xc_gradcorr_op.h"
-#include "source_hamilt/module_xc/xc_gpu_policy.h"
+#include "source_hamilt/module_xc/xc_resident_gpu.h"
 #include "source_io/module_parameter/parameter.h"
 #include "xc_functional.h"
 
-#include <complex>
-#include <cstdlib>
-#include <string>
 #include <vector>
 
 #ifdef USE_LIBXC
@@ -25,523 +19,27 @@
 #endif
 #endif
 
-namespace
-{
-
-void log_xc_cpu_fallback(const std::string& reason)
-{
-    if (GlobalV::ofs_running)
-    {
-        GlobalV::ofs_running << " INFO: GPU-optimized XC path is unavailable: " << reason
-                             << ". Using the CPU XC path." << std::endl;
-    }
-}
-
-bool should_log_xc_cpu_fallback(const std::string& device)
-{
-    return device == "gpu" && !XC_Functional_GPU::xc_gpu_disabled_by_env();
-}
-
-void log_explicit_xc_gpu_env_if_needed(const std::string& device)
-{
-    static bool logged = false;
-    if (logged || device != "gpu" || !XC_Functional_GPU::xc_gpu_explicitly_enabled_by_env()
-        || !GlobalV::ofs_running)
-    {
-        return;
-    }
-
-    GlobalV::ofs_running << " INFO: ABACUS_XC_GPU is set. GPU-optimized XC paths are enabled when supported; "
-                         << "set ABACUS_XC_GPU=0 to force the CPU XC path." << std::endl;
-    logged = true;
-}
-
-#if __CUDA || __UT_USE_CUDA
-bool try_v_xc_lda_spin_resident_gpu(const int nrxx,
-                                    const Charge* const chr,
-                                    const UnitCell* const ucell,
-                                    const std::string& device,
-                                    const int nspin,
-                                    const std::vector<int>& func_id,
-                                    ModuleBase::matrix& v,
-                                    double& etxc,
-                                    double& vtxc,
-                                    double* d_v_eff)
-{
-    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
-    const bool is_pz = func_id.size() == 2 && func_id[0] == XC_LDA_X && func_id[1] == XC_LDA_C_PZ;
-    const bool is_pw = func_id.size() == 2 && func_id[0] == XC_LDA_X && func_id[1] == XC_LDA_C_PW;
-    ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (xc_gpu_disabled || device != "gpu" || nspin != 2 || !(is_pz || is_pw) || chr == nullptr
-        || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
-        || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr || chr->get_rho_d(1) == nullptr)
-    {
-        return false;
-    }
-
-    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
-    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
-    using syncmem_double_h2d_op
-        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
-    using syncmem_double_d2h_op
-        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
-
-    double* d_rho_core = nullptr;
-    double* d_rho_up_total = nullptr;
-    double* d_rho_dw_total = nullptr;
-    double* d_v = nullptr;
-    double* d_sums = nullptr;
-
-    const auto cleanup = [&]() {
-        delmem_double_op()(d_rho_core);
-        delmem_double_op()(d_rho_up_total);
-        delmem_double_op()(d_rho_dw_total);
-        delmem_double_op()(d_v);
-        delmem_double_op()(d_sums);
-    };
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_gpu");
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_scalar");
-
-    resmem_double_op()(d_rho_core, nrxx);
-    resmem_double_op()(d_rho_up_total, nrxx);
-    resmem_double_op()(d_rho_dw_total, nrxx);
-    resmem_double_op()(d_v, 2 * nrxx);
-    resmem_double_op()(d_sums, 2);
-    syncmem_double_h2d_op()(d_rho_core, chr->rho_core, nrxx);
-
-    hamilt::xc_scalar_lda_spin_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                                     nrxx,
-                                                                     is_pz ? 0 : 1,
-                                                                     2.0,
-                                                                     1.0e-10,
-                                                                     chr->get_rho_d(0),
-                                                                     chr->get_rho_d(1),
-                                                                     d_rho_core,
-                                                                     d_rho_up_total,
-                                                                     d_rho_dw_total,
-                                                                     d_v,
-                                                                     d_sums,
-                                                                     &etxc,
-                                                                     &vtxc);
-
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_scalar");
-    if (d_v_eff != nullptr)
-    {
-        ModuleBase::timer::start("XC_Functional", "v_xc_resident_device_add");
-        hamilt::xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, 2 * nrxx, d_v, d_v_eff);
-        ModuleBase::timer::end("XC_Functional", "v_xc_resident_device_add");
-    }
-    else
-    {
-        ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
-        syncmem_double_d2h_op()(v.c, d_v, 2 * nrxx);
-        ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
-    }
-
-    cleanup();
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_gpu");
-    return true;
-}
-
-bool try_v_xc_pbe_resident_gpu(const int nrxx,
-                               const Charge* const chr,
-                               const UnitCell* const ucell,
-                               const std::string& device,
-                               const int nspin,
-                               const std::vector<int>& func_id,
-                               ModuleBase::matrix& v,
-                               double& etxc,
-                               double& vtxc,
-                               double* d_v_eff)
-{
-    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
-    const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
-    const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
-    ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (xc_gpu_disabled || device != "gpu" || nspin != 1 || !(is_pbe || is_pbesol) || chr == nullptr
-        || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
-        || rhopw->poolnproc != 1 || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr)
-    {
-        return false;
-    }
-
-    using complex_t = std::complex<double>;
-    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
-    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
-    using resmem_complex_op = base_device::memory::resize_memory_op<complex_t, base_device::DEVICE_GPU>;
-    using delmem_complex_op = base_device::memory::delete_memory_op<complex_t, base_device::DEVICE_GPU>;
-    using syncmem_double_h2d_op
-        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
-    using syncmem_double_d2h_op
-        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
-    using setmem_double_op = base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>;
-
-    double* d_rho_core = nullptr;
-    double* d_rho_total = nullptr;
-    double* d_v = nullptr;
-    double* d_sums = nullptr;
-    double* d_gcar = nullptr;
-    double* d_gdr = nullptr;
-    double* d_grad_r = nullptr;
-    double* d_h = nullptr;
-    double* d_h_comp = nullptr;
-    double* d_dh = nullptr;
-    double* d_dh_sum = nullptr;
-    complex_t* d_rhog_total = nullptr;
-    complex_t* d_grad_g = nullptr;
-    complex_t* d_aux_g = nullptr;
-    complex_t* d_gaux = nullptr;
-
-    const auto cleanup = [&]() {
-        delmem_double_op()(d_rho_core);
-        delmem_double_op()(d_rho_total);
-        delmem_double_op()(d_v);
-        delmem_double_op()(d_sums);
-        delmem_double_op()(d_gcar);
-        delmem_double_op()(d_gdr);
-        delmem_double_op()(d_grad_r);
-        delmem_double_op()(d_h);
-        delmem_double_op()(d_h_comp);
-        delmem_double_op()(d_dh);
-        delmem_double_op()(d_dh_sum);
-        delmem_complex_op()(d_rhog_total);
-        delmem_complex_op()(d_grad_g);
-        delmem_complex_op()(d_aux_g);
-        delmem_complex_op()(d_gaux);
-    };
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_gpu");
-
-    const int iflag = is_pbesol ? 2 : 0;
-    const double e2 = 2.0;
-    const double epsr = 1.0e-6;
-    const int npw = rhopw->npw;
-
-    std::vector<double> gcar_flat(3 * npw);
-    for (int ig = 0; ig < npw; ++ig)
-    {
-        gcar_flat[3 * ig + 0] = rhopw->gcar[ig].x;
-        gcar_flat[3 * ig + 1] = rhopw->gcar[ig].y;
-        gcar_flat[3 * ig + 2] = rhopw->gcar[ig].z;
-    }
-
-    resmem_double_op()(d_rho_core, nrxx);
-    resmem_double_op()(d_rho_total, nrxx);
-    resmem_double_op()(d_v, nrxx);
-    resmem_double_op()(d_sums, 2);
-    resmem_double_op()(d_gcar, 3 * npw);
-    resmem_double_op()(d_gdr, 3 * nrxx);
-    resmem_double_op()(d_grad_r, nrxx);
-    resmem_double_op()(d_h, 3 * nrxx);
-    resmem_double_op()(d_h_comp, nrxx);
-    resmem_double_op()(d_dh, nrxx);
-    resmem_double_op()(d_dh_sum, 1);
-    resmem_complex_op()(d_rhog_total, npw);
-    resmem_complex_op()(d_grad_g, npw);
-    resmem_complex_op()(d_aux_g, npw);
-    resmem_complex_op()(d_gaux, npw);
-
-    syncmem_double_h2d_op()(d_rho_core, chr->rho_core, nrxx);
-    syncmem_double_h2d_op()(d_gcar, gcar_flat.data(), 3 * npw);
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_scalar");
-    hamilt::xc_scalar_pbe_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                                nrxx,
-                                                                e2,
-                                                                1.0e-10,
-                                                                chr->get_rho_d(0),
-                                                                d_rho_core,
-                                                                d_rho_total,
-                                                                d_v,
-                                                                d_sums,
-                                                                &etxc,
-                                                                &vtxc);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_scalar");
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_grad_rho");
-    rhopw->real_to_recip<double, complex_t, base_device::DEVICE_GPU>(d_rho_total, d_rhog_total);
-    for (int ipol = 0; ipol < 3; ++ipol)
-    {
-        hamilt::xc_multiply_iG_op<double, base_device::DEVICE_GPU>()(
-            nullptr, npw, ipol, d_gcar, d_rhog_total, d_grad_g);
-        setmem_double_op()(d_grad_r, 0, nrxx);
-        rhopw->recip_to_real<complex_t, double, base_device::DEVICE_GPU>(d_grad_g, d_grad_r, true, ucell->tpiba);
-        hamilt::xc_set_component_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, ipol, d_grad_r, d_gdr);
-    }
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_grad_rho");
-
-    double etxcgc = 0.0;
-    double vtxcgc = 0.0;
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_eval_grid");
-    hamilt::xc_gradcorr_pbe_grid_resident_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                                                nrxx,
-                                                                                iflag,
-                                                                                e2,
-                                                                                epsr,
-                                                                                d_rho_total,
-                                                                                d_rho_core,
-                                                                                d_gdr,
-                                                                                d_v,
-                                                                                d_h,
-                                                                                d_sums,
-                                                                                &etxcgc,
-                                                                                &vtxcgc);
-    etxc += etxcgc;
-    vtxc += vtxcgc;
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_eval_grid");
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_grad_dot");
-    for (int ipol = 0; ipol < 3; ++ipol)
-    {
-        hamilt::xc_extract_component_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, ipol, d_h, d_h_comp);
-        rhopw->real_to_recip<double, complex_t, base_device::DEVICE_GPU>(d_h_comp, d_aux_g);
-        hamilt::xc_accumulate_iG_op<double, base_device::DEVICE_GPU>()(
-            nullptr, npw, ipol, d_gcar, d_aux_g, d_gaux, ipol == 0);
-    }
-    setmem_double_op()(d_dh, 0, nrxx);
-    rhopw->recip_to_real<complex_t, double, base_device::DEVICE_GPU>(d_gaux, d_dh, true, ucell->tpiba);
-    double vtxc_delta = 0.0;
-    hamilt::xc_apply_dh_op<double, base_device::DEVICE_GPU>()(
-        nullptr, nrxx, d_rho_total, d_rho_core, d_dh, d_v, d_dh_sum, &vtxc_delta);
-    vtxc += vtxc_delta;
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_grad_dot");
-
-    if (d_v_eff != nullptr)
-    {
-        ModuleBase::timer::start("XC_Functional", "v_xc_resident_device_add");
-        hamilt::xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, d_v, d_v_eff);
-        ModuleBase::timer::end("XC_Functional", "v_xc_resident_device_add");
-    }
-    else
-    {
-        ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
-        syncmem_double_d2h_op()(v.c, d_v, nrxx);
-        ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
-    }
-
-    cleanup();
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_gpu");
-    return true;
-}
-
-bool try_v_xc_pbe_spin_resident_gpu(const int nrxx,
-                                    const Charge* const chr,
-                                    const UnitCell* const ucell,
-                                    const std::string& device,
-                                    const int nspin,
-                                    const std::vector<int>& func_id,
-                                    ModuleBase::matrix& v,
-                                    double& etxc,
-                                    double& vtxc,
-                                    double* d_v_eff)
-{
-    const bool xc_gpu_disabled = XC_Functional_GPU::xc_gpu_disabled_by_env();
-    const bool is_pbe = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE && func_id[1] == XC_GGA_C_PBE;
-    const bool is_pbesol = func_id.size() == 2 && func_id[0] == XC_GGA_X_PBE_SOL && func_id[1] == XC_GGA_C_PBE_SOL;
-    ModulePW::PW_Basis* rhopw = chr != nullptr ? chr->rhopw : nullptr;
-    if (xc_gpu_disabled || device != "gpu" || nspin != 2 || !(is_pbe || is_pbesol) || chr == nullptr
-        || ucell == nullptr || rhopw == nullptr || chr->get_device() != "gpu" || rhopw->get_device() != "gpu"
-        || rhopw->poolnproc != 1 || rhopw->nrxx != nrxx || chr->get_rho_d(0) == nullptr
-        || chr->get_rho_d(1) == nullptr)
-    {
-        return false;
-    }
-
-    using complex_t = std::complex<double>;
-    using resmem_double_op = base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>;
-    using delmem_double_op = base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>;
-    using resmem_complex_op = base_device::memory::resize_memory_op<complex_t, base_device::DEVICE_GPU>;
-    using delmem_complex_op = base_device::memory::delete_memory_op<complex_t, base_device::DEVICE_GPU>;
-    using syncmem_double_h2d_op
-        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>;
-    using syncmem_double_d2h_op
-        = base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>;
-    using setmem_double_op = base_device::memory::set_memory_op<double, base_device::DEVICE_GPU>;
-
-    double* d_rho_core = nullptr;
-    double* d_rho_up_total = nullptr;
-    double* d_rho_dw_total = nullptr;
-    double* d_v = nullptr;
-    double* d_sums = nullptr;
-    double* d_gcar = nullptr;
-    double* d_gdr_up = nullptr;
-    double* d_gdr_dw = nullptr;
-    double* d_grad_r = nullptr;
-    double* d_h_up = nullptr;
-    double* d_h_dw = nullptr;
-    double* d_h_comp = nullptr;
-    double* d_dh = nullptr;
-    double* d_dh_sum = nullptr;
-    complex_t* d_rhog_total = nullptr;
-    complex_t* d_grad_g = nullptr;
-    complex_t* d_aux_g = nullptr;
-    complex_t* d_gaux = nullptr;
-
-    const auto cleanup = [&]() {
-        delmem_double_op()(d_rho_core);
-        delmem_double_op()(d_rho_up_total);
-        delmem_double_op()(d_rho_dw_total);
-        delmem_double_op()(d_v);
-        delmem_double_op()(d_sums);
-        delmem_double_op()(d_gcar);
-        delmem_double_op()(d_gdr_up);
-        delmem_double_op()(d_gdr_dw);
-        delmem_double_op()(d_grad_r);
-        delmem_double_op()(d_h_up);
-        delmem_double_op()(d_h_dw);
-        delmem_double_op()(d_h_comp);
-        delmem_double_op()(d_dh);
-        delmem_double_op()(d_dh_sum);
-        delmem_complex_op()(d_rhog_total);
-        delmem_complex_op()(d_grad_g);
-        delmem_complex_op()(d_aux_g);
-        delmem_complex_op()(d_gaux);
-    };
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_gpu");
-
-    const int iflag = is_pbesol ? 2 : 0;
-    const double e2 = 2.0;
-    const double epsr = 1.0e-6;
-    const int npw = rhopw->npw;
-
-    std::vector<double> gcar_flat(3 * npw);
-    for (int ig = 0; ig < npw; ++ig)
-    {
-        gcar_flat[3 * ig + 0] = rhopw->gcar[ig].x;
-        gcar_flat[3 * ig + 1] = rhopw->gcar[ig].y;
-        gcar_flat[3 * ig + 2] = rhopw->gcar[ig].z;
-    }
-
-    resmem_double_op()(d_rho_core, nrxx);
-    resmem_double_op()(d_rho_up_total, nrxx);
-    resmem_double_op()(d_rho_dw_total, nrxx);
-    resmem_double_op()(d_v, 2 * nrxx);
-    resmem_double_op()(d_sums, 2);
-    resmem_double_op()(d_gcar, 3 * npw);
-    resmem_double_op()(d_gdr_up, 3 * nrxx);
-    resmem_double_op()(d_gdr_dw, 3 * nrxx);
-    resmem_double_op()(d_grad_r, nrxx);
-    resmem_double_op()(d_h_up, 3 * nrxx);
-    resmem_double_op()(d_h_dw, 3 * nrxx);
-    resmem_double_op()(d_h_comp, nrxx);
-    resmem_double_op()(d_dh, nrxx);
-    resmem_double_op()(d_dh_sum, 1);
-    resmem_complex_op()(d_rhog_total, npw);
-    resmem_complex_op()(d_grad_g, npw);
-    resmem_complex_op()(d_aux_g, npw);
-    resmem_complex_op()(d_gaux, npw);
-
-    syncmem_double_h2d_op()(d_rho_core, chr->rho_core, nrxx);
-    syncmem_double_h2d_op()(d_gcar, gcar_flat.data(), 3 * npw);
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_scalar");
-    hamilt::xc_scalar_lda_spin_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                                     nrxx,
-                                                                     1,
-                                                                     e2,
-                                                                     1.0e-10,
-                                                                     chr->get_rho_d(0),
-                                                                     chr->get_rho_d(1),
-                                                                     d_rho_core,
-                                                                     d_rho_up_total,
-                                                                     d_rho_dw_total,
-                                                                     d_v,
-                                                                     d_sums,
-                                                                     &etxc,
-                                                                     &vtxc);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_scalar");
-
-    const auto build_grad = [&](double* d_rho_total, double* d_gdr) {
-        rhopw->real_to_recip<double, complex_t, base_device::DEVICE_GPU>(d_rho_total, d_rhog_total);
-        for (int ipol = 0; ipol < 3; ++ipol)
-        {
-            hamilt::xc_multiply_iG_op<double, base_device::DEVICE_GPU>()(
-                nullptr, npw, ipol, d_gcar, d_rhog_total, d_grad_g);
-            setmem_double_op()(d_grad_r, 0, nrxx);
-            rhopw->recip_to_real<complex_t, double, base_device::DEVICE_GPU>(d_grad_g, d_grad_r, true, ucell->tpiba);
-            hamilt::xc_set_component_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, ipol, d_grad_r, d_gdr);
-        }
-    };
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_grad_rho");
-    build_grad(d_rho_up_total, d_gdr_up);
-    build_grad(d_rho_dw_total, d_gdr_dw);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_grad_rho");
-
-    double etxcgc = 0.0;
-    double vtxcgc = 0.0;
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_eval_grid");
-    hamilt::xc_gradcorr_pbe_spin_grid_resident_op<double, base_device::DEVICE_GPU>()(nullptr,
-                                                                                     nrxx,
-                                                                                     iflag,
-                                                                                     e2,
-                                                                                     epsr,
-                                                                                     d_rho_up_total,
-                                                                                     d_rho_dw_total,
-                                                                                     d_rho_core,
-                                                                                     d_gdr_up,
-                                                                                     d_gdr_dw,
-                                                                                     d_v,
-                                                                                     d_h_up,
-                                                                                     d_h_dw,
-                                                                                     d_sums,
-                                                                                     &etxcgc,
-                                                                                     &vtxcgc);
-    etxc += etxcgc;
-    vtxc += vtxcgc;
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_eval_grid");
-
-    const auto apply_grad_dot = [&](const double* d_h, const double* d_rho_total, double* d_v_channel) {
-        for (int ipol = 0; ipol < 3; ++ipol)
-        {
-            hamilt::xc_extract_component_op<double, base_device::DEVICE_GPU>()(nullptr, nrxx, ipol, d_h, d_h_comp);
-            rhopw->real_to_recip<double, complex_t, base_device::DEVICE_GPU>(d_h_comp, d_aux_g);
-            hamilt::xc_accumulate_iG_op<double, base_device::DEVICE_GPU>()(
-                nullptr, npw, ipol, d_gcar, d_aux_g, d_gaux, ipol == 0);
-        }
-        setmem_double_op()(d_dh, 0, nrxx);
-        rhopw->recip_to_real<complex_t, double, base_device::DEVICE_GPU>(d_gaux, d_dh, true, ucell->tpiba);
-        double vtxc_delta = 0.0;
-        hamilt::xc_apply_dh_spin_op<double, base_device::DEVICE_GPU>()(
-            nullptr, nrxx, d_rho_total, d_rho_core, d_dh, d_v_channel, d_dh_sum, &vtxc_delta);
-        vtxc += vtxc_delta;
-    };
-
-    ModuleBase::timer::start("XC_Functional", "v_xc_resident_grad_dot");
-    apply_grad_dot(d_h_up, d_rho_up_total, d_v);
-    apply_grad_dot(d_h_dw, d_rho_dw_total, d_v + nrxx);
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_grad_dot");
-
-    if (d_v_eff != nullptr)
-    {
-        ModuleBase::timer::start("XC_Functional", "v_xc_resident_device_add");
-        hamilt::xc_add_potential_op<double, base_device::DEVICE_GPU>()(nullptr, 2 * nrxx, d_v, d_v_eff);
-        ModuleBase::timer::end("XC_Functional", "v_xc_resident_device_add");
-    }
-    else
-    {
-        ModuleBase::timer::start("XC_Functional", "v_xc_resident_d2h");
-        syncmem_double_d2h_op()(v.c, d_v, 2 * nrxx);
-        ModuleBase::timer::end("XC_Functional", "v_xc_resident_d2h");
-    }
-
-    cleanup();
-    ModuleBase::timer::end("XC_Functional", "v_xc_resident_gpu");
-    return true;
-}
-#endif
-
-} // namespace
-
 // [etxc, vtxc, v] = XC_Functional::v_xc(...)
 std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const int& nrxx,
     const Charge* const chr,
     const UnitCell* ucell)
 {
-    return XC_Functional::v_xc(nrxx, chr, ucell, "cpu");
+    const double hybrid_alpha = XC_Functional::get_hybrid_alpha();
+#ifdef __EXX
+    const double hse_omega = XC_Functional::get_hse_omega();
+#else
+    const double hse_omega = 0.0;
+#endif
+    return XC_Functional::v_xc(nrxx,
+                               chr,
+                               ucell,
+                               "cpu",
+                               PARAM.inp.nspin,
+                               PARAM.globalv.domag,
+                               PARAM.globalv.domag_z,
+                               hybrid_alpha,
+                               hse_omega);
 }
 
 std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
@@ -562,29 +60,6 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const int& nrxx,
     const Charge* const chr,
     const UnitCell* ucell,
-    const std::string& device)
-{
-    const double hybrid_alpha = XC_Functional::get_hybrid_alpha();
-#ifdef __EXX
-    const double hse_omega = XC_Functional::get_hse_omega();
-#else
-    const double hse_omega = 0.0;
-#endif
-    return XC_Functional::v_xc(nrxx,
-                               chr,
-                               ucell,
-                               device,
-                               PARAM.inp.nspin,
-                               PARAM.globalv.domag,
-                               PARAM.globalv.domag_z,
-                               hybrid_alpha,
-                               hse_omega);
-}
-
-std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
-    const int& nrxx,
-    const Charge* const chr,
-    const UnitCell* ucell,
     const std::string& device,
     const int nspin,
     const bool domag,
@@ -593,14 +68,9 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     const double hse_omega)
 {
     ModuleBase::TITLE("XC_Functional", "v_xc");
-    log_explicit_xc_gpu_env_if_needed(device);
 
     if (use_libxc)
     {
-        if (should_log_xc_cpu_fallback(device))
-        {
-            log_xc_cpu_fallback("LibXC functionals are supported through the existing CPU LibXC implementation");
-        }
 #ifdef USE_LIBXC
         return XC_Functional_Libxc::v_xc_libxc(XC_Functional::get_func_id(),
                                                nrxx,
@@ -630,9 +100,24 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
     double e2 = 2.0;
     double vanishing_charge = 1.0e-10;
 
-#if __CUDA || __UT_USE_CUDA
-    if (try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, v, etxc, vtxc, nullptr))
+    XC_Functional_GPU::XcGpuRequest gpu_request;
+    gpu_request.device = device;
+    gpu_request.nrxx = nrxx;
+    gpu_request.nspin = nspin;
+    gpu_request.use_libxc = use_libxc;
+    gpu_request.has_kinetic_energy_density = XC_Functional::get_ked_flag();
+    gpu_request.functional_ids = &func_id;
+    gpu_request.charge = chr;
+    gpu_request.rho_basis = chr == nullptr ? nullptr : chr->rhopw;
+    gpu_request.unit_cell = ucell;
+    gpu_request.rho_up = chr == nullptr ? nullptr : chr->get_rho_d(0);
+    gpu_request.rho_down = chr == nullptr || nspin != 2 ? nullptr : chr->get_rho_d(1);
+    gpu_request.host_potential = &v;
+    const XC_Functional_GPU::XcGpuResult gpu_result = XC_Functional_GPU::evaluate_resident_xc(gpu_request);
+    if (gpu_result.used)
     {
+        etxc = gpu_result.energy;
+        vtxc = gpu_result.potential_sum;
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
         Parallel_Reduce::reduce_pool(vtxc);
@@ -642,38 +127,6 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 
         ModuleBase::timer::end("XC_Functional", "v_xc");
         return std::make_tuple(etxc, vtxc, std::move(v));
-    }
-
-    if (try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, v, etxc, vtxc, nullptr))
-    {
-#ifdef __MPI
-        Parallel_Reduce::reduce_pool(etxc);
-        Parallel_Reduce::reduce_pool(vtxc);
-#endif
-        etxc *= ucell->omega / chr->rhopw->nxyz;
-        vtxc *= ucell->omega / chr->rhopw->nxyz;
-
-        ModuleBase::timer::end("XC_Functional", "v_xc");
-        return std::make_tuple(etxc, vtxc, std::move(v));
-    }
-
-    if (try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, v, etxc, vtxc, nullptr))
-    {
-#ifdef __MPI
-        Parallel_Reduce::reduce_pool(etxc);
-        Parallel_Reduce::reduce_pool(vtxc);
-#endif
-        etxc *= ucell->omega / chr->rhopw->nxyz;
-        vtxc *= ucell->omega / chr->rhopw->nxyz;
-
-        ModuleBase::timer::end("XC_Functional", "v_xc");
-        return std::make_tuple(etxc, vtxc, std::move(v));
-    }
-#endif
-
-    if (should_log_xc_cpu_fallback(device))
-    {
-        log_xc_cpu_fallback("no resident GPU implementation matches this functional, spin, density residency, or PW layout");
     }
 
     ModuleBase::timer::start("XC_Functional", "xc_builtin_eval");
@@ -836,36 +289,37 @@ bool XC_Functional::add_v_xc_to_device(const int& nrxx,
                                        const Charge* const chr,
                                        const UnitCell* ucell,
                                        const std::string& device,
+                                       const int nspin,
                                        double* d_v_eff,
                                        double& etxc,
                                        double& vtxc)
 {
     etxc = 0.0;
     vtxc = 0.0;
-    log_explicit_xc_gpu_env_if_needed(device);
-    if (d_v_eff == nullptr || use_libxc || XC_Functional::get_ked_flag())
+    if (d_v_eff == nullptr)
     {
         return false;
     }
 
-#if __CUDA || __UT_USE_CUDA
     ModuleBase::timer::start("XC_Functional", "v_xc_device_add");
-    ModuleBase::matrix unused_v;
-    const int nspin = PARAM.inp.nspin;
-    bool used_resident
-        = try_v_xc_lda_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, unused_v, etxc, vtxc, d_v_eff);
-    if (!used_resident)
+    XC_Functional_GPU::XcGpuRequest request;
+    request.device = device;
+    request.nrxx = nrxx;
+    request.nspin = nspin;
+    request.use_libxc = use_libxc;
+    request.has_kinetic_energy_density = XC_Functional::get_ked_flag();
+    request.functional_ids = &func_id;
+    request.charge = chr;
+    request.rho_basis = chr == nullptr ? nullptr : chr->rhopw;
+    request.unit_cell = ucell;
+    request.rho_up = chr == nullptr ? nullptr : chr->get_rho_d(0);
+    request.rho_down = chr == nullptr || nspin != 2 ? nullptr : chr->get_rho_d(1);
+    request.device_potential = d_v_eff;
+    const XC_Functional_GPU::XcGpuResult result = XC_Functional_GPU::evaluate_resident_xc(request);
+    if (result.used)
     {
-        used_resident
-            = try_v_xc_pbe_spin_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, unused_v, etxc, vtxc, d_v_eff);
-    }
-    if (!used_resident)
-    {
-        used_resident
-            = try_v_xc_pbe_resident_gpu(nrxx, chr, ucell, device, nspin, func_id, unused_v, etxc, vtxc, d_v_eff);
-    }
-    if (used_resident)
-    {
+        etxc = result.energy;
+        vtxc = result.potential_sum;
 #ifdef __MPI
         Parallel_Reduce::reduce_pool(etxc);
         Parallel_Reduce::reduce_pool(vtxc);
@@ -874,8 +328,5 @@ bool XC_Functional::add_v_xc_to_device(const int& nrxx,
         vtxc *= ucell->omega / chr->rhopw->nxyz;
     }
     ModuleBase::timer::end("XC_Functional", "v_xc_device_add");
-    return used_resident;
-#else
-    return false;
-#endif
+    return result.used;
 }

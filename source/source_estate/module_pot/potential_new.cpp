@@ -8,7 +8,6 @@
 #include "source_base/tool_title.h"
 #include "source_base/module_device/memory_op.h"
 #include "source_hamilt/module_xc/xc_functional.h"
-#include "source_hamilt/module_xc/xc_gpu_policy.h"
 #include "source_io/module_parameter/parameter.h"
 #include "pot_ml_exx.h"
 
@@ -189,7 +188,7 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
     {
         return;
     }
-    if (this->use_gpu_ && !XC_Functional_GPU::xc_gpu_disabled_by_env() && GlobalV::ofs_running)
+    if (this->use_gpu_ && GlobalV::ofs_running)
     {
         GlobalV::ofs_running << " INFO: GPU-resident potential update is unavailable for this configuration. "
                              << "Using the existing CPU potential update and synchronizing the result to GPU."
@@ -305,7 +304,7 @@ bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const Un
     double etxc = 0.0;
     double vtxc = 0.0;
     const bool used_resident_xc
-        = XC_Functional::add_v_xc_to_device(nrxx, chg, ucell, "gpu", this->d_v_eff, etxc, vtxc);
+        = XC_Functional::add_v_xc_to_device(nrxx, chg, ucell, "gpu", nspin, this->d_v_eff, etxc, vtxc);
     if (!used_resident_xc)
     {
         ModuleBase::timer::end("Potential", "update_resident_gpu");

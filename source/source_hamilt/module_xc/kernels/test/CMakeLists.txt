@@ -3,7 +3,9 @@ AddTest(
     LIBS parameter ${math_libs} device base container planewave
     SOURCES xc_formula_test.cpp
       xc_functional_op_test.cpp
+      xc_resident_gpu_test.cpp
       xc_vxc_mock_unitcell_deps.cpp
+      ../../xc_resident_gpu.cpp
       ../../xc_functional.cpp
       ../../xc_pot.cpp
       ../../xc_grad.cpp

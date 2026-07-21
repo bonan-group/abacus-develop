@@ -2,7 +2,6 @@
 
 #include "source_base/global_variable.h"
 #include "source_base/timer.h"
-#include "source_hamilt/module_xc/xc_gpu_policy.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_io/module_parameter/parameter.h"
 
@@ -26,7 +25,7 @@ void PotXC::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Module
     if (XC_Functional::get_ked_flag())
     {
         const std::string device = this->rho_basis_ == nullptr ? "cpu" : this->rho_basis_->get_device();
-        if (device == "gpu" && !XC_Functional_GPU::xc_gpu_disabled_by_env() && GlobalV::ofs_running)
+        if (device == "gpu" && GlobalV::ofs_running)
         {
             GlobalV::ofs_running << " INFO: GPU-optimized mGGA XC path is unavailable. "
                                  << "Using the existing CPU LibXC mGGA implementation." << std::endl;
