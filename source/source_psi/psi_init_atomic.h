@@ -15,8 +15,7 @@ Psi (planewave based wavefunction) initializer: atomic
 template <typename T>
 class psi_init_atomic : public psi_initializer<T>
 {
-    template <typename U>
-    friend class psi::AtomicGpuInitializer;
+    friend class psi::AtomicGpuInitializer<T>;
 
   private:
     using Real = typename GetTypeReal<T>::type;
