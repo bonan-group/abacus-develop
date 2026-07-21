@@ -4,7 +4,6 @@
 #include "source_estate/module_dm/density_matrix.h"
 #include "source_base/module_mixing/mixing.h"
 #include "source_base/module_mixing/plain_mixing.h"
-#include "source_base/module_device/types.h"
 #include <iosfwd>
 #include <string>
 
