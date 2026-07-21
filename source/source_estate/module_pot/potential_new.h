@@ -8,7 +8,9 @@
 #include "pot_base.h"
 
 #include <cstddef>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace elecstate
@@ -79,28 +81,16 @@ class Potential : public PotBase
     PotBase* get_pot_type(const std::string& pot_type);
 
     // interfaces to get values
-    ModuleBase::matrix& get_eff_v()
-    {
-        this->materialize_eff_v_host();
-        return this->v_eff;
-    }
     const ModuleBase::matrix& get_eff_v() const
     {
         this->materialize_eff_v_host();
         return this->v_eff;
     }
-
-    double* get_eff_v(int is)
+    ModuleBase::matrix& get_eff_v_for_write()
     {
         this->materialize_eff_v_host();
-        if (this->v_eff.nc > 0)
-        {
-            return &(this->v_eff(is, 0));
-        }
-        else
-        {
-            return nullptr;
-        }
+        this->v_eff_device_may_be_stale_ = true;
+        return this->v_eff;
     }
     const double* get_eff_v(int is) const
     {
@@ -145,11 +135,6 @@ class Potential : public PotBase
         }
     }
 
-    ModuleBase::matrix& get_veff_smooth()
-    {
-        this->materialize_eff_v_host();
-        return this->veff_smooth;
-    }
     const ModuleBase::matrix& get_veff_smooth() const
     {
         this->materialize_eff_v_host();
@@ -184,10 +169,7 @@ class Potential : public PotBase
     template <typename FPTYPE>
     FPTYPE* get_veff_smooth_data();
 
-    const double* get_eff_v_device_data() const
-    {
-        return this->d_v_eff;
-    }
+    const double* get_eff_v_device_data() const;
     int get_nspin() const
     {
         return this->v_eff.nr;
@@ -238,6 +220,7 @@ class Potential : public PotBase
     bool supports_resident_gpu_update() const;
     std::size_t smooth_potential_size() const;
     void materialize_eff_v_host() const;
+    void materialize_eff_v_device() const;
     void cal_fixed_v(double* vl_pseudo) override;
     // interpolate potential on the smooth mesh if necessary
     void interpolate_vrs();
@@ -263,6 +246,8 @@ class Potential : public PotBase
 
     bool fixed_done = false;
     mutable bool v_eff_host_stale_ = false;
+    // Sticky while mutable host storage may still be referenced by a caller.
+    mutable bool v_eff_device_may_be_stale_ = false;
 
     // gather etxc and vtxc in Potential, will be used in ESolver
     double* etxc_ = nullptr;
@@ -270,8 +255,21 @@ class Potential : public PotBase
 
     double vl_of_0 = 0.0;
 
-    std::vector<PotBase*> components;
-    std::vector<std::string> component_names_;
+    struct RegisteredPotential
+    {
+        RegisteredPotential(const std::string& name_in, std::unique_ptr<PotBase> potential_in)
+            : name(name_in), potential(std::move(potential_in))
+        {
+        }
+
+        PotBase* operator->() { return potential.get(); }
+        const PotBase* operator->() const { return potential.get(); }
+
+        std::string name;
+        std::unique_ptr<PotBase> potential;
+    };
+
+    std::vector<RegisteredPotential> components;
 
     const UnitCell* ucell_ = nullptr;
     const ModuleBase::matrix* vloc_ = nullptr;

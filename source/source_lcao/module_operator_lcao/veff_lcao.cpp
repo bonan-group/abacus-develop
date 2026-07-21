@@ -66,7 +66,7 @@ void Veff<OperatorLCAO<double, double>>::contributeHR()
     //(1) prepare data for this k point.
     // copy the local potential from array.
     //-----------------------------------------
-    double* vr_eff1 = this->pot->get_eff_v(this->current_spin);
+    const double* vr_eff1 = this->pot->get_eff_v(this->current_spin);
     double* vofk_eff1 = this->pot->get_eff_vofk(this->current_spin);
 
     if(XC_Functional::get_ked_flag())
@@ -96,7 +96,7 @@ void Veff<OperatorLCAO<std::complex<double>, double>>::contributeHR()
     //(1) prepare data for this k point.
     // copy the local potential from array.
     //-----------------------------------------
-    double* vr_eff1 = this->pot->get_eff_v(this->current_spin);
+    const double* vr_eff1 = this->pot->get_eff_v(this->current_spin);
     double* vofk_eff1 = this->pot->get_eff_vofk(this->current_spin);
 
     if(XC_Functional::get_ked_flag())

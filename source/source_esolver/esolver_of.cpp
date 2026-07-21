@@ -284,7 +284,7 @@ void ESolver_OF::update_potential(UnitCell& ucell)
     this->kedf_manager_->get_potential(this->chr.rho,
                                        this->pphi_,
                                        this->pw_rho,
-                                       this->pelec->pot->get_eff_v()); // KEDF potential
+                                       this->pelec->pot->get_eff_v_for_write()); // KEDF potential
     for (int is = 0; is < PARAM.inp.nspin; ++is)
     {
         const double* vr_eff = this->pelec->pot->get_eff_v(is);
@@ -484,7 +484,7 @@ void ESolver_OF::after_opt(const int istep, UnitCell& ucell, const bool conv_eso
         this->kedf_manager_->get_potential(this->chr.rho,
                                         this->pphi_,
                                         this->pw_rho,
-                                        this->pelec->pot->get_eff_v()); // KEDF potential
+                                        this->pelec->pot->get_eff_v_for_write()); // KEDF potential
         
         const double* vr_eff = this->pelec->pot->get_eff_v(0);
         for (int ir = 0; ir < this->pw_rho->nrxx; ++ir)

@@ -17,6 +17,9 @@ void Potential::get_vnew(Charge const*, ModuleBase::matrix&)
 {
     return;
 }
+void Potential::materialize_eff_v_host() const
+{
+}
 double ElecState::get_hartree_energy()
 {
     return 0.1;

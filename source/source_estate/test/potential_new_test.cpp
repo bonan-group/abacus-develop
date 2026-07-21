@@ -3,6 +3,7 @@
 
 #define private public
 #include "source_estate/module_pot/potential_new.h"
+#include "source_base/module_device/memory_op.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_io/module_parameter/parameter.h"
 // mock functions
@@ -268,12 +269,13 @@ TEST_F(PotentialNewTest, Getters)
 TEST_F(PotentialNewTest, PotRegister)
 {
     pot = new elecstate::Potential;
-    elecstate::PotBase* pot0 = new elecstate::PotBase;
-    pot->components.push_back(pot0);
+    pot->components.emplace_back("", std::unique_ptr<elecstate::PotBase>(new elecstate::PotBase));
     EXPECT_EQ(pot->components.size(), 1);
     std::vector<std::string> compnents_list = {"hartree", "xc"};
     pot->pot_register(compnents_list);
     EXPECT_EQ(pot->components.size(), 2);
+    EXPECT_EQ(pot->components[0].name, "hartree");
+    EXPECT_EQ(pot->components[1].name, "xc");
     EXPECT_FALSE(pot->fixed_done);
 }
 
@@ -448,23 +450,73 @@ TEST_F(PotentialNewTest, GetEffectiveVarray)
     rhopw->nrxx = 100;
     pot = new elecstate::Potential(rhopw, rhopw, ucell, vloc, structure_factors, solvent, etxc, vtxc);
     //
-    double* v_eff_tmp = pot->get_eff_v(0);
+    const double* v_eff_tmp = pot->get_eff_v(0);
     const double* v_eff_tmp_const = pot->get_eff_v(0);
     for (int ic = 0; ic < rhopw->nrxx; ic++)
     {
         EXPECT_DOUBLE_EQ(v_eff_tmp[ic], pot->v_eff(0, ic));
         EXPECT_DOUBLE_EQ(v_eff_tmp_const[ic], pot->v_eff(0, ic));
     }
-    v_eff_tmp[0] = 1.0;
-    EXPECT_DOUBLE_EQ(pot->v_eff(0, 0), 1.0);
-    EXPECT_DOUBLE_EQ(v_eff_tmp_const[0], 1.0);
+}
+
+TEST_F(PotentialNewTest, ReadOnlyHostPotentialKeepsDeviceMirrorCurrent)
+{
+    rhopw->nrxx = 4;
+    pot = new elecstate::Potential(rhopw, rhopw, ucell, vloc, structure_factors, solvent, etxc, vtxc);
+
+    static_cast<const elecstate::Potential&>(*pot).get_eff_v();
+    EXPECT_FALSE(pot->v_eff_device_may_be_stale_);
+}
+
+TEST_F(PotentialNewTest, WritableHostPotentialMarksDeviceMirrorStale)
+{
+    rhopw->nrxx = 4;
+    pot = new elecstate::Potential(rhopw, rhopw, ucell, vloc, structure_factors, solvent, etxc, vtxc);
+
+    pot->get_eff_v_for_write()(0, 0) = 7.5;
+    EXPECT_TRUE(pot->v_eff_device_may_be_stale_);
+}
+
+TEST_F(PotentialNewTest, DeviceAccessRefreshesWritableHostPotential)
+{
+    rhopw->nrxx = 4;
+    PARAM.input.device = "gpu";
+    pot = new elecstate::Potential(rhopw, rhopw, ucell, vloc, structure_factors, solvent, etxc, vtxc);
+
+    ModuleBase::matrix& host_potential = pot->get_eff_v_for_write();
+    host_potential(0, 0) = 7.5;
+    if (pot->d_v_eff == nullptr)
+    {
+        GTEST_SKIP() << "GPU device storage is unavailable";
+    }
+
+    const double* device_potential = pot->get_eff_v_device_data();
+    double copied_value = 0.0;
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(
+        &copied_value,
+        device_potential,
+        1);
+    EXPECT_DOUBLE_EQ(copied_value, 7.5);
+    EXPECT_TRUE(pot->v_eff_device_may_be_stale_);
+
+    host_potential(0, 0) = 9.5;
+    device_potential = pot->get_eff_v_device_data();
+    base_device::memory::synchronize_memory_op<double,
+                                               base_device::DEVICE_CPU,
+                                               base_device::DEVICE_GPU>()(
+        &copied_value,
+        device_potential,
+        1);
+    EXPECT_DOUBLE_EQ(copied_value, 9.5);
 }
 
 TEST_F(PotentialNewTest, GetEffectiveVarrayNullptr)
 {
     pot = new elecstate::Potential;
     EXPECT_EQ(pot->v_eff.nc, 0);
-    double* v_eff_tmp = pot->get_eff_v(0);
+    const double* v_eff_tmp = pot->get_eff_v(0);
     const double* v_eff_tmp_const = pot->get_eff_v(0);
     EXPECT_EQ(v_eff_tmp, nullptr);
     EXPECT_EQ(v_eff_tmp_const, nullptr);

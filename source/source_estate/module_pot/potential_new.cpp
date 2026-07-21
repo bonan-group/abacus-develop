@@ -1,7 +1,6 @@
 #include "potential_new.h"
 
 #include "source_base/global_function.h"
-#include "source_base/global_variable.h"
 #include "source_base/memory_recorder.h"
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
@@ -41,15 +40,6 @@ Potential::Potential(const ModulePW::PW_Basis* rho_basis_in,
 
 Potential::~Potential()
 {
-    if (this->components.size() > 0)
-    {
-        for (auto comp: this->components)
-        {
-            delete comp;
-        }
-        this->components.clear();
-    }
-    this->component_names_.clear();
     if (use_gpu_)
     {
         delmem_sd_op()(s_veff_smooth);
@@ -70,15 +60,7 @@ void Potential::pot_register(const std::vector<std::string>& components_list)
 {
     ModuleBase::TITLE("Potential", "pot_register");
     // delete old components first.
-    if (this->components.size() > 0)
-    {
-        for (auto comp: this->components)
-        {
-            delete comp;
-        }
-        this->components.clear();
-    }
-    this->component_names_.clear();
+    this->components.clear();
 
     // register components
     //---------------------------
@@ -86,9 +68,8 @@ void Potential::pot_register(const std::vector<std::string>& components_list)
     //---------------------------
     for (auto comp: components_list)
     {
-        PotBase* tmp = this->get_pot_type(comp);
-        this->components.push_back(tmp);
-        this->component_names_.push_back(comp);
+        std::unique_ptr<PotBase> potential(this->get_pot_type(comp));
+        this->components.emplace_back(comp, std::move(potential));
     }
 
     // after register, reset fixed_done to false
@@ -188,13 +169,6 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
     {
         return;
     }
-    if (this->use_gpu_ && GlobalV::ofs_running)
-    {
-        GlobalV::ofs_running << " INFO: GPU-resident potential update is unavailable for this configuration. "
-                             << "Using the existing CPU potential update and synchronizing the result to GPU."
-                             << std::endl;
-    }
-
     this->cal_v_eff(chg, ucell, this->v_eff);
 
     // interpolate potential on the smooth mesh if necessary
@@ -203,6 +177,7 @@ void Potential::update_from_charge(const Charge*const chg, const UnitCell*const 
     if (this->use_gpu_)
     {
         syncmem_d2d_h2d_op()(d_v_eff, this->v_eff.c, this->v_eff.nr * this->v_eff.nc);
+        this->v_eff_device_may_be_stale_ = false;
         if (PARAM.globalv.has_float_data)
         {
             castmem_d2s_h2d_op()(s_veff_smooth, this->veff_smooth.c, this->veff_smooth.nr * this->veff_smooth.nc);
@@ -246,13 +221,13 @@ bool Potential::supports_resident_gpu_update() const
     }
 
     bool has_xc = false;
-    for (const std::string& name : this->component_names_)
+    for (const RegisteredPotential& component : this->components)
     {
-        if (name == "xc")
+        if (component.name == "xc")
         {
             has_xc = true;
         }
-        else if (name != "local" && name != "hartree")
+        else if (component.name != "local" && component.name != "hartree")
         {
             return false;
         }
@@ -294,7 +269,7 @@ bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const Un
     }
     for (size_t i = 0; i < this->components.size(); ++i)
     {
-        if (this->component_names_[i] != "xc" && this->components[i]->dynamic_mode)
+        if (this->components[i].name != "xc" && this->components[i]->dynamic_mode)
         {
             this->components[i]->cal_v_eff(chg, ucell, this->v_eff);
         }
@@ -314,6 +289,7 @@ bool Potential::update_from_charge_resident_gpu(const Charge*const chg, const Un
     *(this->etxc_) = etxc;
     *(this->vtxc_) = vtxc;
     this->v_eff_host_stale_ = true;
+    this->v_eff_device_may_be_stale_ = false;
 
     if (this->rho_basis_ != this->rho_basis_smooth_)
     {
@@ -369,6 +345,23 @@ void Potential::materialize_eff_v_host() const
                              this->veff_smooth.nr * this->veff_smooth.nc);
     }
     this->v_eff_host_stale_ = false;
+    this->v_eff_device_may_be_stale_ = false;
+}
+
+void Potential::materialize_eff_v_device() const
+{
+    if (!this->v_eff_device_may_be_stale_ || this->d_v_eff == nullptr || this->v_eff.nc == 0)
+    {
+        return;
+    }
+
+    syncmem_d2d_h2d_op()(this->d_v_eff, this->v_eff.c, this->v_eff.nr * this->v_eff.nc);
+}
+
+const double* Potential::get_eff_v_device_data() const
+{
+    this->materialize_eff_v_device();
+    return this->d_v_eff;
 }
 
 void Potential::cal_fixed_v(double* vl_pseudo)
@@ -398,6 +391,7 @@ void Potential::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Mo
     // first of all, set v_eff to zero.
     this->v_eff.zero_out();
     this->v_eff_host_stale_ = false;
+    this->v_eff_device_may_be_stale_ = true;
 
     // add fixed potential components
     // nspin = 2, add fixed components for all
@@ -524,7 +518,7 @@ double Potential::get_ml_exx_energy() const
 #ifdef __MLALGO
     for (size_t i = 0; i < this->components.size(); i++)
     {
-        PotML_EXX* pot_ml_exx = dynamic_cast<PotML_EXX*>(this->components[i]);
+        PotML_EXX* pot_ml_exx = dynamic_cast<PotML_EXX*>(this->components[i].potential.get());
         if (pot_ml_exx != nullptr)
         {
             return pot_ml_exx->get_energy();
