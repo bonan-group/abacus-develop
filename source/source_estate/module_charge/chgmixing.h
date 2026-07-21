@@ -27,11 +27,13 @@ void chgmixing_ks(const int iter, // scf iteration number
 		const Input_para& inp); // input parameters
 
 void chgmixing_ks_pw(const int iter,
+        Charge& chr,
         Charge_Mixing* p_chgmix,
         Plus_U &dftu, // mohan add 2025-11-06
 		const Input_para& inp); // input parameters
 
 void chgmixing_ks_lcao(const int iter, // scf iteration number
+        Charge& chr,
         Charge_Mixing* p_chgmix, // charge mixing class
         Plus_U &dftu, // mohan add 2025-11-06
         const int nnr, // dimension of density matrix

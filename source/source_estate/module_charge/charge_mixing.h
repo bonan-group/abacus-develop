@@ -47,6 +47,9 @@ class Charge_Mixing
      * @param mixing_dmr_in whether to mixing real space density matrix
      * @param omega_in omega for non-linear core correction
      * @param tpiba_in 2*pi/beta for non-linear core correction
+     * @param mixing_gpu_in whether GPU-resident mixing is enabled
+     * @param running_log stream for setup and fallback messages
+     * @param include_magnetism whether reciprocal GPU reductions include magnetic components
      */
     void set_mixing(const std::string& mixing_mode_in,
                     const double& mixing_beta_in,
@@ -60,28 +63,18 @@ class Charge_Mixing
                     const bool& mixing_dmr_in,
                     double& omega_in,
                     double& tpiba_in,
-                    const bool mixing_gpu_in);
-
-    void set_mixing(const std::string& mixing_mode_in,
-                    const double& mixing_beta_in,
-                    const int& mixing_ndim_in,
-                    const double& mixing_gg0_in,
-                    const bool& mixing_tau_in,
-                    const double& mixing_beta_mag_in,
-                    const double& mixing_gg0_mag_in,
-                    const double& mixing_gg0_min_in,
-                    const double& mixing_angle_in,
-                    const bool& mixing_dmr_in,
-                    double& omega_in,
-                    double& tpiba_in);
+                    const bool mixing_gpu_in,
+                    std::ostream& running_log,
+                    const bool include_magnetism);
 
     void close_kerker_gg0() { mixing_gg0 = 0.0; mixing_gg0_mag = 0.0; }
     void conserve_setting() { mixing_beta = 0.01; mixing_beta_mag = 0.04; }
     /**
      * @brief initialize mixing, including constructing mixing and allocating memory for mixing data
      * @brief this function should be called at eachiterinit()
+     * @param chr charge object that owns the spin count
      */
-    void init_mixing();
+    void init_mixing(const Charge& chr);
 
     /**
      * @brief allocate memory of dmr_mdata
@@ -189,7 +182,7 @@ class Charge_Mixing
     double mixing_gg0_min = 0.1;         ///< minimum kerker coefficient
     double mixing_angle = 0.0;           ///< mixing angle for nspin=4
     bool mixing_dmr = false;             ///< whether to mixing real space density matrix
-    bool mixing_gpu_enabled = true;       ///< whether to use GPU-resident charge mixing when available
+    bool mixing_gpu_enabled = false;      ///< whether to use GPU-resident charge mixing when available
     double* omega = nullptr;                  ///< omega for non-linear core correction
     double* tpiba = nullptr;                  ///< 2*pi/beta for non-linear core correction
     double* tpiba2 = nullptr;                 ///< 2*pi/beta^2 for non-linear core correction
@@ -203,6 +196,7 @@ class Charge_Mixing
     /// Runtime device selection: "cpu" or "gpu"
     std::string device_ = "cpu";
     std::ostream* running_log_ = nullptr;
+    bool include_magnetism_ = false;
     bool gpu_charge_mixing_active_logged_ = false;
     bool gpu_charge_mixing_fallback_logged_ = false;
 
@@ -237,13 +231,13 @@ class Charge_Mixing
      * @brief Kerker screen method for reciprocal space
      * @param rhog charge density in reciprocal space
      */
-    void Kerker_screen_recip(std::complex<double>* rhog);
+    void Kerker_screen_recip(std::complex<double>* rhog, int nspin);
 
     /**
      * @brief Kerker screen method for real space
      * @param rho charge density in real space
      */
-    void Kerker_screen_real(double* rho);
+    void Kerker_screen_real(double* rho, int nspin);
 
     /**
      * @brief Inner product of two complex vectors
@@ -252,15 +246,15 @@ class Charge_Mixing
      * @brief inner_product_recip_simple is only used for test
      * @brief Actually, I am not sure if the definition of inner product for NSPIN=4 is correct, need to be checked.
      */
-    double inner_product_recip_rho(std::complex<double>* rho1, std::complex<double>* rho2);
-    double inner_product_recip_simple(std::complex<double>* rho1, std::complex<double>* rho2);
-    double inner_product_recip_hartree(std::complex<double>* rho1, std::complex<double>* rho2);
+    double inner_product_recip_rho(std::complex<double>* rho1, std::complex<double>* rho2, int nspin);
+    double inner_product_recip_simple(std::complex<double>* rho1, std::complex<double>* rho2, int nspin);
+    double inner_product_recip_hartree(std::complex<double>* rho1, std::complex<double>* rho2, int nspin);
 
     /**
      * @brief Inner product of two double vectors
      *
      */
-    double inner_product_real(double* rho1, double* rho2);
+    double inner_product_real(double* rho1, double* rho2, int nspin);
 
     /**
      * @brief divide rho/tau to smooth and high frequency parts

@@ -7,7 +7,17 @@
 #include "source_base/timer.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 
+#include <iomanip>
 #include <ostream>
+
+namespace
+{
+template <typename T>
+void log_mixing_parameter(std::ostream& running_log, const char* name, const T& value)
+{
+    running_log << " " << std::setw(40) << name << " = " << value << std::endl;
+}
+} // namespace
 
 Charge_Mixing::Charge_Mixing()
 {
@@ -46,7 +56,9 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
                                const bool& mixing_dmr_in,
                                double& omega_in,
                                double& tpiba_in,
-                               const bool mixing_gpu_in)
+                               const bool mixing_gpu_in,
+                               std::ostream& running_log,
+                               const bool include_magnetism)
 {
     // get private mixing parameters
     this->mixing_mode = mixing_mode_in;
@@ -60,6 +72,8 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
     this->mixing_angle = mixing_angle_in;
     this->mixing_dmr = mixing_dmr_in;
     this->mixing_gpu_enabled = mixing_gpu_in;
+    this->running_log_ = &running_log;
+    this->include_magnetism_ = include_magnetism;
     this->omega = &omega_in;
     this->tpiba = &tpiba_in;
     // check the paramters
@@ -77,70 +91,38 @@ void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
         ModuleBase::WARNING_QUIT("Charge_Mixing", "This Mixing mode is not implemended yet,coming soon.");
     }
 
-    // print into running.log
-    //GlobalV::ofs_running << "\n\n";
-    std::ostream& running_log = GlobalV::ofs_running;
-    this->running_log_ = &running_log;
     running_log << "\n";
-    GlobalV::ofs_running << " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+    running_log << " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
            ">>>>" << std::endl;
-    GlobalV::ofs_running << " |                                                                 "
+    running_log << " |                                                                 "
            "   |" << std::endl;
-    GlobalV::ofs_running << " | Setup charge mixing parameters                                  "
+    running_log << " | Setup charge mixing parameters                                  "
            "   |" << std::endl;
-    GlobalV::ofs_running << " |                                                                 "
+    running_log << " |                                                                 "
            "   |" << std::endl;
-    GlobalV::ofs_running << " <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+    running_log << " <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
            "<<<<" << std::endl;
-    GlobalV::ofs_running << "\n";
+    running_log << "\n";
 
 
-    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_type", this->mixing_mode);
-    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_beta", this->mixing_beta);
-    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_gg0", this->mixing_gg0);
-    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_gg0_min", PARAM.inp.mixing_gg0_min);
+    log_mixing_parameter(running_log, "mixing_type", this->mixing_mode);
+    log_mixing_parameter(running_log, "mixing_beta", this->mixing_beta);
+    log_mixing_parameter(running_log, "mixing_gg0", this->mixing_gg0);
+    log_mixing_parameter(running_log, "mixing_gg0_min", this->mixing_gg0_min);
 
     if (PARAM.inp.nspin==2 || PARAM.inp.nspin==4)
     {
-        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_beta_mag", this->mixing_beta_mag);
-        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_gg0_mag", PARAM.inp.mixing_gg0_mag);
+        log_mixing_parameter(running_log, "mixing_beta_mag", this->mixing_beta_mag);
+        log_mixing_parameter(running_log, "mixing_gg0_mag", this->mixing_gg0_mag);
     }
-    if (PARAM.inp.mixing_angle > 0)
+    if (this->mixing_angle > 0)
     {
-        ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_angle", PARAM.inp.mixing_angle);
+        log_mixing_parameter(running_log, "mixing_angle", this->mixing_angle);
     }
 
-    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "mixing_ndim", this->mixing_ndim);
+    log_mixing_parameter(running_log, "mixing_ndim", this->mixing_ndim);
 
     return;
-}
-
-void Charge_Mixing::set_mixing(const std::string& mixing_mode_in,
-                               const double& mixing_beta_in,
-                               const int& mixing_ndim_in,
-                               const double& mixing_gg0_in,
-                               const bool& mixing_tau_in,
-                               const double& mixing_beta_mag_in,
-                               const double& mixing_gg0_mag_in,
-                               const double& mixing_gg0_min_in,
-                               const double& mixing_angle_in,
-                               const bool& mixing_dmr_in,
-                               double& omega_in,
-                               double& tpiba_in)
-{
-    this->set_mixing(mixing_mode_in,
-                     mixing_beta_in,
-                     mixing_ndim_in,
-                     mixing_gg0_in,
-                     mixing_tau_in,
-                     mixing_beta_mag_in,
-                     mixing_gg0_mag_in,
-                     mixing_gg0_min_in,
-                     mixing_angle_in,
-                     mixing_dmr_in,
-                     omega_in,
-                     tpiba_in,
-                     true);
 }
 
 void Charge_Mixing::log_gpu_charge_mixing_fallback(const std::string& reason)
@@ -179,7 +161,7 @@ bool Charge_Mixing::can_use_gpu_resident_mixing(const Charge* chr) const
     return spin_supported && supported_mode;
 }
 
-void Charge_Mixing::init_mixing()
+void Charge_Mixing::init_mixing(const Charge& chr)
 {
     // this init should be called at the 1-st iteration of each scf loop
 
@@ -211,7 +193,11 @@ void Charge_Mixing::init_mixing()
         ModuleBase::WARNING_QUIT("Charge_Mixing", "This Mixing mode is not implemended yet,coming soon.");
     }
 
-    if ( PARAM.globalv.double_grid)
+    const int nspin = chr.nspin;
+    assert(nspin == 1 || nspin == 2 || nspin == 4);
+    const bool double_grid = this->rhopw != this->rhodpw;
+
+    if (double_grid)
     {
         // ONLY smooth part of charge density is mixed by specific mixing method
         // The high_frequency part is mixed by plain mixing method.
@@ -223,7 +209,7 @@ void Charge_Mixing::init_mixing()
     // initailize rho_mdata
     if (PARAM.inp.scf_thr_type == 1)
     {  
-        if (PARAM.inp.nspin == 4 && PARAM.inp.mixing_angle > 0 )
+        if (nspin == 4 && this->mixing_angle > 0)
         {
             this->mixing->init_mixing_data(this->rho_mdata,
                                         this->rhopw->npw * 2,
@@ -232,19 +218,19 @@ void Charge_Mixing::init_mixing()
         else
         {
             this->mixing->init_mixing_data(this->rho_mdata,
-                                        this->rhopw->npw * PARAM.inp.nspin,
+                                        this->rhopw->npw * nspin,
                                         sizeof(std::complex<double>));
         }
     }
     else
     {
-        if (PARAM.inp.nspin == 4 && PARAM.inp.mixing_angle > 0 )
+        if (nspin == 4 && this->mixing_angle > 0)
         {
             this->mixing->init_mixing_data(this->rho_mdata, this->rhopw->nrxx * 2, sizeof(double));
         }
         else
         {
-            this->mixing->init_mixing_data(this->rho_mdata, this->rhopw->nrxx * PARAM.inp.nspin, sizeof(double));
+            this->mixing->init_mixing_data(this->rho_mdata, this->rhopw->nrxx * nspin, sizeof(double));
         }
     }
     
@@ -254,12 +240,12 @@ void Charge_Mixing::init_mixing()
         if (PARAM.inp.scf_thr_type == 1)
         {
             this->mixing->init_mixing_data(this->tau_mdata,
-                                           this->rhopw->npw * PARAM.inp.nspin,
+                                           this->rhopw->npw * nspin,
                                            sizeof(std::complex<double>));
         }
         else
         {
-            this->mixing->init_mixing_data(this->tau_mdata, this->rhopw->nrxx * PARAM.inp.nspin, sizeof(double));
+            this->mixing->init_mixing_data(this->tau_mdata, this->rhopw->nrxx * nspin, sizeof(double));
         }
     }
 

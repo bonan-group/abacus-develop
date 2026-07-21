@@ -121,6 +121,7 @@ void module_charge::chgmixing_ks(const int iter, // scf iteration number
 
 
 void module_charge::chgmixing_ks_pw(const int iter, // scf iteration number
+        Charge& chr, // charge density
         Charge_Mixing* p_chgmix, // charge mixing class
         Plus_U &dftu, // mohan add 2025-11-06
 		const Input_para& inp) // input parameters
@@ -129,7 +130,7 @@ void module_charge::chgmixing_ks_pw(const int iter, // scf iteration number
 
     if (iter == 1)
     {
-        p_chgmix->init_mixing();
+        p_chgmix->init_mixing(chr);
         p_chgmix->mixing_restart_step = inp.scf_nmax + 1;
         if (inp.dft_plus_u && inp.mixing_dftu)
         {
@@ -143,7 +144,7 @@ void module_charge::chgmixing_ks_pw(const int iter, // scf iteration number
     // For mixing restart
     if (iter == p_chgmix->mixing_restart_step && inp.mixing_restart > 0.0)
     {
-        p_chgmix->init_mixing();
+        p_chgmix->init_mixing(chr);
         p_chgmix->mixing_restart_count++;
 
         if (inp.dft_plus_u)
@@ -182,6 +183,7 @@ void module_charge::chgmixing_ks_pw(const int iter, // scf iteration number
 }
 
 void module_charge::chgmixing_ks_lcao(const int iter, // scf iteration number
+        Charge& chr, // charge density
         Charge_Mixing* p_chgmix, // charge mixing class
         Plus_U &dftu, // mohan add 2025-11-06
         const int nnr, // dimension of density matrix
@@ -214,7 +216,7 @@ void module_charge::chgmixing_ks_lcao(const int iter, // scf iteration number
     // for mixing restart
     if (iter == p_chgmix->mixing_restart_step && inp.mixing_restart > 0.0)
     {
-        p_chgmix->init_mixing();
+        p_chgmix->init_mixing(chr);
         p_chgmix->mixing_restart_count++;
         if (inp.dft_plus_u)
         {

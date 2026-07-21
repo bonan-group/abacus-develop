@@ -1,13 +1,11 @@
 #include "charge_mixing.h"
 
-#include "source_io/module_parameter/parameter.h"
-#include "source_base/global_variable.h"
 #include "source_base/timer.h"
 #include "source_base/module_device/types.h"
 #include "source_base/module_device/memory_op.h"
 #include "kernels/charge_mixing_op.h"
 
-void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
+void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog, const int nspin)
 {
     ModuleBase::TITLE("Charge_Mixing", "Kerker_screen_recip");
 
@@ -17,8 +15,6 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
 	}
 
     ModuleBase::timer::start("Charge_Mixing", "Kerker_screen_recip");
-
-    const int nspin = PARAM.inp.nspin;
 
     double fac = 0.0;
     double gg0 = 0.0;
@@ -78,19 +74,19 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
         }
     }
 #elif defined(__ROCM)
-    if (device_ == "gpu" && GlobalV::ofs_running)
+    if (device_ == "gpu" && this->running_log_ != nullptr && *this->running_log_)
     {
-        GlobalV::ofs_running << " INFO: GPU-optimized Kerker reciprocal preconditioner is unavailable on ROCm. "
-                             << "Using the existing CPU Kerker implementation." << std::endl;
+        *this->running_log_ << " INFO: GPU-optimized Kerker reciprocal preconditioner is unavailable on ROCm. "
+                            << "Using the existing CPU Kerker implementation." << std::endl;
     }
 #endif
 
 #if __CUDA
-    if (device_ == "gpu" && GlobalV::ofs_running)
+    if (device_ == "gpu" && this->running_log_ != nullptr && *this->running_log_)
     {
-        GlobalV::ofs_running << " INFO: GPU-optimized Kerker reciprocal preconditioner is unavailable for this spin "
-                             << "or mixing-parameter configuration. Using the existing CPU Kerker implementation."
-                             << std::endl;
+        *this->running_log_ << " INFO: GPU-optimized Kerker reciprocal preconditioner is unavailable for this spin "
+                            << "or mixing-parameter configuration. Using the existing CPU Kerker implementation."
+                            << std::endl;
     }
 #endif
 
@@ -142,7 +138,7 @@ void Charge_Mixing::Kerker_screen_recip(std::complex<double>* drhog)
     return;
 }
 
-void Charge_Mixing::Kerker_screen_real(double* drhor)
+void Charge_Mixing::Kerker_screen_real(double* drhor, const int nspin)
 {
     ModuleBase::TITLE("Charge_Mixing", "Kerker_screen_real");
 
@@ -153,7 +149,6 @@ void Charge_Mixing::Kerker_screen_real(double* drhor)
 
     ModuleBase::timer::start("Charge_Mixing", "Kerker_screen_real");
 
-    const int nspin = PARAM.inp.nspin;
     assert(nspin==1 || nspin==2 || nspin==4);
 
 	/// consider a resize for mixing_angle

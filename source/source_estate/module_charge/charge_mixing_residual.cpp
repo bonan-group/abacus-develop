@@ -1,6 +1,5 @@
 #include "charge_mixing.h"
 #include "source_io/module_parameter/parameter.h"
-#include "source_base/global_variable.h"
 #include "source_base/timer.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/tool_quit.h"
@@ -25,7 +24,7 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 {
     ModuleBase::TITLE("Charge_Mixing", "get_drho");
     ModuleBase::timer::start("Charge_Mixing", "get_drho");
-    const int nspin = PARAM.inp.nspin;
+    const int nspin = chr->nspin;
     assert(nspin==1 || nspin==2 || nspin==4);
     double drho = 0.0;
 
@@ -59,11 +58,11 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 #endif
         {
 #if __CUDA || __ROCM
-            if (device_ == "gpu" && GlobalV::ofs_running)
+            if (device_ == "gpu" && this->running_log_ != nullptr && *this->running_log_)
             {
-                GlobalV::ofs_running << " INFO: GPU charge-residual FFT path is unavailable because the charge "
-                                     << "density is not resident on GPU. Using the existing CPU FFT path."
-                                     << std::endl;
+                *this->running_log_ << " INFO: GPU charge-residual FFT path is unavailable because the charge "
+                                    << "density is not resident on GPU. Using the existing CPU FFT path."
+                                    << std::endl;
             }
 #endif
             // CPU path
@@ -91,7 +90,7 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
         }
 
         ModuleBase::GlobalFunc::NOTE("Calculate the norm of the Residual std::vector: < R[rho] | R[rho_save] >");
-        drho = this->inner_product_recip_rho(drhog.data(), drhog.data());
+        drho = this->inner_product_recip_rho(drhog.data(), drhog.data(), nspin);
     }
     else
     {
@@ -136,7 +135,8 @@ double Charge_Mixing::get_dkin(Charge* chr, const double nelec)
     double dkin = 0.0;
     
     // Get dkin from kin_r and kin_r_save for PW and LCAO both, which is different from drho.
-    for (int is = 0; is < PARAM.inp.nspin; is++)
+    const int nspin = chr->nspin;
+    for (int is = 0; is < nspin; is++)
     {
         if (is != 0 && is != 3 && PARAM.globalv.domag_z)
         {
@@ -163,14 +163,16 @@ double Charge_Mixing::get_dkin(Charge* chr, const double nelec)
     return dkin;
 }
 
-double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::complex<double>* rho2)
+double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1,
+                                              std::complex<double>* rho2,
+                                              const int nspin)
 {
     ModuleBase::TITLE("Charge_Mixing", "recip_rho");
     ModuleBase::timer::start("Charge_Mixing", "recip_rho");
 
-    std::complex<double>** rhog1 = new std::complex<double>*[PARAM.inp.nspin];
-    std::complex<double>** rhog2 = new std::complex<double>*[PARAM.inp.nspin];
-    for (int is = 0; is < PARAM.inp.nspin; is++)
+    std::complex<double>** rhog1 = new std::complex<double>*[nspin];
+    std::complex<double>** rhog2 = new std::complex<double>*[nspin];
+    for (int is = 0; is < nspin; is++)
     {
         rhog1[is] = rho1 + is * this->rhopw->npw;
         rhog2[is] = rho2 + is * this->rhopw->npw;
@@ -197,7 +199,7 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
         return sum;
     };
 
-    switch (PARAM.inp.nspin)
+    switch (nspin)
     {
     case 1:
         sum += part_of_noncolin();
@@ -308,7 +310,9 @@ double Charge_Mixing::inner_product_recip_rho(std::complex<double>* rho1, std::c
 }
 
 // a simple inner product, now is not used anywhere. For test only.
-double Charge_Mixing::inner_product_recip_simple(std::complex<double>* rho1, std::complex<double>* rho2)
+double Charge_Mixing::inner_product_recip_simple(std::complex<double>* rho1,
+                                                 std::complex<double>* rho2,
+                                                 const int nspin)
 {
     ModuleBase::TITLE("Charge_Mixing", "recip_simple");
     ModuleBase::timer::start("Charge_Mixing", "recip_simple");
@@ -316,12 +320,12 @@ double Charge_Mixing::inner_product_recip_simple(std::complex<double>* rho1, std
     double rnorm = 0.0;
     // consider a resize for mixing_angle
     int resize_tmp = 1;
-    if (PARAM.inp.nspin == 4 && this->mixing_angle > 0) { resize_tmp = 2;
+    if (nspin == 4 && this->mixing_angle > 0) { resize_tmp = 2;
 }
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+ : rnorm)
 #endif
-    for (int ig = 0; ig < this->rhopw->npw * PARAM.inp.nspin / resize_tmp; ++ig)
+    for (int ig = 0; ig < this->rhopw->npw * nspin / resize_tmp; ++ig)
     {
         rnorm += (conj(rho1[ig]) * rho2[ig]).real();
     }
@@ -335,7 +339,9 @@ double Charge_Mixing::inner_product_recip_simple(std::complex<double>* rho1, std
 }
 
 // a Hartree-like inner product
-double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, std::complex<double>* rhog2)
+double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1,
+                                                  std::complex<double>* rhog2,
+                                                  const int nspin)
 {
     ModuleBase::TITLE("Charge_Mixing", "recip_hartree");
     ModuleBase::timer::start("Charge_Mixing", "recip_hartree");
@@ -366,11 +372,11 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
         return sum;
     };
     
-    if (PARAM.inp.nspin==1)
+    if (nspin==1)
     {
         sum += part_of_rho();
     }
-    else if (PARAM.inp.nspin==2)
+    else if (nspin==2)
     {
         // charge density part
         const int ig0 = this->rhopw->ig_gge0;
@@ -416,7 +422,7 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
         sum2 += mag;
         sum += sum2;
     }
-    else if (PARAM.inp.nspin==4)
+    else if (nspin==4)
     {
         if (!PARAM.globalv.domag && !PARAM.globalv.domag_z)
         {
@@ -509,12 +515,12 @@ double Charge_Mixing::inner_product_recip_hartree(std::complex<double>* rhog1, s
     return sum;
 }
 
-double Charge_Mixing::inner_product_real(double* rho1, double* rho2)
+double Charge_Mixing::inner_product_real(double* rho1, double* rho2, const int nspin)
 {
     double rnorm = 0.0;
     // consider a resize for mixing_angle
     int resize_tmp = 1;
-	if (PARAM.inp.nspin == 4 && this->mixing_angle > 0) 
+	if (nspin == 4 && this->mixing_angle > 0)
 	{ 
 		resize_tmp = 2;
 	}
@@ -522,7 +528,7 @@ double Charge_Mixing::inner_product_real(double* rho1, double* rho2)
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+ : rnorm)
 #endif
-    for (int ir = 0; ir < this->rhopw->nrxx * PARAM.inp.nspin / resize_tmp; ++ir)
+    for (int ir = 0; ir < this->rhopw->nrxx * nspin / resize_tmp; ++ir)
     {
         rnorm += rho1[ir] * rho2[ir];
     }

@@ -58,10 +58,14 @@ void ESolver_KS::before_all_runners(UnitCell& ucell, const Input_para& inp)
     //! 3) setup charge mixing
     p_chgmix = new Charge_Mixing();
     p_chgmix->set_rhopw(this->pw_rho, this->pw_rhod);
+    const bool domag = inp.nspin == 4 && inp.noncolin;
+    const bool domag_z = inp.nspin == 4 && !inp.noncolin;
+    const bool include_magnetism = inp.nspin != 4 || domag || domag_z;
     p_chgmix->set_mixing(inp.mixing_mode, inp.mixing_beta, inp.mixing_ndim,
       inp.mixing_gg0, inp.mixing_tau, inp.mixing_beta_mag, inp.mixing_gg0_mag,
-      inp.mixing_gg0_min, inp.mixing_angle, inp.mixing_dmr, ucell.omega, ucell.tpiba, inp.mixing_gpu);
-    p_chgmix->init_mixing();
+      inp.mixing_gg0_min, inp.mixing_angle, inp.mixing_dmr, ucell.omega, ucell.tpiba,
+      inp.mixing_gpu, GlobalV::ofs_running, include_magnetism);
+    p_chgmix->init_mixing(this->chr);
 
     // Enable GPU charge mixing when device="gpu"
     // This activates:
