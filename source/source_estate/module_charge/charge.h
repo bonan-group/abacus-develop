@@ -205,9 +205,9 @@ class Charge
     void sync_rho_to_host() const;
     void sync_rhog_to_device() const;
     void sync_rhog_to_host() const;
-    void sync_kin_r_to_device() const;
+    void sync_kin_r_and_save_to_device() const;
     void sync_kin_r_to_host() const;
-    void sync_saved_density_to_device() const;
+    void sync_rho_save_to_device() const;
     void sync_rhog_save_to_host() const;
 
   private:

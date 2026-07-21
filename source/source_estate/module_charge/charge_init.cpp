@@ -271,7 +271,7 @@ void Charge::init_rho(const UnitCell& ucell,
     }
 
     this->sync_rho_to_device();
-    this->sync_kin_r_to_device();
+    this->sync_kin_r_and_save_to_device();
 }
 
 //==========================================================

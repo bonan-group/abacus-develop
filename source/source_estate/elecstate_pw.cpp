@@ -226,13 +226,13 @@ void ElecStatePW<T, Device>::psiToRho(const psi::Psi<T, Device>& psi)
             this->charge->sync_rho_to_device();
             if (XC_Functional::get_ked_flag())
             {
-                this->charge->sync_kin_r_to_device();
+                this->charge->sync_kin_r_and_save_to_device();
             }
         }
     }
     this->parallelK();
     this->charge->sync_rho_to_device();
-    this->charge->sync_kin_r_to_device();
+    this->charge->sync_kin_r_and_save_to_device();
     ModuleBase::timer::end("ElecStatePW", "psiToRho");
 }
 

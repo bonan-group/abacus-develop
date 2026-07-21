@@ -114,7 +114,7 @@ TEST(ChargeDeviceTest, RhoAndRhogRoundTrip)
     expect_complex_data(rhog, charge.rhog[0]);
 }
 
-TEST(ChargeDeviceTest, SavedDensityUploadAndRhogDownload)
+TEST(ChargeDeviceTest, SavedRhoUploadDoesNotOverwriteDeviceRhogSave)
 {
     ModulePW::PW_Basis basis;
     initialize_basis(basis);
@@ -125,28 +125,28 @@ TEST(ChargeDeviceTest, SavedDensityUploadAndRhogDownload)
 
     const std::vector<double> rho_save = {0.5, 0.4, 0.3, 0.2, 0.1,
                                           1.5, 1.4, 1.3, 1.2, 1.1};
-    const std::vector<std::complex<double>> rhog_save = {{0.4, 0.1}, {0.3, 0.2}, {0.2, 0.3},
-                                                         {1.4, 1.1}, {1.3, 1.2}, {1.2, 1.3}};
+    const std::vector<std::complex<double>> host_rhog_save = {{0.4, 0.1}, {0.3, 0.2}, {0.2, 0.3},
+                                                              {1.4, 1.1}, {1.3, 1.2}, {1.2, 1.3}};
+    const std::vector<std::complex<double>> device_rhog_save = {{2.4, -0.1}, {2.3, -0.2}, {2.2, -0.3},
+                                                                {3.4, -1.1}, {3.3, -1.2}, {3.2, -1.3}};
     std::copy(rho_save.begin(), rho_save.end(), charge.rho_save[0]);
-    std::copy(rhog_save.begin(), rhog_save.end(), charge.rhog_save[0]);
+    std::copy(host_rhog_save.begin(), host_rhog_save.end(), charge.rhog_save[0]);
+    sync_complex_h2d_op()(charge.get_rhog_save_d(0), device_rhog_save.data(), device_rhog_save.size());
 
-    charge.sync_saved_density_to_device();
+    charge.sync_rho_save_to_device();
 
     std::vector<double> uploaded_rho(rho_save.size(), 0.0);
-    std::vector<std::complex<double>> uploaded_rhog(rhog_save.size());
+    std::vector<std::complex<double>> retained_rhog(device_rhog_save.size());
     sync_double_d2h_op()(uploaded_rho.data(), charge.get_rho_save_d(0), uploaded_rho.size());
-    sync_complex_d2h_op()(uploaded_rhog.data(), charge.get_rhog_save_d(0), uploaded_rhog.size());
+    sync_complex_d2h_op()(retained_rhog.data(), charge.get_rhog_save_d(0), retained_rhog.size());
     expect_double_data(rho_save, uploaded_rho.data());
-    expect_complex_data(rhog_save, uploaded_rhog.data());
+    expect_complex_data(device_rhog_save, retained_rhog.data());
 
-    const std::vector<std::complex<double>> device_update = {{2.4, -0.1}, {2.3, -0.2}, {2.2, -0.3},
-                                                              {3.4, -1.1}, {3.3, -1.2}, {3.2, -1.3}};
-    sync_complex_h2d_op()(charge.get_rhog_save_d(0), device_update.data(), device_update.size());
     charge.sync_rhog_save_to_host();
-    expect_complex_data(device_update, charge.rhog_save[0]);
+    expect_complex_data(device_rhog_save, charge.rhog_save[0]);
 }
 
-TEST(ChargeDeviceTest, OptionalKineticDensityRoundTripAndSavedUpload)
+TEST(ChargeDeviceTest, CurrentAndSavedKineticDensityUploadTogether)
 {
     ModulePW::PW_Basis basis;
     initialize_basis(basis);
@@ -162,8 +162,7 @@ TEST(ChargeDeviceTest, OptionalKineticDensityRoundTripAndSavedUpload)
     std::copy(kinetic.begin(), kinetic.end(), charge.kin_r[0]);
     std::copy(kinetic_save.begin(), kinetic_save.end(), charge.kin_r_save[0]);
 
-    charge.sync_kin_r_to_device();
-    charge.sync_saved_density_to_device();
+    charge.sync_kin_r_and_save_to_device();
     std::fill(charge.kin_r[0], charge.kin_r[0] + kinetic.size(), 0.0);
     charge.sync_kin_r_to_host();
 
@@ -181,10 +180,65 @@ TEST(ChargeDeviceTest, OrdinarySyncMethodsAreSafeWithoutDeviceStorage)
     EXPECT_NO_THROW(charge.sync_rho_to_host());
     EXPECT_NO_THROW(charge.sync_rhog_to_device());
     EXPECT_NO_THROW(charge.sync_rhog_to_host());
-    EXPECT_NO_THROW(charge.sync_kin_r_to_device());
+    EXPECT_NO_THROW(charge.sync_kin_r_and_save_to_device());
     EXPECT_NO_THROW(charge.sync_kin_r_to_host());
-    EXPECT_NO_THROW(charge.sync_saved_density_to_device());
+    EXPECT_NO_THROW(charge.sync_rho_save_to_device());
     EXPECT_NO_THROW(charge.sync_rhog_save_to_host());
+}
+
+TEST(ChargeDeviceTest, RecreatesStorageAcrossGpuCpuGpuSwitch)
+{
+    ModulePW::PW_Basis basis;
+    initialize_basis(basis);
+    Charge charge;
+    charge.set_rhopw(&basis);
+    charge.allocate(2, false);
+    charge.set_device("gpu");
+    ASSERT_NE(charge.get_rho_d(), nullptr);
+
+    charge.set_device("cpu");
+    EXPECT_EQ(charge.get_rho_d(), nullptr);
+    EXPECT_EQ(charge.get_rhog_d(), nullptr);
+
+    charge.set_device("gpu");
+    ASSERT_NE(charge.get_rho_d(), nullptr);
+    ASSERT_NE(charge.get_rhog_d(), nullptr);
+    const std::vector<double> rho = {0.7, 0.6, 0.5, 0.4, 0.3,
+                                     1.7, 1.6, 1.5, 1.4, 1.3};
+    std::copy(rho.begin(), rho.end(), charge.rho[0]);
+    charge.sync_rho_to_device();
+    std::fill(charge.rho[0], charge.rho[0] + rho.size(), 0.0);
+    charge.sync_rho_to_host();
+    expect_double_data(rho, charge.rho[0]);
+}
+
+TEST(ChargeDeviceTest, RecreatesStorageWhenHostArraysAreReallocated)
+{
+    ModulePW::PW_Basis basis;
+    initialize_basis(basis);
+    Charge charge;
+    charge.set_rhopw(&basis);
+    charge.set_device("gpu");
+    charge.allocate(2, false);
+    ASSERT_NE(charge.get_rho_d(), nullptr);
+
+    basis.nrxx = 7;
+    basis.nxyz = 7;
+    basis.npw = 4;
+    basis.nmaxgr = 7;
+    charge.allocate(2, false);
+
+    ASSERT_NE(charge.get_rho_d(0), nullptr);
+    EXPECT_EQ(charge.get_rho_d(1), charge.get_rho_d(0) + basis.nrxx);
+    ASSERT_NE(charge.get_rhog_d(0), nullptr);
+    EXPECT_EQ(charge.get_rhog_d(1), charge.get_rhog_d(0) + basis.npw);
+    const std::vector<double> rho = {0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07,
+                                     1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07};
+    std::copy(rho.begin(), rho.end(), charge.rho[0]);
+    charge.sync_rho_to_device();
+    std::fill(charge.rho[0], charge.rho[0] + rho.size(), 0.0);
+    charge.sync_rho_to_host();
+    expect_double_data(rho, charge.rho[0]);
 }
 
 TEST(ChargeDeviceTest, ChargeCannotBeCopied)

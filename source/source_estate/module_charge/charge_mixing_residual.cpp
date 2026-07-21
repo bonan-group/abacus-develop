@@ -39,7 +39,7 @@ double Charge_Mixing::get_drho(Charge* chr, const double nelec)
 
             // GPU path: sync rho to GPU, then GPU FFT
             chr->sync_rho_to_device();
-            chr->sync_saved_density_to_device();
+            chr->sync_rho_save_to_device();
 
             for (int is = 0; is < nspin; ++is)
             {

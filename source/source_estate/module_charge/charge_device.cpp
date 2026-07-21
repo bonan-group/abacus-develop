@@ -159,12 +159,16 @@ class ChargeDeviceStorage
 #endif
     }
 
-    void upload_kin_r(const double* host, const int size) const
+    void upload_kin_r_and_save(const double* host, const double* saved_host, const int size) const
     {
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
         if (kin_r_ != nullptr && host != nullptr)
         {
             syncmem_d_h2d_op()(kin_r_, host, size);
+        }
+        if (kin_r_save_ != nullptr && saved_host != nullptr)
+        {
+            syncmem_d_h2d_op()(kin_r_save_, saved_host, size);
         }
 #endif
     }
@@ -179,24 +183,12 @@ class ChargeDeviceStorage
 #endif
     }
 
-    void upload_saved(const double* rho_host,
-                      const std::complex<double>* rhog_host,
-                      const double* kin_r_host,
-                      const int rho_size,
-                      const int rhog_size) const
+    void upload_rho_save(const double* host, const int size) const
     {
 #if __CUDA || __UT_USE_CUDA || __ROCM || __UT_USE_ROCM
-        if (rho_save_ != nullptr && rho_host != nullptr)
+        if (rho_save_ != nullptr && host != nullptr)
         {
-            syncmem_d_h2d_op()(rho_save_, rho_host, rho_size);
-        }
-        if (rhog_save_ != nullptr && rhog_host != nullptr)
-        {
-            syncmem_z_h2d_op()(rhog_save_, rhog_host, rhog_size);
-        }
-        if (kin_r_save_ != nullptr && kin_r_host != nullptr)
-        {
-            syncmem_d_h2d_op()(kin_r_save_, kin_r_host, rho_size);
+            syncmem_d_h2d_op()(rho_save_, host, size);
         }
 #endif
     }
@@ -317,11 +309,11 @@ void Charge::sync_rhog_to_host() const
     }
 }
 
-void Charge::sync_kin_r_to_device() const
+void Charge::sync_kin_r_and_save_to_device() const
 {
     if (device_ == "gpu" && device_storage_ != nullptr)
     {
-        device_storage_->upload_kin_r(_space_kin_r, nspin * nrxx);
+        device_storage_->upload_kin_r_and_save(_space_kin_r, _space_kin_r_save, nspin * nrxx);
     }
 }
 
@@ -333,12 +325,11 @@ void Charge::sync_kin_r_to_host() const
     }
 }
 
-void Charge::sync_saved_density_to_device() const
+void Charge::sync_rho_save_to_device() const
 {
     if (device_ == "gpu" && device_storage_ != nullptr)
     {
-        device_storage_->upload_saved(
-            _space_rho_save, _space_rhog_save, _space_kin_r_save, nspin * nrxx, nspin * ngmc);
+        device_storage_->upload_rho_save(_space_rho_save, nspin * nrxx);
     }
 }
 
