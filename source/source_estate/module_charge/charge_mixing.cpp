@@ -279,22 +279,7 @@ void Charge_Mixing::mix_reset()
     this->mixing->reset();
     this->rho_mdata.reset();
 #if __CUDA
-    if (this->mixing_gpu != nullptr)
-    {
-        this->mixing_gpu->reset();
-    }
-    if (this->mixing_pulay_gpu != nullptr)
-    {
-        this->mixing_pulay_gpu->reset();
-    }
-    if (this->rho_mdata_gpu != nullptr)
-    {
-        this->rho_mdata_gpu->reset();
-    }
-    if (this->tau_mdata_gpu != nullptr)
-    {
-        this->tau_mdata_gpu->reset();
-    }
+    free_mixing_gpu();
 #endif
     // initailize tau_mdata
     if ((XC_Functional::get_ked_flag()) && mixing_tau)

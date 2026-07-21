@@ -69,6 +69,9 @@ add_library(
 )
 
 target_link_libraries(base PUBLIC container)
+if(USE_CUDA)
+  target_sources(base PRIVATE module_mixing/gpu_mixing.cpp)
+endif()
 if (USE_DSP)
   target_link_libraries(base PUBLIC ${MTBLAS_FFT_DIR}/libmtblas/lib/libmtblas.a)
   target_link_libraries(base PUBLIC ${MTBLAS_FFT_DIR}/libmtblas/lib/libmtblasdev.a)

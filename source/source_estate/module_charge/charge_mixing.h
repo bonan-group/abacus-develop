@@ -9,9 +9,12 @@
 #include <string>
 
 #if __CUDA
-#include "source_base/module_mixing/mixing_data_gpu.h"
-#include "source_base/module_mixing/broyden_mixing_gpu.h"
-#include "source_base/module_mixing/pulay_mixing_gpu.h"
+namespace Base_Mixing
+{
+template <typename T>
+class GpuMixing;
+}
+struct ChargeMixingGpuWorkspace;
 #endif
 
 class Charge_Mixing
@@ -204,39 +207,8 @@ class Charge_Mixing
     bool gpu_charge_mixing_fallback_logged_ = false;
 
 #if __CUDA
-    //==========================================================
-    // GPU Mixing (Full GPU-Resident Path)
-    //==========================================================
-
-    /// GPU-resident mixing data for charge density
-    Base_Mixing::Mixing_Data_GPU<std::complex<double>>* rho_mdata_gpu = nullptr;
-
-    /// GPU-resident mixing data for kinetic energy density
-    Base_Mixing::Mixing_Data_GPU<std::complex<double>>* tau_mdata_gpu = nullptr;
-
-    /// GPU Broyden mixing instance
-    Base_Mixing::Broyden_Mixing_GPU<std::complex<double>>* mixing_gpu = nullptr;
-
-    /// GPU Pulay mixing instance
-    Base_Mixing::Pulay_Mixing_GPU<std::complex<double>>* mixing_pulay_gpu = nullptr;
-
-    /// GPU workspace for inner products
-    double* gpu_workspace_d = nullptr;
-    double* gpu_batch_workspace_d = nullptr;
-    double* gpu_batch_result_d = nullptr;
-
-    /// GPU workspace for tau reciprocal data
-    std::complex<double>* tau_g_d = nullptr;
-    std::complex<double>* tau_g_save_d = nullptr;
-
-    /// Reusable GPU workspaces for packed spin and double-grid mixing
-    std::complex<double>* rho_mix_in_d = nullptr;
-    std::complex<double>* rho_mix_out_d = nullptr;
-    std::complex<double>* rho_smooth_in_d = nullptr;
-    std::complex<double>* rho_smooth_out_d = nullptr;
-    std::complex<double>* rho_high_frequency_in_d = nullptr;
-    std::complex<double>* rho_high_frequency_out_d = nullptr;
-    std::complex<double>* plain_residual_d = nullptr;
+    Base_Mixing::GpuMixing<std::complex<double>>* mixing_gpu = nullptr;
+    ChargeMixingGpuWorkspace* gpu_workspace_ = nullptr;
 
     /// Initialize GPU mixing resources
     void init_mixing_gpu(int nspin);
@@ -247,23 +219,6 @@ class Charge_Mixing
     /// Full GPU-resident charge mixing path
     void mix_rho_recip_gpu(Charge* chr, bool include_magnetism);
 
-    /// GPU inner product with Hartree-like weighting
-    double inner_product_recip_hartree_gpu(const std::complex<double>* rhog1_d,
-                                            const std::complex<double>* rhog2_d);
-    void build_recip_hartree_beta_row_gpu(const std::complex<double>* vectors_d,
-                                           int nvec,
-                                           int row,
-                                           int nspin,
-                                           bool gamma_only,
-                                           bool include_magnetism,
-                                           ModuleBase::matrix& beta);
-    void build_recip_hartree_gamma_gpu(const std::complex<double>* vectors_d,
-                                        const std::complex<double>* rhs_d,
-                                        int nvec,
-                                        int nspin,
-                                        bool gamma_only,
-                                        bool include_magnetism,
-                                        std::vector<double>& gamma);
 #endif
 
     /**
