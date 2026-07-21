@@ -1,7 +1,8 @@
 AddTest(
     TARGET MODULE_HAMILT_XC_Functional_UTs
     LIBS parameter ${math_libs} device base container planewave
-    SOURCES xc_functional_op_test.cpp
+    SOURCES xc_formula_test.cpp
+      xc_functional_op_test.cpp
       xc_vxc_mock_unitcell_deps.cpp
       ../../xc_functional.cpp
       ../../xc_pot.cpp
