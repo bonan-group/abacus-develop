@@ -17,16 +17,22 @@ namespace hamilt
                 ModulePW::PW_Basis_K* wfc_basis,
                 K_Vectors* p_kv,
                 pseudopot_cell_vnl* nlpp,
-                const UnitCell* ucell)
-          : HamiltPW<T, base_device::DEVICE_CPU>(pot_in, wfc_basis, p_kv, nlpp, nullptr, ucell){};
+                const UnitCell* ucell,
+                const ExxOperatorOptions& exx_options,
+                const ExxExecutionContext& exx_execution_context)
+          : HamiltPW<T, base_device::DEVICE_CPU>(
+                pot_in, wfc_basis, p_kv, nlpp, nullptr, ucell, exx_options, exx_execution_context){};
 #ifdef __EXX
       HamiltLIP(elecstate::Potential* pot_in,
                 ModulePW::PW_Basis_K* wfc_basis,
                 K_Vectors* p_kv,
                 pseudopot_cell_vnl* nlpp,
                 const UnitCell* ucell,
+                const ExxOperatorOptions& exx_options,
+                const ExxExecutionContext& exx_execution_context,
                 Exx_Lip<T>& exx_lip_in)
-          : HamiltPW<T, base_device::DEVICE_CPU>(pot_in, wfc_basis, p_kv, nlpp, nullptr, ucell), 
+          : HamiltPW<T, base_device::DEVICE_CPU>(
+                pot_in, wfc_basis, p_kv, nlpp, nullptr, ucell, exx_options, exx_execution_context),
             exx_lip(exx_lip_in){};
       Exx_Lip<T>& exx_lip;
 #endif

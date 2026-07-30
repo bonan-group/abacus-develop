@@ -9,38 +9,12 @@
 #include "source_base/global_function.h"
 #include "source_base/global_variable.h"
 #include "source_base/parallel_reduce.h"
-#include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 #include "source_io/module_parameter/parameter.h"
 
 #include <algorithm>
 
 namespace hamilt
 {
-
-namespace
-{
-ExxOperatorOptions make_exx_operator_options(bool separate_loop,
-                                             double hybrid_alpha,
-                                             const CoulombParam& coulomb_param)
-{
-    ExxOperatorOptions options;
-    options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
-    options.band_tile_size = PARAM.inp.exx_band_tile_size;
-    options.q_tile_size = PARAM.inp.exx_q_tile_size;
-    options.configured_nbands = PARAM.inp.nbands;
-    options.nspin = PARAM.inp.nspin;
-    options.ecutexx = PARAM.inp.ecutexx;
-    options.ecutrho = PARAM.inp.ecutrho;
-    options.gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
-    options.exxace = PARAM.inp.exxace;
-    options.separate_loop = separate_loop;
-    options.hybrid_alpha = hybrid_alpha;
-    options.auto_tiling = PARAM.inp.exx_auto_tiling;
-    options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
-    options.coulomb_param = coulomb_param;
-    return options;
-}
-} // namespace
 
 template <typename T, typename Device>
 HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
@@ -49,7 +23,35 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
                               pseudopot_cell_vnl* nlpp,
                               Plus_U* p_dftu,
                               const UnitCell* ucell)
-    : HamiltPW(pot_in, wfc_basis, pkv, nlpp, p_dftu, ucell, nullptr)
+    : HamiltPW(pot_in,
+               wfc_basis,
+               pkv,
+               nlpp,
+               p_dftu,
+               ucell,
+               ExxOperatorOptions(),
+               ExxExecutionContext())
+{
+}
+
+template <typename T, typename Device>
+HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
+                              ModulePW::PW_Basis_K* wfc_basis,
+                              K_Vectors* pkv,
+                              pseudopot_cell_vnl* nlpp,
+                              Plus_U* p_dftu,
+                              const UnitCell* ucell,
+                              const ExxOperatorOptions& exx_options,
+                              const ExxExecutionContext& exx_execution_context)
+    : HamiltPW(pot_in,
+               wfc_basis,
+               pkv,
+               nlpp,
+               p_dftu,
+               ucell,
+               nullptr,
+               exx_options,
+               exx_execution_context)
 {
 }
 
@@ -60,8 +62,10 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
                               pseudopot_cell_vnl* nlpp,
                               Plus_U* p_dftu, // mohan add 2025-11-06
                               const UnitCell* ucell,
-                              OperatorEXXPW<T, Device>* source_exx)
-    : ucell(ucell)
+                              OperatorEXXPW<T, Device>* source_exx,
+                              const ExxOperatorOptions& exx_options,
+                              const ExxExecutionContext& exx_execution_context)
+    : ucell(ucell), exx_options_(exx_options), exx_execution_context_(exx_execution_context)
 {
     this->classname = "HamiltPW";
     this->ppcell = nlpp;
@@ -169,16 +173,22 @@ HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
                                                                                  (PARAM.inp.dft_plus_u > 0));
         this->ops->add(onsite_proj);
     }
-    if (GlobalC::exx_info.info_global.cal_exx)
+    if (exx_options.enabled)
     {
-        const bool separate_loop = GlobalC::exx_info.info_global.separate_loop;
-        const double hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
-        const CoulombParam coulomb_param = GlobalC::exx_info.info_global.coulomb_param;
-        const ExxOperatorOptions exx_options
-            = make_exx_operator_options(separate_loop, hybrid_alpha, coulomb_param);
         auto exx = source_exx == nullptr
-                       ? new OperatorEXXPW<T, Device>(isk, wfc_basis, pot_in->get_rho_basis(), pkv, ucell, exx_options)
-                       : new OperatorEXXPW<T, Device>(source_exx, isk, wfc_basis, pkv, exx_options);
+                       ? new OperatorEXXPW<T, Device>(isk,
+                                                      wfc_basis,
+                                                      pot_in->get_rho_basis(),
+                                                      pkv,
+                                                      ucell,
+                                                      exx_options,
+                                                      exx_execution_context)
+                       : new OperatorEXXPW<T, Device>(source_exx,
+                                                      isk,
+                                                      wfc_basis,
+                                                      pkv,
+                                                      exx_options,
+                                                      exx_execution_context);
         if (this->ops == nullptr)
         {
             this->ops = exx;

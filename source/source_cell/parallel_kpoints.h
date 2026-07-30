@@ -68,6 +68,17 @@ class Parallel_Kpoints
         return *std::max_element(nks_pool.begin(), nks_pool.end());
     }
 
+    // Number of plane-wave ranks in this pool after optional band partitioning.
+    int get_nproc_in_pool(const int bndpar) const
+    {
+        const int pool_count = this->kpar > 0 ? this->kpar : 1;
+        const int band_group_count = bndpar > 0 ? bndpar : 1;
+        const int base_pool_size = this->nproc / pool_count;
+        const int larger_pool_count = this->nproc % pool_count;
+        const int kpoint_pool_size = base_pool_size + (this->my_pool < larger_pool_count ? 1 : 0);
+        return kpoint_pool_size / band_group_count;
+    }
+
   public:
     int kpar = 0;         // number of pools
     int my_pool = 0;      // the pool index of the present processor

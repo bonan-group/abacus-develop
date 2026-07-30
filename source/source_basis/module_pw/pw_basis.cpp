@@ -4,7 +4,6 @@
 #include "source_base/mymath.h"
 #include "source_base/timer.h"
 #include "source_base/global_function.h"
-#include "source_io/module_parameter/parameter.h"
 
 
 namespace ModulePW
@@ -16,8 +15,7 @@ PW_Basis::PW_Basis()
 
 PW_Basis::PW_Basis(std::string device_, std::string precision_) : device(std::move(device_)), precision(std::move(precision_)) {
     classname="PW_Basis";
-    // FFT device setup is deferred to setuptransform() to avoid GPU memory allocation
-    // before GlobalV::ofs_running is initialized (which would crash Memory::record_gpu)
+    // Defer FFT device setup until runtime logging and GPU memory accounting are initialized.
     this->double_data_ = (this->precision == "double") || (this->precision == "mixing");
     this->float_data_ = (this->precision == "single")  || (this->precision == "mixing");
 }

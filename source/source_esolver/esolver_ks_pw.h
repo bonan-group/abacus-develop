@@ -5,13 +5,19 @@
 #include "source_pw/module_pwdft/vsep_pw.h"
 #include "source_pw/module_pwdft/exx_helper_base.h"
 
+#include <iosfwd>
 #include <memory>
 #include <source_base/macros.h>
+
+struct System_para;
 
 namespace hamilt
 {
 template <typename T, typename Device>
 class OperatorEXXPW;
+
+struct ExxOperatorOptions;
+struct ExxExecutionContext;
 }
 
 namespace ModuleESolver
@@ -55,11 +61,25 @@ class ESolver_KS_PW : public ESolver_KS
 
     virtual void allocate_hamilt(const UnitCell& ucell);
 
-    void validate_mixed_band_targets(const Input_para& inp) const;
+    void validate_mixed_band_targets(const Input_para& inp, const hamilt::ExxOperatorOptions& exx_options) const;
 
-    void solve_mixed_band_targets(UnitCell& ucell);
-    void solve_mixed_band_targets_full(UnitCell& ucell, hamilt::OperatorEXXPW<T, Device>* source_exx);
-    void solve_mixed_band_targets_mem_saver(UnitCell& ucell, hamilt::OperatorEXXPW<T, Device>* source_exx);
+    void solve_mixed_band_targets(UnitCell& ucell, const Input_para& inp, const System_para& sys);
+    void solve_mixed_band_targets_full(UnitCell& ucell,
+                                       hamilt::OperatorEXXPW<T, Device>* source_exx,
+                                       const Input_para& inp,
+                                       const System_para& sys);
+    void solve_mixed_band_targets_mem_saver(UnitCell& ucell,
+                                            hamilt::OperatorEXXPW<T, Device>* source_exx,
+                                            const Input_para& inp,
+                                            const System_para& sys);
+
+    std::unique_ptr<const Input_para> input_parameters_;
+    std::unique_ptr<const System_para> system_parameters_;
+    std::unique_ptr<const hamilt::ExxOperatorOptions> exx_options_;
+    std::unique_ptr<const hamilt::ExxExecutionContext> exx_context_;
+    int my_bndgroup_ = 0;
+    int nproc_in_pool_ = 1;
+    std::ofstream* running_log_ = nullptr;
 
     // Electronic wave function psi
     Setup_Psi_pw stp;

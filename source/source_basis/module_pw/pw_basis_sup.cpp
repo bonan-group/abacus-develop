@@ -20,8 +20,7 @@ void PW_Basis_Sup::setuptransform(const ModulePW::PW_Basis* pw_rho)
     this->getstartgr();
     this->fft_bundle.clear();
 
-    // Set FFT device here (deferred from constructor for safe initialization order)
-    // This ensures GPU memory allocation happens after GlobalV::ofs_running is initialized
+    // Set the FFT device here, after runtime logging and GPU memory accounting are initialized.
     this->fft_bundle.setfft(this->device, this->precision);
 
     if (this->xprime)

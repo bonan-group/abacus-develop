@@ -1175,13 +1175,13 @@
   ``text genelpa can not be used with plane wave basis. ``
 
   Then the user has to correct the input file and restart the calculation.
-- **Default**: 
-    - PW basis: cg.
-    - LCAO basis:
-        - genelpa (if compiling option `ENABLE_ELPA` has been set)
-        - lapack (if compiling option `ENABLE_MPI` has not been set)
-        - scalapack_gvx (if compiling option `ENABLE_ELPA` has not been set and compiling option `ENABLE_MPI` has been set)
-        - cusolver (if compiling option `USE_CUDA` has been set)
+- **Default**:
+  - PW basis: cg.
+  - LCAO basis:
+      - genelpa (if compiling option `ENABLE_ELPA` has been set)
+      - lapack (if compiling option `ENABLE_MPI` has not been set)
+      - scalapack_gvx (if compiling option `ENABLE_ELPA` has not been set and compiling option `ENABLE_MPI` has been set)
+      - cusolver (if compiling option `USE_CUDA` has been set)
 
 ### nbands
 

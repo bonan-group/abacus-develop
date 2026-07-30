@@ -26,9 +26,20 @@ class HamiltSdftPW : public HamiltPW<T, Device>
                  K_Vectors* p_kv,
                  pseudopot_cell_vnl* nlpp,
                  const UnitCell* ucell,
-				 const int& npol,
+                 const int& npol,
                  Real* emin_in,
                  Real* emax_in);
+
+    HamiltSdftPW(elecstate::Potential* pot_in,
+                 ModulePW::PW_Basis_K* wfc_basis,
+                 K_Vectors* p_kv,
+                 pseudopot_cell_vnl* nlpp,
+                 const UnitCell* ucell,
+                 const int& npol,
+                 Real* emin_in,
+                 Real* emax_in,
+                 const ExxOperatorOptions& exx_options,
+                 const ExxExecutionContext& exx_execution_context);
     /**
      * @brief Destroy the HamiltSdftPW object
      *

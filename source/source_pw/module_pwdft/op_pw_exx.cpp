@@ -1,7 +1,6 @@
 #include "op_pw_exx.h"
 
 #include "source_base/constants.h"
-#include "source_base/global_variable.h"
 #include "source_base/parallel_common.h"
 #include "source_base/parallel_device.h"
 #include "source_base/parallel_comm.h" // use KP_WORLD
@@ -26,6 +25,7 @@
 #include <limits>
 #include <new>
 #include <iomanip>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -98,12 +98,18 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                                         const ModulePW::PW_Basis* rhopw_in,
                                         K_Vectors *kv_in,
                                         const UnitCell *ucell,
-                                        const ExxOperatorOptions& options_in)
-    : isk(isk_in), wfcpw(wfcpw_in), rhopw(rhopw_in), kv(kv_in), options(options_in), ucell(ucell)
+                                        const ExxOperatorOptions& options_in,
+                                        const ExxExecutionContext& execution_context_in)
+    : isk(isk_in),
+      wfcpw(wfcpw_in),
+      rhopw(rhopw_in),
+      ucell(ucell),
+      kv(kv_in),
+      options(options_in),
+      execution_context(execution_context_in)
 {
     if (kv->para_k.kpar != 1 && !(options.exxace && options.separate_loop))
     {
-        // GlobalV::ofs_running << "EXX Calculation does not support k-point parallelism" << std::endl;
         ModuleBase::WARNING_QUIT("OperatorEXXPW",
                                  "PW EXX KPAR is supported only with exxace=1 and exx_separate_loop=1");
     }
@@ -234,15 +240,16 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
         exx_wave_redistributor->setup(wfcpw, wfcpw_exx);
     }
 
-    if (GlobalV::MY_RANK == 0)
+    if (execution_context.my_rank == 0 && execution_context.running_log != nullptr)
     {
         const int active_full_q_count = active_exx_q_count(*kv);
-        GlobalV::ofs_running << " EXX effective ecutexx = " << ecut_exx
+        std::ostream& running_log = *execution_context.running_log;
+        running_log << " EXX effective ecutexx = " << ecut_exx
                              << " Ry, charge FFT = " << rhopw->nx << " " << rhopw->ny << " " << rhopw->nz
                              << ", wfc FFT = " << wfcpw->nx << " " << wfcpw->ny << " " << wfcpw->nz
                              << ", EXX FFT = " << rhopw_dev->nx << " " << rhopw_dev->ny << " " << rhopw_dev->nz
                              << ", EXX npw = " << rhopw_dev->npw << std::endl;
-        GlobalV::ofs_running << " EXX q-tile path = on"
+        running_log << " EXX q-tile path = on"
                              << ", batch FFT size = " << options.batch_fft_size
                              << ", band tile size = " << options.band_tile_size
                              << ", q tile size = " << options.q_tile_size
@@ -250,7 +257,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const int* isk_in,
                              << ", reduced k = " << wfcpw->nks / nk_fac
                              << ", full q = " << active_full_q_count << std::endl;
         const double bytes_per_mib = 1024.0 * 1024.0;
-        GlobalV::ofs_running << " PW EXX tiling: mode = " << (options.auto_tiling ? "automatic" : "manual")
+        running_log << " PW EXX tiling: mode = " << (options.auto_tiling ? "automatic" : "manual")
                              << ", budget = " << std::fixed << std::setprecision(1)
                              << static_cast<double>(options.tile_budget_bytes) / bytes_per_mib
                              << " MiB, batch = " << options.batch_fft_size
@@ -1934,6 +1941,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T_in, Device_in> *op
     this->ctx = op->ctx;
     this->cpu_ctx = op->cpu_ctx;
     this->options = op->options;
+    this->execution_context = op->execution_context;
     this->gamma_extrapolation = op->gamma_extrapolation;
     this->singular_correction_mode = op->singular_correction_mode;
     this->fock_div_local = op->fock_div_local;
@@ -1962,7 +1970,8 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
                                         const int* target_isk,
                                         const ModulePW::PW_Basis_K* target_wfcpw,
                                         const K_Vectors* target_kv,
-                                        const ExxOperatorOptions& options_in)
+                                        const ExxOperatorOptions& options_in,
+                                        const ExxExecutionContext& execution_context_in)
 {
     this->isk = target_isk;
     this->wfcpw = target_wfcpw;
@@ -1974,6 +1983,7 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
     this->target_kv_for_target = target_kv;
     this->kv = source_op->kv;
     this->options = options_in;
+    this->execution_context = execution_context_in;
     this->ucell = source_op->ucell;
     this->tpiba = source_op->tpiba;
     this->psi = source_op->psi;
@@ -2103,12 +2113,13 @@ OperatorEXXPW<T, Device>::OperatorEXXPW(const OperatorEXXPW<T, Device>* source_o
                                                     this->ucell->omega));
         }
     }
-    if (GlobalV::MY_RANK == 0)
+    if (execution_context.my_rank == 0 && execution_context.running_log != nullptr)
     {
-        GlobalV::ofs_running << " Mixed band target EXX singular correction = smooth target-k"
+        std::ostream& running_log = *execution_context.running_log;
+        running_log << " Mixed band target EXX singular correction = smooth target-k"
                              << " (source q mesh fixed, MP gamma mask disabled for target k)" << std::endl;
         const double bytes_per_mib = 1024.0 * 1024.0;
-        GlobalV::ofs_running << " Mixed band target PW EXX tiling: mode = "
+        running_log << " Mixed band target PW EXX tiling: mode = "
                              << (this->options.auto_tiling ? "automatic" : "manual")
                              << ", budget = " << std::fixed << std::setprecision(1)
                              << static_cast<double>(this->options.tile_budget_bytes) / bytes_per_mib

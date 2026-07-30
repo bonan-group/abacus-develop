@@ -104,7 +104,9 @@ void ESolver_SDFT_PW<T, Device>::before_scf(UnitCell& ucell, const int istep)
                                                          &ucell, 
                                                          PARAM.globalv.npol,
                                                          &this->stoche.emin_sto,
-                                                         &this->stoche.emax_sto);
+                                                         &this->stoche.emax_sto,
+                                                         *this->exx_options_,
+                                                         *this->exx_context_);
     this->p_hamilt_sto = static_cast<hamilt::HamiltSdftPW<T, Device>*>(this->p_hamilt);
 
     if (istep > 0 && PARAM.inp.nbands_sto != 0 && PARAM.inp.initsto_freq > 0 && istep % PARAM.inp.initsto_freq == 0)

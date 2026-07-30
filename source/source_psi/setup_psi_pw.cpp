@@ -1,5 +1,5 @@
 #include "source_psi/setup_psi_pw.h"
-#include "source_io/module_parameter/parameter.h" // use parameter
+#include "source_io/module_parameter/system_parameter.h"
 
 Setup_Psi_pw::Setup_Psi_pw(){}
 
@@ -13,13 +13,24 @@ void Setup_Psi_pw::before_runner_impl(
         const ModulePW::PW_Basis_K &pw_wfc,
         const pseudopot_cell_vnl &ppcell,
         const Input_para &inp,
+        const System_para &sys,
+        const int my_bndgroup,
+        std::ofstream& running_log,
         const bool save_memory)
 {
     this->p_psi_init = new psi::PSIPrepare<T, Device>(inp.init_wfc,
-      inp.ks_solver, inp.basis_type, GlobalV::MY_RANK, ucell,
-      sf, kv, ppcell, pw_wfc);
+      inp.ks_solver, inp.basis_type, sys.myrank, ucell,
+      sf, kv, ppcell, pw_wfc, inp, sys, my_bndgroup, running_log);
 
-    allocate_psi(this->psi_cpu, kv.get_nks(), kv.ngk, PARAM.globalv.nbands_l, pw_wfc.npwk_max, save_memory);
+    allocate_psi(this->psi_cpu,
+                 kv.get_nks(),
+                 kv.ngk,
+                 sys.nbands_l,
+                 pw_wfc.npwk_max,
+                 inp,
+                 sys,
+                 running_log,
+                 save_memory);
 
     auto* p_psi_init = static_cast<psi::PSIPrepare<T, Device>*>(this->p_psi_init);
     p_psi_init->prepare_init(inp.pw_seed);
@@ -53,20 +64,13 @@ void Setup_Psi_pw::before_runner(
         const Structure_Factor &sf,
         const ModulePW::PW_Basis_K &pw_wfc,
         const pseudopot_cell_vnl &ppcell,
-        const Input_para &inp)
-{
-    this->before_runner(ucell, kv, sf, pw_wfc, ppcell, inp, false);
-}
-
-void Setup_Psi_pw::before_runner(
-        const UnitCell &ucell,
-        const K_Vectors &kv,
-        const Structure_Factor &sf,
-        const ModulePW::PW_Basis_K &pw_wfc,
-        const pseudopot_cell_vnl &ppcell,
         const Input_para &inp,
+        const System_para &sys,
+        const int my_bndgroup,
+        std::ofstream& running_log,
         const bool save_memory)
 {
+    this->running_log_ = &running_log;
     const bool is_gpu = (inp.device == "gpu");
     const bool is_single = (inp.precision == "single");
 
@@ -74,20 +78,20 @@ void Setup_Psi_pw::before_runner(
     if (is_gpu) {
         if (is_single) {
             before_runner_impl<std::complex<float>, base_device::DEVICE_GPU>(
-                ucell, kv, sf, pw_wfc, ppcell, inp, save_memory);
+                ucell, kv, sf, pw_wfc, ppcell, inp, sys, my_bndgroup, running_log, save_memory);
         } else {
             before_runner_impl<std::complex<double>, base_device::DEVICE_GPU>(
-                ucell, kv, sf, pw_wfc, ppcell, inp, save_memory);
+                ucell, kv, sf, pw_wfc, ppcell, inp, sys, my_bndgroup, running_log, save_memory);
         }
     } else
 #endif
     {
         if (is_single) {
             before_runner_impl<std::complex<float>, base_device::DEVICE_CPU>(
-                ucell, kv, sf, pw_wfc, ppcell, inp, save_memory);
+                ucell, kv, sf, pw_wfc, ppcell, inp, sys, my_bndgroup, running_log, save_memory);
         } else {
             before_runner_impl<std::complex<double>, base_device::DEVICE_CPU>(
-                ucell, kv, sf, pw_wfc, ppcell, inp, save_memory);
+                ucell, kv, sf, pw_wfc, ppcell, inp, sys, my_bndgroup, running_log, save_memory);
         }
     }
 }
@@ -143,7 +147,7 @@ void Setup_Psi_pw::init_impl(hamilt::Hamilt<T, Device>* p_hamilt)
     if (!this->already_initpsi)
     {
         auto* p_psi_init = static_cast<psi::PSIPrepare<T, Device>*>(this->p_psi_init);
-        p_psi_init->initialize_psi(this->psi_cpu, this->get_psi_t<T, Device>(), p_hamilt, GlobalV::ofs_running);
+        p_psi_init->initialize_psi(this->psi_cpu, this->get_psi_t<T, Device>(), p_hamilt, *this->running_log_);
         this->already_initpsi = true;
     }
 }
@@ -152,7 +156,7 @@ template <typename T, typename Device>
 void Setup_Psi_pw::init_ik_impl(hamilt::Hamilt<T, Device>* p_hamilt, const int ik)
 {
     auto* p_psi_init = static_cast<psi::PSIPrepare<T, Device>*>(this->p_psi_init);
-    p_psi_init->initialize_psi_ik(this->psi_cpu, this->get_psi_t<T, Device>(), p_hamilt, GlobalV::ofs_running, ik);
+    p_psi_init->initialize_psi_ik(this->psi_cpu, this->get_psi_t<T, Device>(), p_hamilt, *this->running_log_, ik);
 }
 
 void Setup_Psi_pw::init(hamilt::HamiltBase* p_hamilt)
@@ -315,11 +319,13 @@ template class psi::PSIPrepare<std::complex<double>, base_device::DEVICE_CPU>;
 
 template void Setup_Psi_pw::before_runner_impl<std::complex<float>, base_device::DEVICE_CPU>(
     const UnitCell&, const K_Vectors&, const Structure_Factor&,
-    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const bool);
+    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const System_para&,
+    const int, std::ofstream&, const bool);
 
 template void Setup_Psi_pw::before_runner_impl<std::complex<double>, base_device::DEVICE_CPU>(
     const UnitCell&, const K_Vectors&, const Structure_Factor&,
-    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const bool);
+    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const System_para&,
+    const int, std::ofstream&, const bool);
 
 template void Setup_Psi_pw::init_impl<std::complex<float>, base_device::DEVICE_CPU>(
     hamilt::Hamilt<std::complex<float>, base_device::DEVICE_CPU>*);
@@ -359,11 +365,13 @@ template class psi::PSIPrepare<std::complex<double>, base_device::DEVICE_GPU>;
 
 template void Setup_Psi_pw::before_runner_impl<std::complex<float>, base_device::DEVICE_GPU>(
     const UnitCell&, const K_Vectors&, const Structure_Factor&,
-    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const bool);
+    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const System_para&,
+    const int, std::ofstream&, const bool);
 
 template void Setup_Psi_pw::before_runner_impl<std::complex<double>, base_device::DEVICE_GPU>(
     const UnitCell&, const K_Vectors&, const Structure_Factor&,
-    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const bool);
+    const ModulePW::PW_Basis_K&, const pseudopot_cell_vnl&, const Input_para&, const System_para&,
+    const int, std::ofstream&, const bool);
 
 template void Setup_Psi_pw::init_impl<std::complex<float>, base_device::DEVICE_GPU>(
     hamilt::Hamilt<std::complex<float>, base_device::DEVICE_GPU>*);

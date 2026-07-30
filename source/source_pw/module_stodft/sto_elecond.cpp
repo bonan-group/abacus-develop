@@ -40,7 +40,17 @@ Sto_EleCond<FPTYPE, Device>::Sto_EleCond(UnitCell* p_ucell_in,
 #ifdef __ENABLE_FLOAT_FFTW
     if(!std::is_same<FPTYPE, lowTYPE>::value)
     {
-        this->hamilt_sto_ = new hamilt::HamiltSdftPW<std::complex<lowTYPE>, Device>(p_elec_in->pot, p_wfcpw_in, p_kv_in, p_ppcell_in, p_ucell_in, 1, &this->low_emin_, &this->low_emax_);
+        this->hamilt_sto_ = new hamilt::HamiltSdftPW<std::complex<lowTYPE>, Device>(
+            p_elec_in->pot,
+            p_wfcpw_in,
+            p_kv_in,
+            p_ppcell_in,
+            p_ucell_in,
+            1,
+            &this->low_emin_,
+            &this->low_emax_,
+            this->p_hamilt_sto->exx_options(),
+            this->p_hamilt_sto->exx_execution_context());
     }
 #endif
 }

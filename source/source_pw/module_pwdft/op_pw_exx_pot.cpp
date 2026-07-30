@@ -172,10 +172,6 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
             }
 
             Real gg = (k_c - q_c + rhopw_dev->gcar[ig]).norm2() * tpiba2;
-            // if (ig == 0 && GlobalV::MY_RANK==1)
-            // {
-            //     printf("k-q+G: %f %f %f\n", (k_c - q_c + rhopw_dev->gcar[ig])[0], (k_c - q_c + rhopw_dev->gcar[ig])[1], (k_c - q_c + rhopw_dev->gcar[ig])[2]);
-            // }
             // if (kqgcar2 > 1e-12) // vasp uses 1/40 of the smallest (k spacing)**2
             if (gg >= 1e-8)
             {
@@ -185,7 +181,6 @@ void fill_exx_potential_from_kq(const K_Vectors* kv,
             // }
             else
             {
-                // if (PARAM.inp.dft_functional == "hse")
                 if (use_finite_singularity_compensation(singular_correction_mode))
                 {
                     if (is_stress)
@@ -432,7 +427,6 @@ void fill_exx_stress_potential_from_kq(const K_Vectors* kv,
             // }
             else
             {
-                // if (PARAM.inp.dft_functional == "hse")
                 if (!gamma_extrapolation)
                 {
                     pot_cpu[ig] += 1.0 / 4.0 / erfc_omega2 * alpha;
@@ -582,7 +576,6 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
 
             if (qq <= 1e-8)
                 continue;
-            // else if (PARAM.inp.dft_functional == "hse")
             else if (coulomb_type == Conv_Coulomb_Pot_K::Coulomb_Type::Erfc)
             {
                 double omega = erfc_omega;
@@ -600,7 +593,6 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
     Parallel_Reduce::reduce_pool(div);
     // std::cout << "EXX div: " << div << std::endl;
 
-    // if (PARAM.inp.dft_functional == "hse")
     if (use_finite_singularity_compensation(singular_correction_mode))
     {
         if (coulomb_type == Conv_Coulomb_Pot_K::Coulomb_Type::Erfc)
@@ -623,7 +615,6 @@ double exx_divergence(Conv_Coulomb_Pot_K::Coulomb_Type coulomb_type,
     int nqq = 100000;
     double dq = 5.0 / std::sqrt(alpha) / nqq;
     double aa = 0.0;
-    // if (PARAM.inp.dft_functional == "hse")
     if (coulomb_type == Conv_Coulomb_Pot_K::Coulomb_Type::Erfc)
     {
         double omega = erfc_omega;

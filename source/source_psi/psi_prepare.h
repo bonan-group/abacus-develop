@@ -4,6 +4,11 @@
 #include "source_psi/psi_initializer.h"
 #include "source_psi/psi_prepare_base.h"
 
+#include <iosfwd>
+
+struct Input_para;
+struct System_para;
+
 namespace psi
 {
 
@@ -20,7 +25,11 @@ class PSIPrepare : public PSIPrepareBase
             const Structure_Factor& sf,
             const K_Vectors& kv_in,
             const pseudopot_cell_vnl& nlpp,
-            const ModulePW::PW_Basis_K& pw_wfc);
+            const ModulePW::PW_Basis_K& pw_wfc,
+            const Input_para& inp,
+            const System_para& sys,
+            const int my_bndgroup,
+            std::ofstream& running_log);
     ~PSIPrepare(){};
 
     ///@brief prepare the wavefunction initialization
@@ -83,6 +92,12 @@ class PSIPrepare : public PSIPrepareBase
     // nonlocal pseudopotential
     const pseudopot_cell_vnl& nlpp;
 
+    // Immutable runtime configuration supplied by Setup_Psi_pw.
+    const Input_para& inp;
+    const System_para& sys;
+    const int my_bndgroup;
+    std::ofstream& running_log;
+
     Device* ctx = {};                      ///< device
     base_device::DEVICE_CPU* cpu_ctx = {}; ///< CPU device
     const int rank;                        ///< MPI rank
@@ -98,6 +113,9 @@ void allocate_psi(Psi<std::complex<double>>*& psi,
                   const std::vector<int>& ngk,
                   const int& nbands,
                   const int& npwx,
+                  const Input_para& inp,
+                  const System_para& sys,
+                  std::ofstream& running_log,
                   const bool save_memory);
 
 } // namespace psi

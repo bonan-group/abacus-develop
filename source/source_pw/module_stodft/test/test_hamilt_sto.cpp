@@ -18,6 +18,19 @@ hamilt::HamiltPW<T, Device>::HamiltPW(
 		const UnitCell* ucell){}
 
 template <typename T, typename Device>
+hamilt::HamiltPW<T, Device>::HamiltPW(elecstate::Potential* pot_in,
+                                      ModulePW::PW_Basis_K* wfc_basis,
+                                      K_Vectors* p_kv,
+                                      pseudopot_cell_vnl* ppcell,
+                                      Plus_U* p_dftu,
+                                      const UnitCell* ucell,
+                                      const hamilt::ExxOperatorOptions& exx_options,
+                                      const hamilt::ExxExecutionContext& exx_execution_context)
+    : exx_options_(exx_options), exx_execution_context_(exx_execution_context)
+{
+}
+
+template <typename T, typename Device>
 hamilt::HamiltPW<T, Device>::~HamiltPW(){
     delete this->ops;
 };
@@ -75,7 +88,18 @@ class TestHamiltSto : public ::testing::Test
         p_kv = new K_Vectors();
         std::vector<int> ngk = {2};
         p_kv->ngk = ngk;
-        hamilt_sto = new hamilt::HamiltSdftPW<std::complex<double>, base_device::DEVICE_CPU>(pot, wfc_basis, p_kv, nullptr, nullptr, npol, &emin, &emax);
+        exx_options.q_tile_size = 7;
+        exx_execution_context.my_pool = 2;
+        hamilt_sto = new hamilt::HamiltSdftPW<std::complex<double>, base_device::DEVICE_CPU>(pot,
+                                                                                             wfc_basis,
+                                                                                             p_kv,
+                                                                                             nullptr,
+                                                                                             nullptr,
+                                                                                             npol,
+                                                                                             &emin,
+                                                                                             &emax,
+                                                                                             exx_options,
+                                                                                             exx_execution_context);
         hamilt_sto->ops = new TestOp<std::complex<double>, base_device::DEVICE_CPU>();
     }
 
@@ -91,9 +115,17 @@ class TestHamiltSto : public ::testing::Test
     ModulePW::PW_Basis_K* wfc_basis;
     K_Vectors* p_kv;
     hamilt::HamiltSdftPW<std::complex<double>, base_device::DEVICE_CPU>* hamilt_sto;
+    hamilt::ExxOperatorOptions exx_options;
+    hamilt::ExxExecutionContext exx_execution_context;
     double emin = -2.0;
     double emax = 2.0;
 };
+
+TEST_F(TestHamiltSto, ExplicitExxConfigurationIsPreserved)
+{
+    EXPECT_EQ(hamilt_sto->exx_options().q_tile_size, 7);
+    EXPECT_EQ(hamilt_sto->exx_execution_context().my_pool, 2);
+}
 
 TEST_F(TestHamiltSto, hPsi)
 {

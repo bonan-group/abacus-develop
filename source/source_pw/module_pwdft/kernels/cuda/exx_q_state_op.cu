@@ -1,4 +1,5 @@
 #include "source_pw/module_pwdft/kernels/exx_q_state_op.h"
+#include "source_pw/module_pwdft/exx_size_utils.h"
 #include "source_base/module_device/device_check.h"
 #include "source_basis/module_pw/pw_basis_k.h"
 

@@ -4,6 +4,7 @@
 #include "source_pw/module_pwdft/kernels/exx_stress_op.h"
 #include "source_pw/module_pwdft/exx_wave_redistributor.h"
 #include "source_base/parallel_common.h"
+#include "source_base/parallel_comm.h" // use KP_WORLD
 #include "source_base/parallel_device.h"
 #include "source_base/parallel_reduce.h"
 #include "stress_pw.h"
@@ -12,38 +13,13 @@
 #include <algorithm>
 #include <iomanip>
 #include <map>
+#include <ostream>
 #include <string>
 #include <type_traits>
 #include <vector>
 
-#if defined(__ROCM) && !defined(__CUDA)
-#error "PW EXX GPU stress implementation is not implemented for ROCm in this merge."
-#endif
-
 namespace
 {
-hamilt::ExxOperatorOptions make_stress_exx_options(bool separate_loop,
-                                                   double hybrid_alpha,
-                                                   const CoulombParam& coulomb_param)
-{
-    hamilt::ExxOperatorOptions options;
-    options.batch_fft_size = PARAM.inp.exx_batch_fft_size;
-    options.band_tile_size = PARAM.inp.exx_band_tile_size;
-    options.q_tile_size = PARAM.inp.exx_q_tile_size;
-    options.configured_nbands = PARAM.inp.nbands;
-    options.nspin = PARAM.inp.nspin;
-    options.ecutexx = PARAM.inp.ecutexx;
-    options.ecutrho = PARAM.inp.ecutrho;
-    options.gamma_extrapolation = PARAM.inp.exx_gamma_extrapolation;
-    options.exxace = PARAM.inp.exxace;
-    options.separate_loop = separate_loop;
-    options.hybrid_alpha = hybrid_alpha;
-    options.auto_tiling = PARAM.inp.exx_auto_tiling;
-    options.tile_memory_budget_mb = PARAM.inp.exx_tile_memory_budget_mb;
-    options.coulomb_param = coulomb_param;
-    return options;
-}
-
 std::size_t max_active_exx_star_size(const K_Vectors& kv)
 {
     std::map<std::pair<int, int>, std::size_t> star_sizes;
@@ -95,12 +71,10 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                            const K_Vectors *p_kv,
                                            const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in,
                                            const UnitCell& ucell,
-                                           const bool separate_loop,
-                                           const double hybrid_alpha,
-                                           const CoulombParam& coulomb_param)
+                                           const hamilt::ExxOperatorOptions& exx_options_in,
+                                           const hamilt::ExxExecutionContext& exx_execution_context)
 {
-    hamilt::ExxOperatorOptions exx_options
-        = make_stress_exx_options(separate_loop, hybrid_alpha, coulomb_param);
+    hamilt::ExxOperatorOptions exx_options = exx_options_in;
     bool gamma_extrapolation = exx_options.gamma_extrapolation;
     bool is_mp = p_kv->get_is_mp();
 #ifdef __MPI
@@ -124,7 +98,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
     using syncmem_real_h2d_op = base_device::memory::synchronize_memory_op<Real, Device, base_device::DEVICE_CPU>;
     using syncmem_real_d2h_op = base_device::memory::synchronize_memory_op<Real, base_device::DEVICE_CPU, Device>;
 
-    if (GlobalV::KPAR != 1 && !(exx_options.exxace && exx_options.separate_loop))
+    if (exx_execution_context.kpar != 1 && !(exx_options.exxace && exx_options.separate_loop))
     {
         ModuleBase::WARNING_QUIT("Stress_PW::stress_exx",
                                  "PW EXX KPAR stress is supported only with exxace=1 and exx_separate_loop=1");
@@ -246,21 +220,20 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
         rhopw_exx = rhopw_exx_owned;
         wfcpw_exx->setuptransform(exx_options.batch_fft_size);
         wfcpw_exx->collect_local_pw();
-        if (GlobalV::MY_RANK == 0)
+        if (exx_execution_context.my_rank == 0 && exx_execution_context.running_log != nullptr)
         {
             const double bytes_per_mib = 1024.0 * 1024.0;
-            GlobalV::ofs_running << " PW EXX stress tiling: mode = "
-                                 << (exx_options.auto_tiling ? "automatic" : "manual")
-                                 << ", budget = " << std::fixed << std::setprecision(1)
-                                 << static_cast<double>(exx_options.tile_budget_bytes) / bytes_per_mib
-                                 << " MiB, batch = " << exx_options.batch_fft_size
-                                 << ", band = " << exx_options.band_tile_size
-                                 << ", q = " << exx_options.q_tile_size
-                                 << ", cache = "
-                                 << hamilt::exx_potential_cache_mode_name(exx_options.potential_cache_mode)
-                                 << ", estimated peak = "
-                                 << static_cast<double>(exx_options.tile_estimated_peak_bytes) / bytes_per_mib
-                                 << " MiB" << std::defaultfloat << std::endl;
+            *exx_execution_context.running_log
+                << " PW EXX stress tiling: mode = " << (exx_options.auto_tiling ? "automatic" : "manual")
+                << ", budget = " << std::fixed << std::setprecision(1)
+                << static_cast<double>(exx_options.tile_budget_bytes) / bytes_per_mib
+                << " MiB, batch = " << exx_options.batch_fft_size
+                << ", band = " << exx_options.band_tile_size
+                << ", q = " << exx_options.q_tile_size
+                << ", cache = " << hamilt::exx_potential_cache_mode_name(exx_options.potential_cache_mode)
+                << ", estimated peak = "
+                << static_cast<double>(exx_options.tile_estimated_peak_bytes) / bytes_per_mib
+                << " MiB" << std::defaultfloat << std::endl;
         }
         if (rhopw_exx->nrxx != wfcpw_exx->nrxx)
         {
@@ -521,7 +494,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                 continue;
             }
             const int ik_rep_spin = p_kv->exx_rep_spin_index(kpoint, ispin);
-            const bool own_kpoint = kpoint.rep_pool == GlobalV::MY_POOL;
+            const bool own_kpoint = kpoint.rep_pool == exx_execution_context.my_pool;
             {
                 for (int n_start = 0; n_start < nbands_psi; n_start += target_tile_size)
                 {
@@ -619,7 +592,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                             {
                                 const auto* qpoint = q_points[q_start + q_local];
                                 const int iq_rep_spin = p_kv->exx_rep_spin_index(*qpoint, ispin);
-                                const bool own_qpoint = qpoint->rep_pool == GlobalV::MY_POOL;
+                                const bool own_qpoint = qpoint->rep_pool == exx_execution_context.my_pool;
                                 for (int m_local = 0; m_local < m_count; ++m_local)
                                 {
                                     const int mband = m_start + m_local;
@@ -631,7 +604,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                         wk_mq = p_kv->wk[iq_rep_spin];
                                     }
 #ifdef __MPI
-                                    if (GlobalV::KPAR > 1)
+                                    if (exx_execution_context.kpar > 1)
                                     {
                                         MPI_Bcast(&wg_mqb,
                                                   1,
@@ -659,7 +632,7 @@ void Stress_PW<FPTYPE, Device>::stress_exx(ModuleBase::matrix& sigma,
                                                             + tile_state * static_cast<std::size_t>(wfcpw_exx->nrxx));
                                         }
 #ifdef __MPI
-                                        if (GlobalV::KPAR > 1)
+                                        if (exx_execution_context.kpar > 1)
                                         {
                                             Parallel_Common::bcast_dev<T, Device>(
                                                 q_real_tile + tile_state * static_cast<std::size_t>(wfcpw_exx->nrxx),

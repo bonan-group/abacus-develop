@@ -7,7 +7,8 @@
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
 #include "source_hsolver/diago_iter_assist.h"
-#include "source_io/module_parameter/parameter.h"
+#include "source_io/module_parameter/input_parameter.h"
+#include "source_io/module_parameter/system_parameter.h"
 #include "source_psi/psi_init_atomic.h"
 #include "source_psi/psi_init_atomic_random.h"
 #include "source_psi/psi_init_file.h"
@@ -26,8 +27,21 @@ PSIPrepare<T, Device>::PSIPrepare(const std::string& init_wfc_in,
                             const Structure_Factor& sf_in,
                             const K_Vectors& kv_in,
                             const pseudopot_cell_vnl& nlpp_in,
-                            const ModulePW::PW_Basis_K& pw_wfc_in)
-    : ucell(ucell_in), sf(sf_in), nlpp(nlpp_in), kv(kv_in), pw_wfc(pw_wfc_in), rank(rank_in)
+                            const ModulePW::PW_Basis_K& pw_wfc_in,
+                            const Input_para& inp_in,
+                            const System_para& sys_in,
+                            const int my_bndgroup_in,
+                            std::ofstream& running_log_in)
+    : ucell(ucell_in),
+      sf(sf_in),
+      nlpp(nlpp_in),
+      inp(inp_in),
+      sys(sys_in),
+      my_bndgroup(my_bndgroup_in),
+      running_log(running_log_in),
+      kv(kv_in),
+      pw_wfc(pw_wfc_in),
+      rank(rank_in)
 {
     this->init_wfc = init_wfc_in;
     this->ks_solver = ks_solver_in;
@@ -45,20 +59,20 @@ void PSIPrepare<T, Device>::prepare_init(const int& random_seed)
     if (this->init_wfc == "random")
     {
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_random<T>());
-        GlobalV::ofs_running << "\n Using RANDOM starting wave functions for all " << PARAM.inp.nbands << " bands\n";
+        this->running_log << "\n Using RANDOM starting wave functions for all " << this->inp.nbands << " bands\n";
     }
     else if (this->init_wfc == "file")
     {
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_file<T>());
-        GlobalV::ofs_running << "\n Using FILE starting wave functions\n";
+        this->running_log << "\n Using FILE starting wave functions\n";
     }
     else if ((this->init_wfc.substr(0, 6) == "atomic") && (this->ucell.natomwfc == 0))
     {
         std::cout << " WARNING: init_wfc = " + this->init_wfc +
             " requires atomic pseudo wavefunctions(PP_PSWFC),\n but none available."
             " Automatically switch to random initialization." << std::endl;
-        GlobalV::ofs_running << "\n Using RANDOM starting wave functions for all " << PARAM.inp.nbands << " bands\n";
-        GlobalV::ofs_running << "\n WARNING:\n init_wfc = " + this->init_wfc + " requires atomic pseudo wavefunctions(PP_PSWFC), but none available. \n"
+        this->running_log << "\n Using RANDOM starting wave functions for all " << this->inp.nbands << " bands\n";
+        this->running_log << "\n WARNING:\n init_wfc = " + this->init_wfc + " requires atomic pseudo wavefunctions(PP_PSWFC), but none available. \n"
             " Automatically switch to random initialization.\n"
             " Note: Random starting wavefunctions may slow down convergence.\n"
             "      For faster convergence, consider using:\n"
@@ -68,37 +82,37 @@ void PSIPrepare<T, Device>::prepare_init(const int& random_seed)
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_random<T>());
     }
     else if (this->init_wfc == "atomic"
-             || (this->init_wfc == "atomic+random" && this->ucell.natomwfc < PARAM.inp.nbands))
+             || (this->init_wfc == "atomic+random" && this->ucell.natomwfc < this->inp.nbands))
     {
-        if (this->ucell.natomwfc < PARAM.inp.nbands)
+        if (this->ucell.natomwfc < this->inp.nbands)
         {
-            int nrandom = PARAM.inp.nbands - this->ucell.natomwfc;
-            GlobalV::ofs_running << "\n Using ATOMIC starting wave functions with " << this->ucell.natomwfc << " atomic orbitals"
+            int nrandom = this->inp.nbands - this->ucell.natomwfc;
+            this->running_log << "\n Using ATOMIC starting wave functions with " << this->ucell.natomwfc << " atomic orbitals"
             << " + " << nrandom << " random orbitals"
-            << " (total " << PARAM.inp.nbands << " bands)\n";
+            << " (total " << this->inp.nbands << " bands)\n";
         }
         else
         {
-            GlobalV::ofs_running << "\n Using ATOMIC starting wave functions for all " << this->ucell.natomwfc << " atomic orbitals"
-                << " (covers " << PARAM.inp.nbands << " bands)\n";
+            this->running_log << "\n Using ATOMIC starting wave functions for all " << this->ucell.natomwfc << " atomic orbitals"
+                << " (covers " << this->inp.nbands << " bands)\n";
         }
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_atomic<T>());
     }
     else if (this->init_wfc == "atomic+random")
     {
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_atomic_random<T>());
-        GlobalV::ofs_running << "\n Using ATOMIC+RANDOM starting wave functions with "
+        this->running_log << "\n Using ATOMIC+RANDOM starting wave functions with "
                              << this->ucell.natomwfc << " atomic orbitals\n";
     }
     else if (this->init_wfc == "nao")
     {
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_nao<T>());
-        GlobalV::ofs_running << "\n Using NAO starting wave functions\n";
+        this->running_log << "\n Using NAO starting wave functions\n";
     }
     else if (this->init_wfc == "nao+random")
     {
         this->psi_initer = std::unique_ptr<psi_initializer<T>>(new psi_init_nao_random<T>());
-        GlobalV::ofs_running << "\n Using NAO+RANDOM starting wave functions\n";
+        this->running_log << "\n Using NAO+RANDOM starting wave functions\n";
     }
     else
     {
@@ -117,7 +131,7 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
                                         hamilt::Hamilt<T, Device>* p_hamilt,
                                         std::ofstream& ofs_running)
 {
-    if (kspw_psi->get_nbands() == 0 || (!PARAM.globalv.ks_run))
+    if (kspw_psi->get_nbands() == 0 || (!this->sys.ks_run))
     {
         return;
     }
@@ -135,18 +149,18 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     Psi<T>* psi_cpu = reinterpret_cast<psi::Psi<T>*>(psi);
     Psi<T, Device>* psi_device = kspw_psi;
 
-    bool fill = PARAM.inp.ks_solver != "bpcg" || GlobalV::MY_BNDGROUP == 0;
+    bool fill = this->ks_solver != "bpcg" || this->my_bndgroup == 0;
     if (fill)
     {
         if (not_equal)
         {
             psi_cpu = new Psi<T>(1, nbands_start, nbasis, nbasis, true);
-            psi_device = PARAM.inp.device == "gpu" ? new psi::Psi<T, Device>(psi_cpu[0])
+            psi_device = this->inp.device == "gpu" ? new psi::Psi<T, Device>(psi_cpu[0])
                                                    : reinterpret_cast<psi::Psi<T, Device>*>(psi_cpu);
         }
-        else if (PARAM.inp.precision == "single")
+        else if (this->inp.precision == "single")
         {
-            if (PARAM.inp.device == "cpu")
+            if (this->inp.device == "cpu")
             {
                 psi_cpu = reinterpret_cast<psi::Psi<T>*>(kspw_psi);
                 psi_device = kspw_psi;
@@ -163,7 +177,7 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     // like (1, nbands, npwx), in which npwx is the maximal npw of all kpoints
     for (int ik = 0; ik < this->pw_wfc.nks; ik++)
     {
-        if(PARAM.inp.use_k_continuity && ik > 0) continue;
+        if(this->inp.use_k_continuity && ik > 0) continue;
         //! Fix the wavefunction to initialize at given kpoint
         psi->fix_k(ik);
         kspw_psi->fix_k(ik);
@@ -213,21 +227,21 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
             }
         }
 #ifdef __MPI
-        if (PARAM.inp.ks_solver == "bpcg" && PARAM.inp.bndpar > 1)
+        if (this->ks_solver == "bpcg" && this->inp.bndpar > 1)
         {
-            std::vector<int> sendcounts(PARAM.inp.bndpar);
-            std::vector<int> displs(PARAM.inp.bndpar);
+            std::vector<int> sendcounts(this->inp.bndpar);
+            std::vector<int> displs(this->inp.bndpar);
             MPI_Allgather(&nbands_l, 1, MPI_INT, sendcounts.data(), 1, MPI_INT, BP_WORLD);
             displs[0] = 0;
             sendcounts[0] *= nbasis;
-            for (int i = 1; i < PARAM.inp.bndpar; i++)
+            for (int i = 1; i < this->inp.bndpar; i++)
             {
                 sendcounts[i] *= nbasis;
                 displs[i] = displs[i - 1] + sendcounts[i - 1];
             }
-            if (GlobalV::MY_BNDGROUP == 0)
+            if (this->my_bndgroup == 0)
             {
-                for (int ip = 1; ip < PARAM.inp.bndpar; ++ip)
+                for (int ip = 1; ip < this->inp.bndpar; ++ip)
                 {
                     Parallel_Common::send_data(psi_cpu->get_pointer() + displs[ip], sendcounts[ip], ip, 0, BP_WORLD);
                 }
@@ -246,12 +260,12 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
         if (not_equal)
         {
             delete psi_cpu;
-            if (PARAM.inp.device == "gpu")
+            if (this->inp.device == "gpu")
             {
                 delete psi_device;
             }
         }
-        else if (PARAM.inp.precision == "single" && PARAM.inp.device == "gpu")
+        else if (this->inp.precision == "single" && this->inp.device == "gpu")
         {
             delete psi_cpu;
         }
@@ -267,7 +281,7 @@ void PSIPrepare<T, Device>::initialize_psi_ik(Psi<std::complex<double>>* psi,
                                              std::ofstream& ofs_running,
                                              const int ik)
 {
-    if (kspw_psi->get_nbands() == 0 || (!PARAM.globalv.ks_run))
+    if (kspw_psi->get_nbands() == 0 || (!this->sys.ks_run))
     {
         return;
     }
@@ -285,18 +299,18 @@ void PSIPrepare<T, Device>::initialize_psi_ik(Psi<std::complex<double>>* psi,
     Psi<T>* psi_cpu = reinterpret_cast<psi::Psi<T>*>(psi);
     Psi<T, Device>* psi_device = kspw_psi;
 
-    bool fill = PARAM.inp.ks_solver != "bpcg" || GlobalV::MY_BNDGROUP == 0;
+    bool fill = this->ks_solver != "bpcg" || this->my_bndgroup == 0;
     if (fill)
     {
         if (not_equal)
         {
             psi_cpu = new Psi<T>(1, nbands_start, nbasis, nbasis, true);
-            psi_device = PARAM.inp.device == "gpu" ? new psi::Psi<T, Device>(psi_cpu[0])
+            psi_device = this->inp.device == "gpu" ? new psi::Psi<T, Device>(psi_cpu[0])
                                                    : reinterpret_cast<psi::Psi<T, Device>*>(psi_cpu);
         }
-        else if (PARAM.inp.precision == "single")
+        else if (this->inp.precision == "single")
         {
-            if (PARAM.inp.device == "cpu")
+            if (this->inp.device == "cpu")
             {
                 psi_cpu = reinterpret_cast<psi::Psi<T>*>(kspw_psi);
                 psi_device = kspw_psi;
@@ -350,21 +364,21 @@ void PSIPrepare<T, Device>::initialize_psi_ik(Psi<std::complex<double>>* psi,
         }
     }
 #ifdef __MPI
-    if (PARAM.inp.ks_solver == "bpcg" && PARAM.inp.bndpar > 1)
+    if (this->ks_solver == "bpcg" && this->inp.bndpar > 1)
     {
-        std::vector<int> sendcounts(PARAM.inp.bndpar);
-        std::vector<int> displs(PARAM.inp.bndpar);
+        std::vector<int> sendcounts(this->inp.bndpar);
+        std::vector<int> displs(this->inp.bndpar);
         MPI_Allgather(&nbands_l, 1, MPI_INT, sendcounts.data(), 1, MPI_INT, BP_WORLD);
         displs[0] = 0;
         sendcounts[0] *= nbasis;
-        for (int i = 1; i < PARAM.inp.bndpar; i++)
+        for (int i = 1; i < this->inp.bndpar; i++)
         {
             sendcounts[i] *= nbasis;
             displs[i] = displs[i - 1] + sendcounts[i - 1];
         }
-        if (GlobalV::MY_BNDGROUP == 0)
+        if (this->my_bndgroup == 0)
         {
-            for (int ip = 1; ip < PARAM.inp.bndpar; ++ip)
+            for (int ip = 1; ip < this->inp.bndpar; ++ip)
             {
                 Parallel_Common::send_data(psi_cpu->get_pointer() + displs[ip], sendcounts[ip], ip, 0, BP_WORLD);
             }
@@ -382,12 +396,12 @@ void PSIPrepare<T, Device>::initialize_psi_ik(Psi<std::complex<double>>* psi,
         if (not_equal)
         {
             delete psi_cpu;
-            if (PARAM.inp.device == "gpu")
+            if (this->inp.device == "gpu")
             {
                 delete psi_device;
             }
         }
-        else if (PARAM.inp.precision == "single" && PARAM.inp.device == "gpu")
+        else if (this->inp.precision == "single" && this->inp.device == "gpu")
         {
             delete psi_cpu;
         }
@@ -413,20 +427,23 @@ void allocate_psi(Psi<std::complex<double>>*& psi,
                   const std::vector<int>& ngk,
                   const int& nbands,
                   const int& npwx,
+                  const Input_para& inp,
+                  const System_para& sys,
+                  std::ofstream& running_log,
                   const bool save_memory)
 {
     assert(npwx > 0);
     assert(nks > 0);
-    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running, "npwx", npwx);
+    ModuleBase::GlobalFunc::OUT(running_log, "npwx", npwx);
 
     delete psi;
     int nks2 = nks;
-    if ((PARAM.inp.calculation == "nscf" && PARAM.inp.mem_saver == 1) || save_memory)
+    if ((inp.calculation == "nscf" && inp.mem_saver == 1) || save_memory)
     {
         nks2 = 1;
     }
-    psi = new psi::Psi<std::complex<double>>(nks2, nbands, npwx * PARAM.globalv.npol, ngk, true);
-    const size_t memory_cost = sizeof(std::complex<double>) * nks2 * nbands * (PARAM.globalv.npol * npwx);
+    psi = new psi::Psi<std::complex<double>>(nks2, nbands, npwx * sys.npol, ngk, true);
+    const size_t memory_cost = sizeof(std::complex<double>) * nks2 * nbands * (sys.npol * npwx);
     std::cout << " MEMORY FOR PSI (MB)  : " << static_cast<double>(memory_cost) / 1024.0 / 1024.0 << std::endl;
     ModuleBase::Memory::record("Psi_PW", memory_cost);
 }

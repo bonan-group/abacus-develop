@@ -234,7 +234,8 @@ void HSolverPW<T, Device>::solve_ik(hamilt::Hamilt<T, Device>* pHamilt,
                                     const int ik,
                                     const int rank_in_pool_in,
                                     const int nproc_in_pool_in,
-                                    const bool hamiltonian_prepared)
+                                    const bool hamiltonian_prepared,
+                                    const bool diago_smooth_ethr)
 {
     ModuleBase::TITLE("HSolverPW", "solve_ik");
     ModuleBase::timer::start("HSolverPW", "solve");
@@ -262,7 +263,7 @@ void HSolverPW<T, Device>::solve_ik(hamilt::Hamilt<T, Device>* pHamilt,
     psi.fix_k(ik);
     update_precondition(precondition, ik, this->wfc_basis->npwk[ik], Real(pes->pot->get_vl_of_0()));
 
-    if (PARAM.inp.diago_smooth_ethr == true)
+    if (diago_smooth_ethr)
     {
         auto* _pes_pw = static_cast<elecstate::ElecStatePW<T, Device>*>(pes);
         this->cal_smooth_ethr(_pes_pw->klist->wk[ik],

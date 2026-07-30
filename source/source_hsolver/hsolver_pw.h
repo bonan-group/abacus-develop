@@ -62,7 +62,8 @@ class HSolverPW
                   const int ik,
                   const int rank_in_pool_in,
                   const int nproc_in_pool_in,
-                  const bool hamiltonian_prepared);
+                  const bool hamiltonian_prepared,
+                  const bool diago_smooth_ethr);
 
 
   protected:

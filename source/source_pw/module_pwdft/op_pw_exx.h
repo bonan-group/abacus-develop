@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <iosfwd>
 #include <limits>
 #include <map>
 #include <memory>
@@ -38,6 +39,7 @@ class ExxWaveRedistributorCpu;
 
 struct ExxOperatorOptions
 {
+    bool enabled = false;
     int batch_fft_size = 0;
     int band_tile_size = 0;
     int q_tile_size = 0;
@@ -55,6 +57,14 @@ struct ExxOperatorOptions
     std::size_t tile_budget_bytes = 0;
     std::size_t tile_estimated_peak_bytes = 0;
     CoulombParam coulomb_param;
+};
+
+struct ExxExecutionContext
+{
+    int my_rank = 0;
+    int my_pool = 0;
+    int kpar = 1;
+    std::ostream* running_log = nullptr;
 };
 
 struct ExxLocalEnergyKPoint
@@ -260,7 +270,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                   const ModulePW::PW_Basis* rhopw_in,
                   K_Vectors* kv_in,
                   const UnitCell* ucell,
-                  const ExxOperatorOptions& options_in);
+                  const ExxOperatorOptions& options_in,
+                  const ExxExecutionContext& execution_context_in);
 
     template <typename T_in, typename Device_in = Device>
     explicit OperatorEXXPW(const OperatorEXXPW<T_in, Device_in> *op_exx);
@@ -269,7 +280,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
                   const int* target_isk,
                   const ModulePW::PW_Basis_K* target_wfcpw,
                   const K_Vectors* target_kv,
-                  const ExxOperatorOptions& options_in);
+                  const ExxOperatorOptions& options_in,
+                  const ExxExecutionContext& execution_context_in);
 
     virtual ~OperatorEXXPW();
 
@@ -292,6 +304,8 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     int get_batch_fft_size() const;
 
     bool uses_separate_loop() const { return this->options.separate_loop; }
+
+    bool uses_ace() const { return this->options.exxace; }
 
     void construct_ace() const;
 
@@ -462,6 +476,7 @@ class OperatorEXXPW : public OperatorPW<T, Device>
     // k vectors
     K_Vectors *kv = nullptr;
     ExxOperatorOptions options;
+    ExxExecutionContext execution_context;
 
     // psi
     mutable psi::Psi<T, Device> psi;

@@ -39,7 +39,18 @@ class HamiltPW : public Hamilt<T, Device>
              pseudopot_cell_vnl* nlpp,
              Plus_U* p_dftu, // mohan add 2025-11-06
              const UnitCell* ucell,
-             OperatorEXXPW<T, Device>* source_exx);
+             const ExxOperatorOptions& exx_options,
+             const ExxExecutionContext& exx_execution_context);
+
+    HamiltPW(elecstate::Potential* pot_in,
+             ModulePW::PW_Basis_K* wfc_basis,
+             K_Vectors* p_kv,
+             pseudopot_cell_vnl* nlpp,
+             Plus_U* p_dftu, // mohan add 2025-11-06
+             const UnitCell* ucell,
+             OperatorEXXPW<T, Device>* source_exx,
+             const ExxOperatorOptions& exx_options,
+             const ExxExecutionContext& exx_execution_context);
 
     ~HamiltPW();
 
@@ -55,6 +66,16 @@ class HamiltPW : public Hamilt<T, Device>
 
     void set_exx_helper(Exx_Helper<T, Device>& exx_helper_in);
 
+    const ExxOperatorOptions& exx_options() const
+    {
+        return this->exx_options_;
+    }
+
+    const ExxExecutionContext& exx_execution_context() const
+    {
+        return this->exx_execution_context_;
+    }
+
   protected:
     // used in sPhi, which are calculated in hPsi or sPhi
     const pseudopot_cell_vnl* ppcell = nullptr;
@@ -64,6 +85,8 @@ class HamiltPW : public Hamilt<T, Device>
     T* qq_so = nullptr;
 
     Device* ctx = {};
+    ExxOperatorOptions exx_options_;
+    ExxExecutionContext exx_execution_context_;
     using gemv_op = ModuleBase::gemv_op<T, Device>;
     using gemm_op = ModuleBase::gemm_op<T, Device>;
     using setmem_complex_op = base_device::memory::set_memory_op<T, Device>;

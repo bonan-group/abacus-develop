@@ -11,10 +11,42 @@ HamiltSdftPW<T, Device>::HamiltSdftPW(elecstate::Potential* pot_in,
                                       K_Vectors* p_kv,
                                       pseudopot_cell_vnl* nlpp,
 									  const UnitCell* ucell,
-									  const int& npol,
+                                      const int& npol,
                                       Real* emin_in,
                                       Real* emax_in)
-    : HamiltPW<T, Device>(pot_in, wfc_basis, p_kv, nlpp, nullptr, ucell), ngk(p_kv->ngk)
+    : HamiltSdftPW(pot_in,
+                   wfc_basis,
+                   p_kv,
+                   nlpp,
+                   ucell,
+                   npol,
+                   emin_in,
+                   emax_in,
+                   ExxOperatorOptions(),
+                   ExxExecutionContext())
+{
+}
+
+template <typename T, typename Device>
+HamiltSdftPW<T, Device>::HamiltSdftPW(elecstate::Potential* pot_in,
+                                      ModulePW::PW_Basis_K* wfc_basis,
+                                      K_Vectors* p_kv,
+                                      pseudopot_cell_vnl* nlpp,
+                                      const UnitCell* ucell,
+                                      const int& npol,
+                                      Real* emin_in,
+                                      Real* emax_in,
+                                      const ExxOperatorOptions& exx_options,
+                                      const ExxExecutionContext& exx_execution_context)
+    : HamiltPW<T, Device>(pot_in,
+                          wfc_basis,
+                          p_kv,
+                          nlpp,
+                          nullptr,
+                          ucell,
+                          exx_options,
+                          exx_execution_context),
+      ngk(p_kv->ngk)
 {
     this->classname = "HamiltSdftPW";
     this->npwk_max = wfc_basis->npwk_max;

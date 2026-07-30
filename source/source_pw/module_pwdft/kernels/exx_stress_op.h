@@ -4,8 +4,6 @@
 #include "source_base/macros.h"
 #include "source_base/module_device/types.h"
 
-#include <complex>
-
 namespace hamilt
 {
 template <typename T, typename Device>

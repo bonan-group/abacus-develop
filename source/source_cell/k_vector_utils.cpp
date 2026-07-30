@@ -406,10 +406,7 @@ void kvec_mpi_k(K_Vectors& kv)
     auto bcast_exx_full_map = [](std::vector<K_Vectors::ExxFullPoint>& points) {
         int size = points.size();
         Parallel_Common::bcast_int(size);
-        if (GlobalV::MY_RANK != 0)
-        {
-            points.resize(size);
-        }
+        points.resize(size);
         for (int i = 0; i < size; ++i)
         {
             auto& point = points[i];

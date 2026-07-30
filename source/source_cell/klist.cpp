@@ -102,7 +102,7 @@ bool try_read_band_kpoints(std::ifstream& ifk,
 
     if (nk_band <= 0)
     {
-        GlobalV::ofs_warning << " Error: K_POINTS_BAND requires a positive number of points." << std::endl;
+        ModuleBase::WARNING("K_Vectors::read_kpoints", "K_POINTS_BAND requires a positive number of points.");
         return false;
     }
 
@@ -140,7 +140,7 @@ bool try_read_band_kpoints(std::ifstream& ifk,
     }
     else
     {
-        GlobalV::ofs_warning << " Error : unsupported K_POINTS_BAND type." << std::endl;
+        ModuleBase::WARNING("K_Vectors::read_kpoints", "unsupported K_POINTS_BAND type.");
         return false;
     }
 
@@ -353,13 +353,15 @@ K_Vectors K_Vectors::make_band_target_kvectors(const int nspin_in) const
     K_Vectors band_kv;
     int nkstot_for_para = nk_no_spin;
     band_kv.para_k.kinfo(nkstot_for_para,
-                         GlobalV::KPAR,
-                         GlobalV::MY_POOL,
-                         GlobalV::RANK_IN_POOL,
-                         GlobalV::NPROC,
+                         this->para_k.kpar,
+                         this->para_k.my_pool,
+                         this->para_k.rank_in_pool,
+                         this->para_k.nproc,
                          nspin_in);
     const int local_nk_no_spin = band_kv.para_k.nks_np;
-    const int local_start = band_kv.para_k.startk_pool.empty() ? 0 : band_kv.para_k.startk_pool[GlobalV::MY_POOL];
+    const int local_start = band_kv.para_k.startk_pool.empty()
+                                ? 0
+                                : band_kv.para_k.startk_pool[band_kv.para_k.my_pool];
 
     band_kv.nspin = nspin_in;
     band_kv.nkstot = nk_no_spin;

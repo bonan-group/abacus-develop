@@ -56,7 +56,13 @@ namespace ModuleESolver
     template <typename T>
     void ESolver_KS_LIP<T>::allocate_hamilt(const UnitCell& ucell)
     {
-        this->p_hamilt = new hamilt::HamiltLIP<T>(this->pelec->pot, this->pw_wfc, &this->kv, &this->ppcell, &ucell
+        this->p_hamilt = new hamilt::HamiltLIP<T>(this->pelec->pot,
+                                                  this->pw_wfc,
+                                                  &this->kv,
+                                                  &this->ppcell,
+                                                  &ucell,
+                                                  *this->exx_options_,
+                                                  *this->exx_context_
 #ifdef __EXX
             , *this->exx_lip
 #endif

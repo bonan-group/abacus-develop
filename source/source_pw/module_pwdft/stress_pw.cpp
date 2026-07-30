@@ -1,11 +1,12 @@
 #include "stress_pw.h"
 
+#include "op_pw_exx.h"
+
 #include "source_base/timer.h"
-#include "source_base/global_variable.h" // use GlobalC
+#include "source_base/global_variable.h"
 #include "source_hamilt/module_vdw/vdw.h"
 #include "source_io/module_output/output_log.h"
 #include "source_hamilt/module_xc/xc_functional.h"
-#include "source_hamilt/module_xc/exx_info.h" // use GlobalC::exx_info
 
 template <typename FPTYPE, typename Device>
 void Stress_PW<FPTYPE, Device>::cal_stress(ModuleBase::matrix& sigmatot,
@@ -18,7 +19,9 @@ void Stress_PW<FPTYPE, Device>::cal_stress(ModuleBase::matrix& sigmatot,
                                            Structure_Factor* p_sf,
                                            K_Vectors* p_kv,
                                            ModulePW::PW_Basis_K* wfc_basis,
-                                           const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in)
+                                           const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in,
+                                           const hamilt::ExxOperatorOptions& exx_options,
+                                           const hamilt::ExxExecutionContext& exx_execution_context)
 {
     ModuleBase::TITLE("Stress_PW", "cal_stress");
     ModuleBase::timer::start("Stress_PW", "cal_stress");
@@ -126,10 +129,7 @@ void Stress_PW<FPTYPE, Device>::cal_stress(ModuleBase::matrix& sigmatot,
     }
 
     // EXX PW stress
-    bool cal_exx = GlobalC::exx_info.info_global.cal_exx;
-    bool separate_loop = GlobalC::exx_info.info_global.separate_loop;
-    double hybrid_alpha = GlobalC::exx_info.info_global.hybrid_alpha;
-    auto coulomb_param = GlobalC::exx_info.info_global.coulomb_param;
+    const bool cal_exx = exx_options.enabled;
     if (cal_exx)
     {
         this->stress_exx(sigmaexx,
@@ -139,9 +139,8 @@ void Stress_PW<FPTYPE, Device>::cal_stress(ModuleBase::matrix& sigmatot,
                          p_kv,
                          d_psi_in,
                          ucell,
-                         separate_loop,
-                         hybrid_alpha,
-                         coulomb_param);
+                         exx_options,
+                         exx_execution_context);
     }
 
 

@@ -593,10 +593,8 @@ TEST_F(KlistTest, MakeBandTargetKvectorsSpinExpanded)
         MPI_Init(nullptr, nullptr);
     }
 #endif
-    GlobalV::KPAR = 1;
-    GlobalV::MY_POOL = 0;
-    GlobalV::RANK_IN_POOL = 0;
-    GlobalV::NPROC = 1;
+    int source_nkstot = 4;
+    kv->para_k.kinfo(source_nkstot, 1, 0, 0, 1, 1);
 
     kv->nspin = 1;
     kv->band_kvec_d = {{0.0, 0.0, 0.0}, {0.5, 0.0, 0.0}, {0.5, 0.5, 0.0}, {0.5, 0.5, 0.5}};
@@ -1280,4 +1278,22 @@ TEST_F(KlistTest, IbzKpointCustomWeights)
     GlobalV::ofs_running.close();
     ClearUcell();
     remove("tmp_klist_custom_weights");
+}
+
+TEST(ParallelKpointsTest, ReportsProcessCountForEvenAndUnevenPools)
+{
+    Parallel_Kpoints para_k;
+    para_k.nproc = 10;
+    para_k.kpar = 3;
+
+    para_k.my_pool = 0;
+    EXPECT_EQ(para_k.get_nproc_in_pool(1), 4);
+
+    para_k.my_pool = 1;
+    EXPECT_EQ(para_k.get_nproc_in_pool(1), 3);
+
+    para_k.nproc = 12;
+    para_k.kpar = 2;
+    para_k.my_pool = 1;
+    EXPECT_EQ(para_k.get_nproc_in_pool(2), 3);
 }

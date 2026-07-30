@@ -4,6 +4,8 @@
 #include "source_base/parallel_reduce.h"
 #include "source_io/module_parameter/parameter.h"
 
+#include <ostream>
+
 namespace hamilt
 {
 template <typename T, typename Device>
@@ -211,10 +213,11 @@ void OperatorEXXPW<T, Device>::construct_ace() const
                 psi.fix_kb(ik, 0);
                 T* p_psi = psi.get_pointer();
 
-                if (GlobalV::KPAR > 1 && GlobalV::MY_RANK == 0)
+                if (execution_context.kpar > 1 && execution_context.my_rank == 0
+                    && execution_context.running_log != nullptr)
                 {
-                    GlobalV::ofs_running << " EXX ACE KPAR: calling act_op_qtile for local ik = "
-                                         << ik << ", spin = " << ispin << std::endl;
+                    *execution_context.running_log << " EXX ACE KPAR: calling act_op_qtile for local ik = "
+                                                   << ik << ", spin = " << ispin << std::endl;
                 }
                 if (std::is_same<Device, base_device::DEVICE_CPU>::value)
                 {

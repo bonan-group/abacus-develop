@@ -11,6 +11,10 @@
 #include "source_base/module_device/device.h"
 #include "source_hamilt/hamilt.h"
 
+#include <iosfwd>
+
+struct System_para;
+
 class Setup_Psi_pw
 {
     public:
@@ -50,17 +54,12 @@ class Setup_Psi_pw
         const UnitCell &ucell,
         const K_Vectors &kv,
         const Structure_Factor &sf,
-        const ModulePW::PW_Basis_K &pw_wfc, 
-        const pseudopot_cell_vnl &ppcell,
-        const Input_para &inp);
-
-    void before_runner(
-        const UnitCell &ucell,
-        const K_Vectors &kv,
-        const Structure_Factor &sf,
         const ModulePW::PW_Basis_K &pw_wfc,
         const pseudopot_cell_vnl &ppcell,
         const Input_para &inp,
+        const System_para &sys,
+        const int my_bndgroup,
+        std::ofstream& running_log,
         const bool save_memory);
 
     void init(hamilt::HamiltBase* p_hamilt);
@@ -126,6 +125,8 @@ class Setup_Psi_pw
     base_device::AbacusDevice_t device_type_ = base_device::CpuDevice;
     PrecisionType precision_type_ = PrecisionType::ComplexDouble;
 
+    std::ofstream* running_log_ = nullptr;
+
     //------------
     // private functions
     //------------
@@ -138,6 +139,9 @@ class Setup_Psi_pw
         const ModulePW::PW_Basis_K &pw_wfc, 
         const pseudopot_cell_vnl &ppcell,
         const Input_para &inp,
+        const System_para &sys,
+        const int my_bndgroup,
+        std::ofstream& running_log,
         const bool save_memory);
 
     template <typename T, typename Device>

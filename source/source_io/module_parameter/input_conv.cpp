@@ -534,21 +534,23 @@ void Input_Conv::Convert()
     }
     // end of symmetry reset
 
-    if (GlobalC::exx_info.info_global.cal_exx && PARAM.inp.basis_type == "pw")
+    const auto& input = PARAM.inp;
+    const bool calculate_pw_exx = GlobalC::exx_info.info_global.cal_exx && input.basis_type == "pw";
+    if (calculate_pw_exx)
     {
-        if (PARAM.inp.nspin != 1 && PARAM.inp.nspin != 2)
+        if (input.nspin != 1 && input.nspin != 2)
         {
             ModuleBase::WARNING_QUIT("Input_Conv", "EXX PW works only with nspin=1 and 2");
         }
 
-        if (ModuleSymmetry::Symmetry::symm_flag == 1 && PARAM.inp.exx_symmetry_realspace)
+        if (ModuleSymmetry::Symmetry::symm_flag == 1 && input.exx_symmetry_realspace)
         {
-            if (PARAM.inp.device != "cpu")
+            if (input.device != "cpu")
             {
                 ModuleBase::WARNING_QUIT("Input_Conv",
                                          "EXX PW real-space symmetry reduction is implemented only for CPU");
             }
-            if (PARAM.inp.noncolin || PARAM.inp.lspinorb)
+            if (input.noncolin || input.lspinorb)
             {
                 ModuleBase::WARNING_QUIT("Input_Conv",
                                          "EXX PW real-space symmetry reduction is not implemented for "

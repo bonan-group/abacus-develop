@@ -5,7 +5,12 @@
 #include "source_pw/module_pwdft/vl_pw.h"
 #include "stress_func.h"
 #include "source_lcao/module_dftu/dftu.h" // mohan add 2025-11-07
-#include "source_lcao/module_ri/conv_coulomb_pot_k.h"
+
+namespace hamilt
+{
+struct ExxExecutionContext;
+struct ExxOperatorOptions;
+}
 
 template <typename FPTYPE, typename Device = base_device::DEVICE_CPU>
 class Stress_PW : public Stress_Func<FPTYPE, Device>
@@ -24,7 +29,9 @@ class Stress_PW : public Stress_Func<FPTYPE, Device>
 			Structure_Factor* p_sf,
 			K_Vectors* p_kv,
 			ModulePW::PW_Basis_K* wfc_basis,
-			const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in = nullptr);
+			const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in,
+            const hamilt::ExxOperatorOptions& exx_options,
+            const hamilt::ExxExecutionContext& exx_execution_context);
 
   protected:
     // call the vdw stress
@@ -47,9 +54,8 @@ class Stress_PW : public Stress_Func<FPTYPE, Device>
                     const K_Vectors* p_kv,
                     const psi::Psi <std::complex<FPTYPE>, Device>* d_psi_in,
                     const UnitCell& ucell,
-                    const bool separate_loop,
-                    const double hybrid_alpha,
-                    const CoulombParam& coulomb_param); // exx stress in PW basis
+                    const hamilt::ExxOperatorOptions& exx_options,
+                    const hamilt::ExxExecutionContext& exx_execution_context); // exx stress in PW basis
 
     const elecstate::ElecState* pelec = nullptr;
 };

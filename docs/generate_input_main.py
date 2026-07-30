@@ -18,6 +18,7 @@ import argparse
 import html
 import re
 import sys
+import textwrap
 from pathlib import Path
 from collections import OrderedDict
 from typing import Dict, List
@@ -173,8 +174,14 @@ def generate_parameter_markdown(param: Dict[str, str]) -> str:
 
     # Default
     if param.get('default_value', '') != '':
-        default_text = escape_md_text(str(param['default_value']))
-        lines.append(f"- **Default**: {default_text}")
+        default_text = textwrap.dedent(escape_md_text(str(param['default_value']))).strip()
+        if '\n' in default_text:
+            lines.append("- **Default**:")
+            for line in default_text.split('\n'):
+                clean_line = line.rstrip()
+                lines.append(f"  {clean_line}" if clean_line else "")
+        elif default_text:
+            lines.append(f"- **Default**: {default_text}")
 
     # Unit
     if param.get('unit', '') != '':

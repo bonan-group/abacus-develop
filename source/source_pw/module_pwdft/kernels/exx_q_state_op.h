@@ -1,11 +1,8 @@
 #ifndef EXX_Q_STATE_OP_H
 #define EXX_Q_STATE_OP_H
 
-#include "source_base/macros.h"
-#include "source_base/vector3.h"
 #include "source_base/module_device/types.h"
 #include "source_cell/klist.h"
-#include "source_pw/module_pwdft/exx_size_utils.h"
 
 #include <cstddef>
 #include <complex>
